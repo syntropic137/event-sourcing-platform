@@ -1,0 +1,53 @@
+{
+    "workbench.colorCustomizations": {
+        "activityBar.background": "#0B3D2E",
+        "activityBar.foreground": "#E6FFFB",
+        "activityBar.inactiveForeground": "#9FE3D6",
+        "activityBarBadge.background": "#0EA5A3",
+        "activityBarBadge.foreground": "#0B3D2E",
+
+        "titleBar.activeBackground": "#102A2C",
+        "titleBar.activeForeground": "#E6FFFB",
+        "titleBar.inactiveBackground": "#0F2426",
+        "titleBar.inactiveForeground": "#9FE3D6",
+
+        "statusBar.background": "#0D9488",
+        "statusBar.foreground": "#E6FFFB",
+        "statusBar.noFolderBackground": "#0D9488",
+        "statusBar.debuggingBackground": "#0EA5A3",
+
+        "sideBar.background": "#0F1F22",
+        "sideBar.foreground": "#E6FFFB",
+        "sideBarSectionHeader.background": "#102A2C",
+        "sideBarSectionHeader.foreground": "#9FE3D6",
+
+        "tab.activeBackground": "#102A2C",
+        "tab.activeForeground": "#E6FFFB",
+        "tab.inactiveBackground": "#0F1F22",
+        "tab.inactiveForeground": "#9FE3D6",
+        "tab.unfocusedActiveForeground": "#CFFAF2",
+        "tab.hoverBackground": "#12343B",
+
+        "editor.background": "#0F1F22",
+        "editor.foreground": "#E6FFFB",
+        "editor.lineHighlightBackground": "#0B3D2E55",
+        "editor.selectionBackground": "#0EA5A355",
+        "editor.inactiveSelectionBackground": "#0EA5A322",
+        "editorCursor.foreground": "#2DD4BF",
+
+        "editorGroup.border": "#12343B",
+        "editorGroupHeader.tabsBackground": "#0F1F22",
+
+        "list.activeSelectionBackground": "#12343B",
+        "list.activeSelectionForeground": "#E6FFFB",
+        "list.focusBackground": "#102A2C",
+        "list.hoverBackground": "#102A2C",
+
+        "button.background": "#0EA5A3",
+        "button.hoverBackground": "#0D9488",
+        "button.foreground": "#E6FFFB",
+
+        "badge.background": "#0EA5A3",
+        "badge.foreground": "#E6FFFB"
+    }
+}

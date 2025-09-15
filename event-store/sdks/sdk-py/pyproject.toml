@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eventstore-sdk-py"
+version = "0.1.0"
+description = "Python SDK for Rust Event Store (experimental)"
+authors = [{name = "EventStore"}]
+requires-python = ">=3.10"
+dependencies = [
+  "grpcio>=1.60.0",
+  "grpcio-tools>=1.60.0"
+]

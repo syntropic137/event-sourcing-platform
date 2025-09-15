@@ -1,0 +1,23 @@
+[package]
+name = "eventstore-bin"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tonic = { version = "0.12", features = ["transport"] }
+tokio-stream = "0.1"
+eventstore-core = { path = "../eventstore-core" }
+eventstore-backend-memory = { path = "../eventstore-backend-memory" }
+eventstore-proto = { path = "../eventstore-proto" }
+tower-http = { version = "0.5", features = ["trace"] }
+eventstore-backend-postgres = { path = "../eventstore-backend-postgres" }
+
+[dev-dependencies]
+serial_test = "3"
+testcontainers = "0.17"
+testcontainers-modules = { version = "0.5", features = ["postgres"] }
+uuid = { version = "1", features = ["v4"] }

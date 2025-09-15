@@ -1,0 +1,5 @@
+packages:
+  - event-store/sdks/sdk-ts
+  - event-sourcing/typescript
+  - examples/*-ts
+

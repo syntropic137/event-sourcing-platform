@@ -1,0 +1,33 @@
+{
+  "name": "@eventstore/sdk-ts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "gen": "(cd ../.. && make gen-ts)",
+    "example": "tsx src/examples/typed-basic.ts",
+    "typed-example": "tsx src/examples/typed-basic.ts",
+    "runtime-example": "tsx src/examples/basic.ts"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.10.6",
+    "@grpc/proto-loader": "^0.7.13",
+    "protobufjs": "^7.5.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "@types/node": "^22.5.2",
+    "ts-proto": "^1.172.0",
+    "tsx": "^4.16.2"
+  }
+}

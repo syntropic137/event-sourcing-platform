@@ -1,0 +1,19 @@
+[package]
+name = "eventstore-proto"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "eventstore_proto"
+path = "src/lib.rs"
+
+[dependencies]
+# Tonic and Prost provide the generated types at runtime
+prost = "0.13"
+prost-types = "0.13"
+tonic = { version = "0.12", features = ["transport", "prost", "codegen"] }
+
+[build-dependencies]
+prost-build = "0.13"
+tonic-build = "0.12"
+protoc-bin-vendored = "3"

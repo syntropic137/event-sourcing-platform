@@ -1,0 +1,21 @@
+{
+  "name": "event-sourcing-platform",
+  "version": "0.0.1-alpha",
+  "private": true,
+  "workspaces": [
+    "event-store/sdks/sdk-ts",
+    "event-sourcing/typescript",
+    "examples/*-ts"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint --continue || true",
+    "dev": "turbo run dev --parallel",
+    "clean": "turbo run clean || true"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0"
+  },
+  "packageManager": "pnpm@9.0.0"
+}

@@ -1,0 +1,10 @@
+{
+    "workbench.colorCustomizations": {
+        "activityBar.background": "#51065C",
+        "titleBar.activeBackground": "#720880",
+        "titleBar.activeForeground": "#FEFBFF"
+    },
+    "cSpell.words": [
+        "eventstore"
+    ]
+}

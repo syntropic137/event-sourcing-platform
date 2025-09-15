@@ -1,0 +1,55 @@
+[package]
+name = "event-sourcing-rust"
+version = "0.1.0"
+edition = "2021"
+authors = ["Event Sourcing Platform Team"]
+description = "Rust SDK for Event Sourcing patterns and abstractions"
+license = "MIT"
+repository = "https://github.com/yourorg/event-sourcing-platform"
+keywords = ["event-sourcing", "cqrs", "ddd", "aggregate"]
+categories = ["database", "web-programming"]
+
+[dependencies]
+# Core async runtime
+tokio = { version = "1.0", features = ["full"] }
+async-trait = "0.1"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# IDs and time
+uuid = { version = "1.0", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# gRPC client for event store
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+
+# Logging
+tracing = "0.1"
+
+# Development dependencies
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.12"
+rstest = "0.21"
+
+# Event store integration
+eventstore-proto = { path = "../../event-store/eventstore-proto" }
+
+[features]
+default = []
+
+[[example]]
+name = "basic_aggregate"
+path = "examples/basic_aggregate.rs"
+
+[[example]]
+name = "order_processing"
+path = "examples/order_processing.rs"

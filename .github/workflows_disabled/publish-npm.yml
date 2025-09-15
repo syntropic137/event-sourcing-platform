@@ -1,0 +1,63 @@
+name: Publish NPM Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Path to package to publish
+        required: true
+        type: choice
+        options:
+          - event-sourcing/typescript
+      tag:
+        description: Optional npm dist-tag (e.g. next)
+        required: false
+        type: string
+  push:
+    tags:
+      - npm-ts-v*
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+          cache: pnpm
+
+      - name: Install deps (workspace)
+        run: pnpm -w install --frozen-lockfile
+
+      - name: Build package
+        run: |
+          PKG_DIR="${{ inputs.package || 'event-sourcing/typescript' }}"
+          echo "Building $PKG_DIR"
+          pnpm --filter "./$PKG_DIR" run build
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          PKG_DIR="${{ inputs.package || 'event-sourcing/typescript' }}"
+          cd "$PKG_DIR"
+          if [ -n "${{ inputs.tag }}" ]; then
+            npm publish --access public --tag "${{ inputs.tag }}"
+          else
+            npm publish --access public
+          fi
+

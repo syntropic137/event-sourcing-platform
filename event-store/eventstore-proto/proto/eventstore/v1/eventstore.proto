@@ -1,0 +1,86 @@
+syntax = "proto3";
+package eventstore.v1;
+
+// Optimistic Concurrency Model:
+// - Client proposes aggregate_nonce in EventMetadata
+// - Store validates proposed_nonce == current_max + 1
+// - If validation fails, store returns ConcurrencyError
+// - This enables true optimistic concurrency (client controls sequencing)
+
+option go_package   = "github.com/you/eventstore/gen;eventstore";
+option java_package = "dev.you.eventstore.v1";
+
+message EventMetadata {
+  // TODO: Update index, id in database incremental
+  uint64  global_nonce        = 13;  // assigned by store; monotonic
+  string  event_id            = 1;   // UUID v7 recommended
+  string  aggregate_id        = 2;   // e.g. "UUID"
+  string  aggregate_type      = 3;   // e.g. "Order"
+  uint64  aggregate_nonce     = 4;   // 1-based, client-provided, store-validated
+  string  event_type          = 5;   // e.g. "OrderSubmitted"
+  // TODO: Updated name from schema_version to event_version and updating index
+  uint32  event_version      = 14;
+  string  content_type        = 6;   // e.g. "application/protobuf"
+  // TODO: Define which of these are essential
+  string  correlation_id      = 7;
+  string  causation_id        = 8;
+  string  actor_id            = 9;
+  string  tenant_id           = 10;
+  uint64  timestamp_unix_ms   = 11;
+  // TODO: Are we missing event data and serialization?
+  map<string,string> headers  = 12;
+}
+
+message EventData {
+  EventMetadata meta = 1;
+  bytes         payload = 2; // opaque to the store
+}
+
+enum Expected {
+  ANY               = 0;
+  NO_AGGREGATE      = 1;
+  AGGREGATE_EXISTS  = 2;
+}
+
+message AppendRequest {
+  string aggregate_id   = 1; // client provides: identifies target aggregate
+  string aggregate_type = 2; // client provides: aggregate type for routing/filtering
+  oneof expected {
+    uint64  exact        = 3; // expected exact aggregate nonce (e.g., 7)
+    Expected expected_any = 4; // ANY | NO_AGGREGATE | AGGREGATE_EXISTS
+  }
+  repeated EventData events = 5; // payload.meta.aggregate_nonce used for optimistic concurrency
+}
+
+message AppendResponse {
+  uint64 next_aggregate_nonce  = 1; // store assigns: next aggregate nonce (atomic assignment prevents conflicts)
+  uint64 last_global_nonce     = 2; // store assigns: last global nonce in batch
+}
+
+message ReadStreamRequest {
+  string aggregate_id         = 1;
+  uint64 from_aggregate_nonce = 2;  // inclusive
+  uint32 max_count            = 3;  // page size
+  bool   forward              = 4;  // true=ascending
+}
+
+message ReadStreamResponse {
+  repeated EventData events           = 1;
+  bool is_end                         = 2;
+  uint64 next_from_aggregate_nonce    = 3;
+}
+
+message SubscribeRequest {
+  string aggregate_prefix      = 1; // e.g. "Order-" or "" for all
+  uint64 from_global_nonce     = 2; // 0 to start at beginning
+}
+
+message SubscribeResponse {
+  EventData event = 1;
+}
+
+service EventStore {
+  rpc Append     (AppendRequest)      returns (AppendResponse);
+  rpc ReadStream (ReadStreamRequest)  returns (ReadStreamResponse);
+  rpc Subscribe  (SubscribeRequest)   returns (stream SubscribeResponse);
+}

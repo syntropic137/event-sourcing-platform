@@ -1,0 +1,14 @@
+[package]
+name = "eventstore-sdk-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+tonic = { version = "0.12", features = ["transport"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+eventstore-proto = { path = "../../eventstore-proto" }
+
+[lib]
+name = "eventstore_sdk_rs"
+path = "src/lib.rs"

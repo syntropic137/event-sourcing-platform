@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+  "eventstore-proto",
+  "eventstore-core",
+  "eventstore-backend-memory",
+  "eventstore-backend-postgres",
+  "eventstore-bin",
+  "sdks/sdk-rs",
+]

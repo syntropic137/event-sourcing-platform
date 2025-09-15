@@ -1,0 +1,196 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  detect:
+    name: Detect SDKs
+    runs-on: ubuntu-latest
+    outputs:
+      has_python: ${{ steps.chk.outputs.has_python }}
+      has_ts: ${{ steps.chk.outputs.has_ts }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - id: chk
+        name: Probe repository
+        run: |
+          if [ -f event-sourcing/python/Makefile ]; then
+            echo "has_python=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_python=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -f event-sourcing/typescript/Makefile ]; then
+            echo "has_ts=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_ts=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  rust_event_store_fast:
+    name: event-store • qa-fast
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            event-store/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: QA fast
+        run: make -C event-store qa-fast
+
+  rust_event_store_full:
+    name: event-store • qa-full + coverage
+    runs-on: ubuntu-latest
+    # Keep independent so it runs in parallel with other jobs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            event-store/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Coverage setup
+        run: make -C event-store cov-setup
+
+      - name: QA full
+        run: make -C event-store qa-full
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: event-store-coverage
+          path: |
+            event-store/coverage/lcov.info
+            event-store/coverage/html
+
+  rust_sdk_fast:
+    name: SDK (Rust) • qa-fast
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            event-sourcing/rust/target
+          key: cargo-sdk-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: QA fast
+        run: make -C event-sourcing/rust qa-fast
+
+  ts_sdk_fast:
+    name: SDK (TypeScript) • qa-fast
+    runs-on: ubuntu-latest
+    needs: detect
+    if: ${{ needs.detect.outputs.has_ts == 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies (workspace)
+        run: pnpm -w install --frozen-lockfile
+
+      - name: TypeScript SDK qa-fast
+        run: make -C event-sourcing/typescript qa-fast
+
+  python_sdk_fast:
+    name: SDK (Python) • qa (conditional)
+    runs-on: ubuntu-latest
+    needs: detect
+    if: ${{ needs.detect.outputs.has_python == 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Python SDK QA
+        run: make -C event-sourcing/python qa
+
+  summary:
+    name: QA Summary
+    runs-on: ubuntu-latest
+    needs:
+      - detect
+      - rust_event_store_fast
+      - rust_event_store_full
+      - rust_sdk_fast
+      - ts_sdk_fast
+      - python_sdk_fast
+    if: always()
+    steps:
+      - name: Write job results summary
+        env:
+          HAS_PY: ${{ needs.detect.outputs.has_python }}
+          HAS_TS: ${{ needs.detect.outputs.has_ts }}
+        run: |
+          {
+            echo "## QA Summary";
+            echo "";
+            echo "- event-store (qa-fast): ${{ needs.rust_event_store_fast.result }}";
+            echo "- event-store (qa-full + coverage): ${{ needs.rust_event_store_full.result }}";
+            echo "- SDK Rust (qa-fast): ${{ needs.rust_sdk_fast.result }}";
+            if [ "$HAS_TS" = "true" ]; then
+              echo "- SDK TypeScript (qa-fast): ${{ needs.ts_sdk_fast.result }}";
+            else
+              echo "- SDK TypeScript (qa-fast): skipped (not present)";
+            fi
+            if [ "$HAS_PY" = "true" ]; then
+              echo "- SDK Python (qa): ${{ needs.python_sdk_fast.result }}";
+            else
+              echo "- SDK Python (qa): skipped (not present)";
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

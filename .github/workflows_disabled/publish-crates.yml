@@ -1,0 +1,65 @@
+name: Publish Rust Crates
+
+on:
+  workflow_dispatch:
+    inputs:
+      do_publish:
+        description: Actually publish to crates.io (false = dry run)
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  publish:
+    name: Cargo publish (ordered)
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    strategy:
+      max-parallel: 1
+      matrix:
+        crate:
+          - name: eventstore-proto
+            path: event-store/eventstore-proto
+          - name: eventstore-core
+            path: event-store/eventstore-core
+          - name: eventstore-backend-memory
+            path: event-store/eventstore-backend-memory
+          - name: eventstore-backend-postgres
+            path: event-store/eventstore-backend-postgres
+          - name: eventstore-sdk-rs
+            path: event-store/sdks/sdk-rs
+          - name: eventstore-bin
+            path: event-store/eventstore-bin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo login
+        if: ${{ inputs.do_publish }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "CARGO_REGISTRY_TOKEN is not set. Please add repository secret." >&2
+            exit 1
+          fi
+          cargo login "$CARGO_REGISTRY_TOKEN"
+
+      - name: Build (sanity)
+        working-directory: ${{ matrix.crate.path }}
+        run: cargo build --release
+
+      - name: Publish (dry-run)
+        if: ${{ !inputs.do_publish }}
+        working-directory: ${{ matrix.crate.path }}
+        run: cargo publish --dry-run
+
+      - name: Publish (crates.io)
+        if: ${{ inputs.do_publish }}
+        working-directory: ${{ matrix.crate.path }}
+        run: cargo publish
+

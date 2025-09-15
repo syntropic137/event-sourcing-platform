@@ -1,0 +1,25 @@
+{
+  "name": "002-simple-aggregate-ts",
+  "version": "1.0.0",
+  "description": "Simple event-sourced aggregate over gRPC event store (TypeScript)",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "clean": "rimraf dist",
+    "setup": "npm install && npm run build",
+    "run": "npm run dev"
+  },
+  "author": "Event Sourcing Platform Team",
+  "license": "MIT",
+  "dependencies": {
+    "@event-sourcing-platform/typescript": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.0",
+    "rimraf": "^5.0.0"
+  }
+}
