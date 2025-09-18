@@ -17,7 +17,7 @@ This spec is the polyglot contract between clients and the Event Store.
 - __Client-provided on append__
   - aggregateId, aggregateType (identifies target aggregate)
   - aggregateNonce (proposed next sequence number)
-  - expected: exact | NO_AGGREGATE | AGGREGATE_EXISTS (additional concurrency check)
+  - expectedAggregateNonce: optimistic concurrency guard (0 ⇒ aggregate must not exist)
 
 - __Store-assigned on write__
   - globalNonce (global sequence, assigned atomically)
@@ -25,15 +25,15 @@ This spec is the polyglot contract between clients and the Event Store.
 
 > **Optimistic Concurrency Note**: Client proposes aggregateNonce, store validates it's correct (current_max + 1). This is true optimistic concurrency where client controls sequencing but store ensures correctness.
 
-- __Append request (Option B)__
-  - aggregateId, aggregateType
-  - expected: exact | ANY | NO_AGGREGATE | AGGREGATE_EXISTS
+- __Append request__
+  - tenantId, aggregateId, aggregateType
+  - expectedAggregateNonce (0 for brand-new streams, otherwise current head)
   - events: ClientEvent[] (each has meta.aggregateNonce + payload)
   - Store validates: proposed aggregateNonce == current_max + 1
 
 - __Append response__
-  - nextAggregateNonce
-  - nextGlobalNonce
+  - lastAggregateNonce
+  - lastGlobalNonce
 
 - __Read/Subscribe__
   - Return fully materialized events with complete metadata.

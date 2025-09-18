@@ -184,7 +184,7 @@ The gRPC surface is stable; storage is pluggable behind the `EventStore` trait. 
   - `KurrentEventStore` (future): implement the same trait; map append/read/subscribe to Kurrent’s primitives.
 - Dependency Injection (DI): at startup, select the backend by config/env and pass `Arc<dyn EventStore>` into `EventStoreSvc`.
 - Semantic invariants across backends:
-  - Optimistic concurrency via expected version (CAS) remains consistent.
+  - Optimistic concurrency via `expectedAggregateNonce` (CAS) remains consistent.
   - Monotonic offsets via `global_position` (or backend equivalent) for catch-up and checkpointing.
   - Metadata fields (`tenant_id`, `correlation_id`, etc.) preserved end-to-end.
 

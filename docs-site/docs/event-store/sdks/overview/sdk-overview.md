@@ -65,9 +65,10 @@ const client = new EventStoreClient(\{
 
 // Append with optimistic concurrency
 await client.appendEvents(\{
+  tenantId: 'tenant-123',
   aggregateId: 'order-123',
   aggregateType: 'Order',
-  expected: \{ exact: 4 \},
+  expectedAggregateNonce: 4,
   events: [new OrderCreated('order-123', 99.99)]
 \});
 ```
@@ -84,7 +85,8 @@ const stream = await client.readStream(\{
 ### Real-time Subscriptions
 ```typescript
 const subscription = await client.subscribe(\{
-  aggregatePrefix: 'Order-',
+  tenantId: 'tenant-123',
+  aggregateIdPrefix: 'Order-',
   fromGlobalNonce: 0
 \});
 
@@ -109,10 +111,10 @@ for await (const event of subscription) \{
 ## 📚 SDK Documentation Structure
 
 - **[SDK Overview](sdk-overview.md)** - This document
-- **[TypeScript SDK](typescript/typescript-sdk.md)** - Complete TypeScript implementation
-- **[Python SDK](python/python-sdk.md)** - Python async implementation
-- **[Rust SDK](rust/rust-sdk.md)** - Rust native implementation
-- **[API Reference](api-reference.md)** - Complete API documentation
+- **[TypeScript SDK](../typescript/typescript-sdk.md)** - Complete TypeScript implementation
+- **[Python SDK](../python/python-sdk.md)** - Python async implementation
+- **[Rust SDK](../rust/rust-sdk.md)** - Rust native implementation
+- **[API Reference](../api-reference.md)** - Complete API documentation
 
 ## 🚀 Getting Started
 

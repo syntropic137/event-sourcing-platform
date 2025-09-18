@@ -8,7 +8,7 @@ We needed to choose between two optimistic concurrency models for our event stor
 
 **Option A: Store-Assigned Sequences**
 - Store assigns all sequence numbers (aggregate_nonce, global_nonce)
-- Client provides expected version for validation
+- Client provides an expected version token for validation
 - Store has complete control over sequencing
 - Simple for clients, no guessing required
 
@@ -66,6 +66,7 @@ Client B: Retry with nonce = 6 → Store validates 6 == 5+1 ✅
 ### Implementation Details
 - Client reads current aggregate_nonce before proposing
 - Client proposes `current_nonce + 1` in EventMetadata
+- Client sends `expectedAggregateNonce = current_nonce`
 - Store validates proposal == `current_max + 1`
 - Store assigns global_nonce atomically
 - ConcurrencyError returned if validation fails

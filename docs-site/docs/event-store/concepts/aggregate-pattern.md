@@ -47,5 +47,5 @@ function fold(events: any[]): OrderAggregate {
 
 Notes:
 - In strongly typed languages, prefer one `applyX` per event with a decorator/registry to route events.
-- Persist events with optimistic concurrency (Exact(expectedVersion)).
+- Persist events with optimistic concurrency (send the current stream head as `expectedAggregateNonce`).
 - On write: rehydrate -> handle command -> append events -> new version.

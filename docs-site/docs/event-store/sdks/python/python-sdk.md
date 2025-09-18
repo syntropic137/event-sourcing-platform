@@ -38,9 +38,10 @@ async def main():
 
     # Append events
     await client.append_events(
+        tenant_id="tenant-123",
         aggregate_id="order-123",
         aggregate_type="Order",
-        expected={"exact": 0},  # First event, so expect version 0
+        expected_aggregate_nonce=0,  # First event -> stream must not exist
         events=[
             OrderCreated(order_id="order-123", amount=99.99, currency="USD"),
             OrderShipped(order_id="order-123", tracking_number="TRK123456")
@@ -96,27 +97,21 @@ class OrderCreated:
 ### Append Operations
 
 ```python
-# Append with exact version expectation
+# Append with optimistic concurrency (expect current head to be 2)
 await client.append_events(
+    tenant_id="tenant-123",
     aggregate_id="order-123",
     aggregate_type="Order",
-    expected={"exact": 2},  # Expect current version to be 2
+    expected_aggregate_nonce=2,
     events=[OrderUpdated(order_id="order-123", status="confirmed")]
 )
 
-# Append with no concurrency check
+# Start a new stream (0 means the aggregate must not exist yet)
 await client.append_events(
-    aggregate_id="order-123",
-    aggregate_type="Order",
-    expected={"any": True},
-    events=[OrderCancelled(order_id="order-123")]
-)
-
-# Append only if aggregate doesn't exist
-await client.append_events(
+    tenant_id="tenant-123",
     aggregate_id="order-456",
     aggregate_type="Order",
-    expected={"no_aggregate": True},
+    expected_aggregate_nonce=0,
     events=[OrderCreated(order_id="order-456", amount=149.99)]
 )
 ```
@@ -146,13 +141,15 @@ recent_events = await client.read_stream(
 ```python
 # Subscribe to all events from beginning
 subscription1 = await client.subscribe(
+    tenant_id="tenant-123",
     from_global_nonce=0  # Start from beginning
 )
 
-# Subscribe to specific aggregate type
+# Subscribe to specific aggregate id prefix
 subscription2 = await client.subscribe(
-    aggregate_prefix="Order-",  # Only Order aggregates
-    from_global_nonce=1000      # Start from global position 1000
+    tenant_id="tenant-123",
+    aggregate_id_prefix="Order-",  # Only Order aggregates
+    from_global_nonce=1000         # Start from global position 1000
 )
 
 # Process events
@@ -366,8 +363,8 @@ async def read_large_stream(aggregate_id: str):
 
 ## 📚 Related Documentation
 
-- **[SDK Overview](overview/sdk-overview.md)** - General SDK architecture
-- **[API Reference](api-reference.md)** - Complete API documentation
-- **[TypeScript SDK](typescript/typescript-sdk.md)** - TypeScript implementation
-- **[Optimistic Concurrency](../implementation/concurrency-and-consistency.md)** - Concurrency details
-- **[Event Model](../concepts/event-model.md)** - Event envelope specification
+- **[SDK Overview](../overview/sdk-overview.md)** - General SDK architecture
+- **[API Reference](../api-reference.md)** - Complete API documentation
+- **[TypeScript SDK](../typescript/typescript-sdk.md)** - TypeScript implementation
+- **[Optimistic Concurrency](../../implementation/concurrency-and-consistency.md)** - Concurrency details
+- **[Event Model](../../concepts/event-model.md)** - Event envelope specification

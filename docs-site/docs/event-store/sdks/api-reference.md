@@ -12,18 +12,13 @@ All SDKs provide the same core functionality with language-appropriate idioms:
 Appends events to an aggregate with optimistic concurrency control.
 
 **Parameters:**
+- `tenantId` (string): Tenant/partition routing key
 - `aggregateId` (string): Target aggregate identifier
 - `aggregateType` (string): Aggregate type for routing
 - `events` (Event[]): Array of events to append
-- `expected` (Expected): Concurrency expectation
+- `expectedAggregateNonce` (number): Optimistic concurrency check. Use `0` for brand new streams; otherwise supply the current stream head.
 
-**Expected Options:**
-- `exact(n)`: Expect aggregate nonce to be exactly `n`
-- `noAggregate`: Expect aggregate to not exist
-- `aggregateExists`: Expect aggregate to exist
-- `any`: No concurrency check
-
-**Returns:** `{ nextAggregateNonce, lastGlobalNonce }`
+**Returns:** `{ lastAggregateNonce, lastGlobalNonce }`
 
 #### `readStream(request)`
 Reads events from an aggregate stream.
@@ -40,7 +35,8 @@ Reads events from an aggregate stream.
 Creates a real-time subscription to event streams.
 
 **Parameters:**
-- `aggregatePrefix` (string): Filter by aggregate type prefix (optional)
+- `tenantId` (string): Tenant/partition routing key
+- `aggregateIdPrefix` (string): Filter by aggregate id prefix (optional)
 - `fromGlobalNonce` (number): Starting global position
 
 **Returns:** AsyncIterator of events
@@ -355,13 +351,15 @@ interface EventStoreClientConfig {
 }
 
 interface AppendRequest {
+  tenantId: string;
   aggregateId: string;
   aggregateType: string;
   events: Event[];
-  expected: Expected;
+  expectedAggregateNonce: number;
 }
 
 interface ReadStreamRequest {
+  tenantId: string;
   aggregateId: string;
   fromAggregateNonce: number;
   maxCount: number;
@@ -369,15 +367,10 @@ interface ReadStreamRequest {
 }
 
 interface SubscribeRequest {
-  aggregatePrefix?: string;
+  tenantId: string;
+  aggregateIdPrefix?: string;
   fromGlobalNonce: number;
 }
-
-type Expected =
-  | { exact: number }
-  | { noAggregate: true }
-  | { aggregateExists: true }
-  | { any: true };
 ```
 
 ## 🚨 Error Reference
@@ -413,9 +406,9 @@ try {
 
 ## 📚 Additional Resources
 
-- **[SDK Overview](overview/sdk-overview.md)** - Architecture and workflow
-- **[TypeScript SDK](typescript/typescript-sdk.md)** - Complete TypeScript guide
-- **[Python SDK](python/python-sdk.md)** - Python implementation guide
-- **[Rust SDK](rust/rust-sdk.md)** - Rust native implementation
-- **[Event Model](concepts/event-model.md)** - Event envelope specification
-- **[Optimistic Concurrency](implementation/concurrency-and-consistency.md)** - Concurrency details
+- **[SDK Overview](./overview/sdk-overview.md)** - Architecture and workflow
+- **[TypeScript SDK](./typescript/typescript-sdk.md)** - Complete TypeScript guide
+- **[Python SDK](./python/python-sdk.md)** - Python implementation guide
+- **[Rust SDK](./rust/rust-sdk.md)** - Rust native implementation
+- **[Event Model](../concepts/event-model.md)** - Event envelope specification
+- **[Optimistic Concurrency](../implementation/concurrency-and-consistency.md)** - Concurrency details

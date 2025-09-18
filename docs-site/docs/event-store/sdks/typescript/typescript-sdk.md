@@ -41,7 +41,7 @@ const client = new EventStoreClient(\{
 await client.appendEvents(\{
   aggregateId: 'order-123',
   aggregateType: 'Order',
-  expected: \{ exact: 0 \}, // First event, so expect version 0
+  expectedAggregateNonce: 0, // First event -> stream must not exist yet
   events: [
     new OrderCreated('order-123', 99.99, 'USD'),
     new OrderShipped('order-123', 'TRK123456')
@@ -90,27 +90,21 @@ class YourEvent {
 ### Append Operations
 
 ```typescript
-// Append with exact version expectation
+// Append with optimistic concurrency: expect stream head to be 2
 await client.appendEvents({
+  tenantId: 'tenant-123',
   aggregateId: 'order-123',
   aggregateType: 'Order',
-  expected: { exact: 2 }, // Expect current version to be 2
+  expectedAggregateNonce: 2,
   events: [new OrderUpdated('order-123', { status: 'confirmed' })]
 });
 
-// Append with no concurrency check
+// Start a new stream (0 means the aggregate must not exist yet)
 await client.appendEvents({
-  aggregateId: 'order-123',
-  aggregateType: 'Order',
-  expected: { any: true },
-  events: [new OrderCancelled('order-123')]
-});
-
-// Append only if aggregate doesn't exist
-await client.appendEvents({
+  tenantId: 'tenant-123',
   aggregateId: 'order-456',
   aggregateType: 'Order',
-  expected: { noAggregate: true },
+  expectedAggregateNonce: 0,
   events: [new OrderCreated('order-456', 149.99)]
 });
 ```
@@ -140,13 +134,15 @@ const recentEvents = await client.readStream({
 ```typescript
 // Subscribe to all events from beginning
 const subscription1 = await client.subscribe({
+  tenantId: 'tenant-123',
   fromGlobalNonce: 0  // Start from beginning
 });
 
 // Subscribe to specific aggregate type
 const subscription2 = await client.subscribe({
-  aggregatePrefix: 'Order-',  // Only Order aggregates
-  fromGlobalNonce: 1000       // Start from global position 1000
+  tenantId: 'tenant-123',
+  aggregateIdPrefix: 'Order-',  // Only Order aggregates
+  fromGlobalNonce: 1000         // Start from global position 1000
 });
 
 // Process events
@@ -181,9 +177,10 @@ class ComplexEvent {
 ```typescript
 try {
   await client.appendEvents({
+    tenantId: 'tenant-123',
     aggregateId: 'order-123',
     aggregateType: 'Order',
-    expected: { exact: 5 },
+    expectedAggregateNonce: 5,
     events: [new OrderUpdated('order-123', { status: 'shipped' })]
   });
 } catch (error) {
@@ -297,7 +294,8 @@ await client.appendEvents(request2);
 ```typescript
 // Use specific prefixes for better performance
 const subscription = await client.subscribe({
-  aggregatePrefix: 'Order-',  // Only Order events
+  tenantId: 'tenant-123',
+  aggregateIdPrefix: 'Order-',  // Only Order events
   fromGlobalNonce: lastProcessedPosition
 });
 ```
@@ -340,7 +338,7 @@ while (true) {
 
 ## 📚 Related Documentation
 
-- **[SDK Overview](overview/sdk-overview.md)** - General SDK architecture
-- **[API Reference](api-reference.md)** - Complete API documentation
-- **[Optimistic Concurrency](../implementation/concurrency-and-consistency.md)** - Concurrency details
-- **[Event Model](../concepts/event-model.md)** - Event structure specification
+- **[SDK Overview](../overview/sdk-overview.md)** - General SDK architecture
+- **[API Reference](../api-reference.md)** - Complete API documentation
+- **[Optimistic Concurrency](../../implementation/concurrency-and-consistency.md)** - Concurrency details
+- **[Event Model](../../concepts/event-model.md)** - Event structure specification

@@ -1,9 +1,9 @@
 # SDK Design (TypeScript)
 
 - __High-level API__
-  - appendEvents({ aggregateId, aggregateType, expected, events }) -> { nextAggregateNonce, lastGlobalNonce }
-  - readStream(aggregateId)
-  - subscribe({ fromGlobalNonce })
+  - `appendEvents({ tenantId, aggregateId, aggregateType, expectedAggregateNonce, events }) -> { lastAggregateNonce, lastGlobalNonce }`
+  - `readStream({ tenantId, aggregateId, ... })`
+  - `subscribe({ tenantId, aggregateIdPrefix?, fromGlobalNonce })`
 
 - __Decorators__
   - `@Event({ type: 'com.myco.order.OrderCreated', revision: 2 })`

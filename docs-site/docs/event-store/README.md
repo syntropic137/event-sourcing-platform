@@ -35,11 +35,11 @@ Technical specifications and implementation details.
 ### 🛠️ SDKs
 Language-specific SDK implementations and documentation.
 
-- **[SDK Overview](overview/sdk-overview.md)** - SDK architecture and workflow
-- **[TypeScript SDK](typescript/typescript-sdk.md)** - Complete TypeScript implementation
-- **[Python SDK](python/python-sdk.md)** - Python async implementation
-- **[Rust SDK](rust/rust-sdk.md)** - Rust native implementation
-- **[API Reference](api-reference.md)** - Complete API documentation
+- **[SDK Overview](sdks/overview/sdk-overview.md)** - SDK architecture and workflow
+- **[TypeScript SDK](sdks/typescript/typescript-sdk.md)** - Complete TypeScript implementation
+- **[Python SDK](sdks/python/python-sdk.md)** - Python async implementation
+- **[Rust SDK](sdks/rust/rust-sdk.md)** - Rust native implementation
+- **[API Reference](sdks/api-reference.md)** - Complete API documentation
 
 ### 🔧 Operations (operations/)
 Operational concerns and deployment considerations.

@@ -24,6 +24,6 @@ This project provides a polyglot Event Store and a TypeScript SDK. It intentiona
 
 - __Typical flows__
   1) Command handled in an aggregate → emits one or more events.
-  2) SDK constructs ClientEvent(s) from payloads and metadata → append to Event Store with expected version.
+  2) SDK constructs ClientEvent(s) from payloads and metadata → append to Event Store with the current stream head as `expectedAggregateNonce`.
   3) Projections/processors subscribe from a globalNonce (tracking token) or per-aggregate stream to react/build read models.
   4) Optionally, events are also published on an external bus for cross-bounded-context distribution.

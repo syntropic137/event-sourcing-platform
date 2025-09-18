@@ -205,7 +205,10 @@ use eventstore_sdk_rs::{Error, ConcurrencyError};
 
 match client.append_events(request).await {
     Ok(response) => {
-        println!("Success! Next nonce: {}", response.next_aggregate_nonce);
+        println!(
+            "Success! Last committed nonce: {}",
+            response.last_aggregate_nonce
+        );
     }
     Err(Error::Concurrency(err)) => {
         println!("Concurrency conflict: {:?}", err);
@@ -441,9 +444,9 @@ println!("Error rate: {}", metrics.error_rate());
 
 ## 📚 Related Documentation
 
-- **[SDK Overview](overview/sdk-overview.md)** - General SDK architecture
-- **[API Reference](api-reference.md)** - Complete API documentation
-- **[TypeScript SDK](typescript/typescript-sdk.md)** - TypeScript implementation
-- **[Python SDK](python/python-sdk.md)** - Python implementation
-- **[Optimistic Concurrency](../implementation/concurrency-and-consistency.md)** - Concurrency details
-- **[Event Model](../concepts/event-model.md)** - Event envelope specification
+- **[SDK Overview](../overview/sdk-overview.md)** - General SDK architecture
+- **[API Reference](../api-reference.md)** - Complete API documentation
+- **[TypeScript SDK](../typescript/typescript-sdk.md)** - TypeScript implementation
+- **[Python SDK](../python/python-sdk.md)** - Python implementation
+- **[Optimistic Concurrency](../../implementation/concurrency-and-consistency.md)** - Concurrency details
+- **[Event Model](../../concepts/event-model.md)** - Event envelope specification

@@ -41,7 +41,7 @@ This glossary defines the shared vocabulary used across this experiment so engin
 - **Append**
   - Add one or more events to an aggregate's stream with optimistic concurrency.
   - Client provides: aggregateId, aggregateType, proposed aggregateNonce
-  - Client provides: expected version (additional concurrency check)
+  - Client provides: expectedAggregateNonce (current stream head; 0 ⇒ aggregate must not exist)
   - Store validates: proposed aggregateNonce == current_max + 1
   - Store assigns: globalNonce, timestamp (atomically)
   - Fails with concurrency conflict if nonce validation fails.
@@ -58,7 +58,7 @@ This glossary defines the shared vocabulary used across this experiment so engin
   - Server stream delivering:
     - Replay: matching historical events (filtered by `aggregateType` prefix and/or `fromGlobalNonce`).
     - Live: new events as they are appended.
-  - `aggregateType` prefix can narrow to categories like `Order-`.
+  - `aggregateIdPrefix` can narrow to categories like `Order-`.
   - Uses `globalNonce` (tracking token) for checkpointing.
 
 ## Patterns
