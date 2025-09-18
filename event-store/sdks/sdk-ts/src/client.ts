@@ -9,7 +9,7 @@ import type {
   SubscribeRequest,
   SubscribeResponse,
 } from "./gen/eventstore/v1/eventstore.js";
-import { Expected, EventMetadata } from "./gen/eventstore/v1/eventstore.js";
+import { EventMetadata } from "./gen/eventstore/v1/eventstore.js";
 
 export interface ClientOptions {
   /** plaintext by default */
@@ -64,47 +64,56 @@ export class EventStoreClientTS {
 
   // High-level, fully typed append that requires event metadata
   appendTyped(input: {
+    tenantId: string;
     aggregateId: string;
     aggregateType: string;
-    exact?: number;
-    expectedAny?: Expected;
+    expectedAggregateNonce: number;
+    idempotencyKey?: string;
     events: Array<{
       meta: {
         aggregateNonce: number;  // client MUST provide this for optimistic concurrency
         eventType: string;
+        eventVersion?: number;
         eventId?: string;
         contentType?: string;
+        contentSchema?: string;
         correlationId?: string;
         causationId?: string;
         actorId?: string;
         tenantId?: string;
+        timestampUnixMs?: number;
+        payloadSha256?: Uint8Array;
         headers?: Record<string, string>;
-        schemaVersion?: number;
       };
       payload: Buffer;
     }>;
   }): Promise<AppendResponse> {
-    const { aggregateId, aggregateType, exact, expectedAny, events } = input;
+    const { tenantId, aggregateId, aggregateType, expectedAggregateNonce, idempotencyKey, events } = input;
     const wireReq: AppendRequest = {
+      tenantId,
       aggregateId,
       aggregateType,
-      exact,
-      expectedAny,
+      expectedAggregateNonce,
+      idempotencyKey: idempotencyKey ?? "",
       events: events.map((e) => ({
         meta: EventMetadata.create({
           aggregateId,
           aggregateType,
           aggregateNonce: e.meta.aggregateNonce,  // client provides for optimistic concurrency
           eventType: e.meta.eventType,
+          eventVersion: e.meta.eventVersion ?? 1,
           eventId: e.meta.eventId ?? "",
           contentType: e.meta.contentType ?? "application/octet-stream",
+          contentSchema: e.meta.contentSchema ?? "",
           correlationId: e.meta.correlationId ?? "",
           causationId: e.meta.causationId ?? "",
           actorId: e.meta.actorId ?? "",
-          tenantId: e.meta.tenantId ?? "",
+          tenantId: e.meta.tenantId ?? tenantId,
+          timestampUnixMs: e.meta.timestampUnixMs ?? 0,
+          recordedTimeUnixMs: 0,
+          payloadSha256: e.meta.payloadSha256 ?? new Uint8Array(),
           headers: e.meta.headers ?? {},
-          schemaVersion: e.meta.schemaVersion ?? 0,
-          // globalNonce/timestamp set by store
+          globalNonce: 0,
         }),
         payload: e.payload,
       })),
@@ -112,4 +121,3 @@ export class EventStoreClientTS {
     return this.append(wireReq);
   }
 }
-

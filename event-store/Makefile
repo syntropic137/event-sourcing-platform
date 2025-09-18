@@ -14,10 +14,19 @@ COVERAGE_MIN ?= 75
 FAST_TEST_EXCLUDES ?= eventstore-backend-postgres
 
 .PHONY: help build clean qa qa-full qa-fast fmt clippy check test run gen-ts gen-py smoke cov-setup coverage
- .PHONY: ps run-bg stop
+.PHONY: ps run-bg stop dev-init dev-start dev-stop dev-restart dev-clean dev-test dev-status dev-logs dev-shell
 
 help:
 	@echo "Targets: build, clean, qa, qa-full, fmt, clippy, check, test, run, smoke, gen-ts, gen-py"
+	@echo ""
+	@echo "Development Infrastructure:"
+	@echo "  dev-init     - Initialize fast dev environment"
+	@echo "  dev-start    - Start infrastructure (Postgres + Redis)"
+	@echo "  dev-test     - Run tests with fast infrastructure"
+	@echo "  dev-stop     - Stop infrastructure"
+	@echo "  dev-restart  - Restart infrastructure"
+	@echo "  dev-clean    - Clean all containers and data"
+	@echo "  dev-status   - Show infrastructure status"
 
 build:
 	cargo build --workspace
@@ -216,3 +225,36 @@ stop:
 	    echo "No listeners to stop on port $$PORT"; \
 	  fi; \
 	fi
+
+# --- Development Infrastructure (EMP Dev Tools) -----------------------------
+
+dev-init:
+	@../dev-tools/dev init
+
+dev-start:
+	@../dev-tools/dev start
+
+dev-stop:
+	@../dev-tools/dev stop
+
+dev-restart:
+	@../dev-tools/dev restart
+
+dev-clean:
+	@../dev-tools/dev clean
+
+dev-test:
+	@../dev-tools/dev test
+
+dev-status:
+	@../dev-tools/dev status
+
+dev-logs:
+	@../dev-tools/dev logs $(filter-out $@,$(MAKECMDGOALS))
+
+dev-shell:
+	@../dev-tools/dev shell $(filter-out $@,$(MAKECMDGOALS))
+
+# Convenience aliases
+dev: dev-start
+fast-test: dev-test

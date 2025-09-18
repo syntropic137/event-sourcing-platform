@@ -1,6 +1,6 @@
 [package]
 name = "eventstore-backend-postgres"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -13,6 +13,8 @@ thiserror = "1"
 sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio", "macros", "postgres", "migrate"] }
 tokio = { version = "1", features = ["time"] }
 futures = "0.3"
+prost = "0.13"
+sha2 = "0.10"
 
 [features]
 default = []
@@ -23,3 +25,4 @@ pg-integration = []
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 testcontainers = "0.17"
 testcontainers-modules = { version = "0.5", features = ["postgres"] }
+tonic = { version = "0.12", default-features = false }

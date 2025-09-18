@@ -552,12 +552,14 @@ checksum = "0206175f82b8d6bf6652ff7d71a1e27fd2e4efde587fd368662814d6ec1d9ce0"
 
 [[package]]
 name = "eventstore-backend-memory"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "eventstore-core",
  "eventstore-proto",
  "parking_lot",
+ "prost",
+ "sha2",
  "thiserror 2.0.16",
  "tokio",
  "tokio-stream",
@@ -565,24 +567,27 @@ dependencies = [
 
 [[package]]
 name = "eventstore-backend-postgres"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "eventstore-core",
  "eventstore-proto",
  "futures",
+ "prost",
+ "sha2",
  "sqlx",
  "testcontainers",
  "testcontainers-modules",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
+ "tonic",
 ]
 
 [[package]]
 name = "eventstore-bin"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "eventstore-backend-memory",
@@ -603,11 +608,14 @@ dependencies = [
 
 [[package]]
 name = "eventstore-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bytes",
  "eventstore-proto",
+ "prost",
+ "prost-types",
  "thiserror 2.0.16",
  "tokio",
  "tokio-stream",
@@ -616,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "eventstore-proto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "prost",
  "prost-build",
@@ -628,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "eventstore-sdk-rs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "eventstore-proto",

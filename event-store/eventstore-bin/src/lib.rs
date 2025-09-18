@@ -28,9 +28,8 @@ impl EventStore for Service {
         match self.store.append(req).await {
             Ok(resp) => {
                 info!(
-                    next_aggregate_nonce = resp.next_aggregate_nonce,
                     last_global_nonce = resp.last_global_nonce,
-                    next_global_nonce = resp.last_global_nonce + 1,
+                    last_aggregate_nonce = resp.last_aggregate_nonce,
                     "append ok"
                 );
                 Ok(Response::new(resp))
@@ -74,7 +73,7 @@ impl EventStore for Service {
         Pin<Box<dyn Stream<Item = Result<SubscribeResponse, Status>> + Send + 'static>>;
 
     #[instrument(name = "rpc.subscribe", skip(self, request), fields(
-        aggregate_prefix = %request.get_ref().aggregate_prefix,
+        aggregate_id_prefix = %request.get_ref().aggregate_id_prefix,
         from_global_nonce = request.get_ref().from_global_nonce,
     ))]
     async fn subscribe(

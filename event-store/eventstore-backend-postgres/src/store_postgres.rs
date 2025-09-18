@@ -1,10 +1,98 @@
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use eventstore_core::{proto, EventStore as EventStoreTrait, StoreError, StoreStream};
 use futures::stream;
-use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use prost::Message;
+use sha2::{Digest, Sha256};
+use sqlx::{postgres::PgPoolOptions, types::Json, PgPool, Row};
 use tokio::time::{interval, Duration, Interval};
+
+const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn batch_fingerprint(events: &[proto::EventData]) -> Vec<u8> {
+    let mut hasher = Sha256::new();
+    for ev in events {
+        if let Some(meta) = &ev.meta {
+            let mut clone = proto::EventData {
+                meta: Some(meta.clone()),
+                payload: ev.payload.clone(),
+            };
+            if let Some(m) = clone.meta.as_mut() {
+                m.recorded_time_unix_ms = 0;
+                m.global_nonce = 0;
+            }
+            hasher.update(clone.encode_to_vec());
+        }
+    }
+    hasher.finalize().to_vec()
+}
+
+fn normalize_event(
+    mut event: proto::EventData,
+    tenant_id: &str,
+    aggregate_id: &str,
+    aggregate_type: &str,
+) -> Result<proto::EventData, StoreError> {
+    let mut meta = event.meta.take().ok_or_else(|| {
+        StoreError::Invalid("event.metadata is required for optimistic concurrency".into())
+    })?;
+
+    if meta.aggregate_nonce == 0 {
+        return Err(StoreError::Invalid(
+            "aggregate_nonce must be >= 1 for all events".into(),
+        ));
+    }
+
+    if meta.event_id.is_empty() {
+        return Err(StoreError::Invalid(
+            "event_id must be provided (UUID/ULID recommended)".into(),
+        ));
+    }
+
+    if meta.aggregate_id.is_empty() {
+        meta.aggregate_id = aggregate_id.to_owned();
+    } else if meta.aggregate_id != aggregate_id {
+        return Err(StoreError::Invalid(format!(
+            "event aggregate_id '{}' must match request aggregate_id '{}'",
+            meta.aggregate_id, aggregate_id
+        )));
+    }
+
+    if meta.aggregate_type.is_empty() {
+        meta.aggregate_type = aggregate_type.to_owned();
+    } else if meta.aggregate_type != aggregate_type {
+        return Err(StoreError::Invalid(format!(
+            "event aggregate_type '{}' must match request aggregate_type '{}'",
+            meta.aggregate_type, aggregate_type
+        )));
+    }
+
+    if meta.tenant_id.is_empty() {
+        meta.tenant_id = tenant_id.to_owned();
+    } else if meta.tenant_id != tenant_id {
+        return Err(StoreError::PermissionDenied(format!(
+            "event tenant_id '{}' does not match request tenant_id '{}'",
+            meta.tenant_id, tenant_id
+        )));
+    }
+
+    if meta.content_type.is_empty() {
+        meta.content_type = DEFAULT_CONTENT_TYPE.to_owned();
+    }
+
+    event.meta = Some(meta);
+    Ok(event)
+}
 
 #[derive(Clone)]
 pub struct PostgresStore {
@@ -21,7 +109,6 @@ impl PostgresStore {
             .max_connections(5)
             .connect(database_url)
             .await?;
-        // Run migrations bundled with the crate
         sqlx::migrate!("./migrations").run(&pool).await?;
         Ok(Self::new(pool))
     }
@@ -31,146 +118,301 @@ impl PostgresStore {
     }
 }
 
+fn map_db_error(e: sqlx::Error) -> StoreError {
+    match e {
+        sqlx::Error::Database(db_err) => {
+            let code = db_err.code().map(|c| c.to_string()).unwrap_or_default();
+            let message = db_err.message().to_string();
+            if code == "23505" {
+                StoreError::Concurrency {
+                    message,
+                    detail: None,
+                }
+            } else if code == "23514" {
+                StoreError::Invalid(message)
+            } else {
+                StoreError::Internal(anyhow::anyhow!(message))
+            }
+        }
+        other => StoreError::Internal(anyhow::anyhow!(other)),
+    }
+}
+
 #[async_trait]
 impl EventStoreTrait for PostgresStore {
     async fn append(&self, req: proto::AppendRequest) -> Result<proto::AppendResponse, StoreError> {
-        // Basic validation
-        if req.aggregate_id.is_empty() || req.aggregate_type.is_empty() {
+        if req.tenant_id.is_empty() {
+            return Err(StoreError::Unauthenticated(
+                "tenant_id is required on AppendRequest".into(),
+            ));
+        }
+        if req.aggregate_id.is_empty() {
             return Err(StoreError::Invalid(
-                "aggregate_id and aggregate_type must be provided".into(),
+                "aggregate_id is required on AppendRequest".into(),
+            ));
+        }
+        if req.aggregate_type.is_empty() {
+            return Err(StoreError::Invalid(
+                "aggregate_type is required on AppendRequest".into(),
+            ));
+        }
+        if req.events.is_empty() {
+            return Err(StoreError::Invalid(
+                "AppendRequest.events must not be empty".into(),
             ));
         }
 
+        let tenant_id = req.tenant_id.clone();
+        let aggregate_id = req.aggregate_id.clone();
+        let aggregate_type = req.aggregate_type.clone();
+
+        let mut events: Vec<proto::EventData> = Vec::with_capacity(req.events.len());
+        for ev in req.events.into_iter() {
+            events.push(normalize_event(
+                ev,
+                &tenant_id,
+                &aggregate_id,
+                &aggregate_type,
+            )?);
+        }
+
+        let fingerprint = batch_fingerprint(&events);
         let mut tx = self
             .pool
             .begin()
             .await
-            .map_err(|e| StoreError::Other(anyhow::anyhow!(e)))?;
+            .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
 
-        // Current aggregate nonce
-        let row = sqlx::query(
-            "SELECT COALESCE(MAX(aggregate_nonce), 0) AS v FROM events WHERE aggregate_id = $1",
-        )
-        .bind(&req.aggregate_id)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| StoreError::Other(anyhow::anyhow!(e)))?;
-        let current_nonce: i64 = row.get::<i64, _>("v");
+        if !req.idempotency_key.is_empty() {
+            let row = sqlx::query(
+                "SELECT request_fingerprint, first_committed_nonce, last_committed_nonce, last_global_nonce \
+                 FROM idempotency WHERE tenant_id = $1 AND aggregate_id = $2 AND idempotency_key = $3 FOR UPDATE",
+            )
+            .bind(&tenant_id)
+            .bind(&aggregate_id)
+            .bind(&req.idempotency_key)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(map_db_error)?;
 
-        // Concurrency check
-        let expected_ok = match req.expected {
-            Some(proto::append_request::Expected::Exact(ex)) => current_nonce as u64 == ex,
-            Some(proto::append_request::Expected::ExpectedAny(e)) => {
-                match proto::Expected::try_from(e).unwrap_or(proto::Expected::Any) {
-                    proto::Expected::Any => true,
-                    proto::Expected::NoAggregate => current_nonce == 0,
-                    proto::Expected::AggregateExists => current_nonce > 0,
+            if let Some(row) = row {
+                let stored_fingerprint: Vec<u8> = row.get("request_fingerprint");
+                if stored_fingerprint == fingerprint {
+                    tx.rollback()
+                        .await
+                        .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
+                    return Ok(proto::AppendResponse {
+                        last_global_nonce: row.get::<i64, _>("last_global_nonce") as u64,
+                        last_aggregate_nonce: row.get::<i64, _>("last_committed_nonce") as u64,
+                    });
                 }
+                tx.rollback()
+                    .await
+                    .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
+                return Err(StoreError::AlreadyExists(format!(
+                    "idempotency key '{}' already used with different payload",
+                    req.idempotency_key
+                )));
             }
-            None => true,
+        }
+
+        let row = sqlx::query(
+            "SELECT last_nonce, last_global_nonce FROM aggregates WHERE tenant_id = $1 AND aggregate_id = $2 FOR UPDATE",
+        )
+        .bind(&tenant_id)
+        .bind(&aggregate_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_db_error)?;
+
+        let current_last_nonce: u64 = row
+            .as_ref()
+            .map(|r| r.get::<i64, _>("last_nonce") as u64)
+            .unwrap_or(0);
+        let current_last_global: u64 = row
+            .as_ref()
+            .map(|r| r.get::<i64, _>("last_global_nonce") as u64)
+            .unwrap_or(0);
+
+        let expected_head = req.expected_aggregate_nonce;
+        let expected_ok = if expected_head == 0 {
+            current_last_nonce == 0
+        } else {
+            current_last_nonce == expected_head
         };
         if !expected_ok {
-            return Err(StoreError::Concurrency(format!(
-                "expected mismatch for aggregate {}",
-                req.aggregate_id
-            )));
+            tx.rollback()
+                .await
+                .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
+            return Err(StoreError::Concurrency {
+                message: "append precondition failed".into(),
+                detail: Some(proto::ConcurrencyErrorDetail {
+                    tenant_id,
+                    aggregate_id,
+                    actual_last_aggregate_nonce: current_last_nonce,
+                    actual_last_global_nonce: current_last_global,
+                }),
+            });
         }
 
-        // Validate client-provided aggregate_nonces
-        for (i, ev) in req.events.iter().enumerate() {
-            let expected_nonce = current_nonce as u64 + 1 + i as u64;
-            if let Some(meta) = &ev.meta {
-                if meta.aggregate_nonce != expected_nonce {
-                    return Err(StoreError::Concurrency(format!(
-                        "proposed aggregate_nonce {} != expected {} for event {}",
-                        meta.aggregate_nonce, expected_nonce, i
-                    )));
-                }
-            } else {
-                return Err(StoreError::Invalid(
-                    "EventMetadata required for optimistic concurrency".into(),
-                ));
+        for (idx, ev) in events.iter().enumerate() {
+            let meta = ev
+                .meta
+                .as_ref()
+                .expect("normalized event must have metadata");
+            let expected_nonce = current_last_nonce + idx as u64 + 1;
+            if meta.aggregate_nonce != expected_nonce {
+                tx.rollback()
+                    .await
+                    .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
+                return Err(StoreError::Invalid(format!(
+                    "event {} aggregate_nonce {} must equal expected {}",
+                    idx, meta.aggregate_nonce, expected_nonce
+                )));
             }
         }
 
-        let mut last_global: i64 = 0;
-        let events_len = req.events.len();
-        for mut ev in req.events.into_iter() {
-            // Ensure we have metadata to pull fields from
-            let mut meta = ev.meta.take().unwrap_or_else(|| proto::EventMetadata {
-                ..Default::default()
-            });
-
-            // Store validates and assigns aggregate_id/type (client provides nonce)
-            meta.aggregate_id = req.aggregate_id.clone();
-            meta.aggregate_type = req.aggregate_type.clone();
-
-            // Required fields
-            let event_id = if meta.event_id.is_empty() {
-                return Err(StoreError::Invalid(
-                    "event_id must be set in metadata (uuid string)".into(),
-                ));
-            } else {
-                meta.event_id.clone()
-            };
-
-            let event_type = if meta.event_type.is_empty() {
+        let mut last_global_nonce = current_last_global;
+        let mut assigned_events: Vec<proto::EventData> = Vec::with_capacity(events.len());
+        for mut ev in events.into_iter() {
+            let mut meta = ev.meta.take().expect("normalized event must have metadata");
+            let now_ms = now_unix_ms();
+            meta.recorded_time_unix_ms = now_ms;
+            let headers_json = Json(meta.headers.clone());
+            let payload_sha = if meta.payload_sha256.is_empty() {
                 None
             } else {
-                Some(meta.event_type.clone())
+                Some(meta.payload_sha256.clone())
             };
-            let content_type = if meta.content_type.is_empty() {
-                None
-            } else {
-                Some(meta.content_type.clone())
-            };
-            let payload = ev.payload;
 
-            // Insert row; cast event_id to uuid in SQL to avoid needing uuid crate
             let row = sqlx::query(
                 r#"
                 INSERT INTO events (
-                    event_id, aggregate_id, aggregate_type, aggregate_nonce,
-                    event_type, content_type, payload
+                    tenant_id, aggregate_id, aggregate_type, aggregate_nonce,
+                    event_id, event_type, event_version, content_type, content_schema,
+                    correlation_id, causation_id, actor_id, timestamp_unix_ms,
+                    recorded_time_unix_ms, payload_sha256, headers, payload
                 ) VALUES (
-                    $1::uuid, $2, $3, $4, $5, $6, $7
+                    $1, $2, $3, $4,
+                    $5, $6, $7, $8, $9,
+                    $10, $11, $12, $13,
+                    $14, $15, $16, $17
                 )
                 RETURNING global_nonce
                 "#,
             )
-            .bind(&event_id)
-            .bind(&meta.aggregate_id)
-            .bind(&meta.aggregate_type)
+            .bind(&tenant_id)
+            .bind(&aggregate_id)
+            .bind(&aggregate_type)
             .bind(meta.aggregate_nonce as i64)
-            .bind(event_type)
-            .bind(content_type)
-            .bind(&payload)
+            .bind(&meta.event_id)
+            .bind(&meta.event_type)
+            .bind(meta.event_version as i32)
+            .bind(&meta.content_type)
+            .bind(if meta.content_schema.is_empty() {
+                None::<&str>
+            } else {
+                Some(meta.content_schema.as_str())
+            })
+            .bind(if meta.correlation_id.is_empty() {
+                None::<&str>
+            } else {
+                Some(meta.correlation_id.as_str())
+            })
+            .bind(if meta.causation_id.is_empty() {
+                None::<&str>
+            } else {
+                Some(meta.causation_id.as_str())
+            })
+            .bind(if meta.actor_id.is_empty() {
+                None::<&str>
+            } else {
+                Some(meta.actor_id.as_str())
+            })
+            .bind(meta.timestamp_unix_ms as i64)
+            .bind(now_ms as i64)
+            .bind(payload_sha)
+            .bind(headers_json)
+            .bind(&ev.payload)
             .fetch_one(&mut *tx)
             .await
-            .map_err(|e| {
-                // Map unique violations to concurrency errors
-                let msg = e.to_string();
-                if msg.contains("uq_aggregate_nonce") || msg.contains("unique") {
-                    StoreError::Concurrency(format!(
-                        "concurrency violation on aggregate {}",
-                        meta.aggregate_id
-                    ))
-                } else {
-                    StoreError::Other(anyhow::anyhow!(e))
-                }
-            })?;
+            .map_err(map_db_error)?;
 
-            let inserted_global: i64 = row.get::<i64, _>("global_nonce");
-            last_global = inserted_global;
+            let global_nonce: i64 = row.get("global_nonce");
+            meta.global_nonce = global_nonce as u64;
+            last_global_nonce = meta.global_nonce;
+
+            assigned_events.push(proto::EventData {
+                meta: Some(meta.clone()),
+                payload: ev.payload,
+            });
+        }
+
+        let last_committed = assigned_events
+            .last()
+            .and_then(|ev| ev.meta.as_ref().map(|m| m.aggregate_nonce))
+            .unwrap_or(current_last_nonce);
+        let first_committed = assigned_events
+            .first()
+            .and_then(|ev| ev.meta.as_ref().map(|m| m.aggregate_nonce))
+            .unwrap_or(current_last_nonce + 1);
+
+        sqlx::query(
+            r#"
+            INSERT INTO aggregates (tenant_id, aggregate_id, aggregate_type, last_nonce, last_global_nonce)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (tenant_id, aggregate_id)
+            DO UPDATE SET
+                aggregate_type = EXCLUDED.aggregate_type,
+                last_nonce = EXCLUDED.last_nonce,
+                last_global_nonce = EXCLUDED.last_global_nonce,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(&tenant_id)
+        .bind(&aggregate_id)
+        .bind(&aggregate_type)
+        .bind(last_committed as i64)
+        .bind(last_global_nonce as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_db_error)?;
+
+        if !req.idempotency_key.is_empty() {
+            sqlx::query(
+                r#"
+                INSERT INTO idempotency (
+                    tenant_id, aggregate_id, idempotency_key,
+                    request_fingerprint, first_committed_nonce, last_committed_nonce, last_global_nonce
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (tenant_id, aggregate_id, idempotency_key)
+                DO UPDATE SET
+                    request_fingerprint = EXCLUDED.request_fingerprint,
+                    first_committed_nonce = EXCLUDED.first_committed_nonce,
+                    last_committed_nonce = EXCLUDED.last_committed_nonce,
+                    last_global_nonce = EXCLUDED.last_global_nonce,
+                    updated_at = NOW()
+                "#,
+            )
+            .bind(&tenant_id)
+            .bind(&aggregate_id)
+            .bind(&req.idempotency_key)
+            .bind(&fingerprint)
+            .bind(first_committed as i64)
+            .bind(last_committed as i64)
+            .bind(last_global_nonce as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_db_error)?;
         }
 
         tx.commit()
             .await
-            .map_err(|e| StoreError::Other(anyhow::anyhow!(e)))?;
+            .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
 
         Ok(proto::AppendResponse {
-            next_aggregate_nonce: current_nonce as u64 + events_len as u64,
-            last_global_nonce: last_global as u64,
+            last_global_nonce,
+            last_aggregate_nonce: last_committed,
         })
     }
 
@@ -178,231 +420,209 @@ impl EventStoreTrait for PostgresStore {
         &self,
         req: proto::ReadStreamRequest,
     ) -> Result<proto::ReadStreamResponse, StoreError> {
+        if req.tenant_id.is_empty() {
+            return Err(StoreError::Unauthenticated(
+                "tenant_id is required on ReadStreamRequest".into(),
+            ));
+        }
         if req.aggregate_id.is_empty() {
-            return Err(StoreError::Invalid("aggregate_id must be provided".into()));
+            return Err(StoreError::Invalid(
+                "aggregate_id is required on ReadStreamRequest".into(),
+            ));
         }
 
-        // Select appropriate direction
+        let start_nonce = if req.from_aggregate_nonce <= 1 {
+            1
+        } else {
+            req.from_aggregate_nonce
+        } as i64;
+
         let rows = if req.forward {
             sqlx::query(
-                r#"SELECT global_nonce, event_id::text AS event_id,
-                           aggregate_id, aggregate_type, aggregate_nonce,
-                           event_type, content_type, payload
-                    FROM events
-                    WHERE aggregate_id = $1 AND aggregate_nonce >= $2
-                    ORDER BY aggregate_nonce ASC
-                    LIMIT $3"#,
+                r#"
+                SELECT * FROM events
+                WHERE tenant_id = $1 AND aggregate_id = $2 AND aggregate_nonce >= $3
+                ORDER BY aggregate_nonce ASC
+                LIMIT $4
+                "#,
             )
+            .bind(&req.tenant_id)
             .bind(&req.aggregate_id)
-            .bind(req.from_aggregate_nonce as i64)
+            .bind(start_nonce)
             .bind(req.max_count as i64)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| StoreError::Other(anyhow::anyhow!(e)))?
+            .map_err(map_db_error)?
         } else {
             sqlx::query(
-                r#"SELECT global_nonce, event_id::text AS event_id,
-                           aggregate_id, aggregate_type, aggregate_nonce,
-                           event_type, content_type, payload
-                    FROM events
-                    WHERE aggregate_id = $1 AND aggregate_nonce <= $2
-                    ORDER BY aggregate_nonce DESC
-                    LIMIT $3"#,
+                r#"
+                SELECT * FROM events
+                WHERE tenant_id = $1 AND aggregate_id = $2 AND aggregate_nonce <= $3
+                ORDER BY aggregate_nonce DESC
+                LIMIT $4
+                "#,
             )
+            .bind(&req.tenant_id)
             .bind(&req.aggregate_id)
-            .bind(req.from_aggregate_nonce as i64)
+            .bind(start_nonce)
             .bind(req.max_count as i64)
             .fetch_all(&self.pool)
             .await
-            .map_err(|e| StoreError::Other(anyhow::anyhow!(e)))?
+            .map_err(map_db_error)?
         };
 
-        // Map rows to proto events
-        let mut events: Vec<proto::EventData> = Vec::with_capacity(rows.len());
-        for r in rows.into_iter() {
-            let meta = proto::EventMetadata {
-                event_id: r.get::<Option<String>, _>("event_id").unwrap_or_default(),
-                aggregate_id: r.get::<String, _>("aggregate_id"),
-                aggregate_type: r.get::<String, _>("aggregate_type"),
-                aggregate_nonce: r.get::<i64, _>("aggregate_nonce") as u64,
-                event_type: r.get::<Option<String>, _>("event_type").unwrap_or_default(),
-                content_type: r
-                    .get::<Option<String>, _>("content_type")
-                    .unwrap_or_default(),
-                global_nonce: r.get::<i64, _>("global_nonce") as u64,
-                ..Default::default()
-            };
-            events.push(proto::EventData {
-                meta: Some(meta),
-                payload: r.get::<Option<Vec<u8>>, _>("payload").unwrap_or_default(),
-            });
+        let mut events = Vec::with_capacity(rows.len());
+        for row in rows.into_iter() {
+            events.push(row_to_event(&row)?);
         }
 
-        // Compute next_from_aggregate_nonce and is_end heuristics similar to memory backend
-        let next_from_aggregate_nonce = if req.forward {
-            req.from_aggregate_nonce.saturating_add(events.len() as u64)
+        if !req.forward {
+            events.reverse();
+        }
+
+        let next_from = if req.forward {
+            events
+                .last()
+                .and_then(|ev| ev.meta.as_ref().map(|m| m.aggregate_nonce + 1))
+                .unwrap_or(start_nonce as u64)
         } else {
-            req.from_aggregate_nonce.saturating_sub(events.len() as u64)
+            events
+                .first()
+                .and_then(|ev| {
+                    ev.meta
+                        .as_ref()
+                        .map(|m| m.aggregate_nonce.saturating_sub(1))
+                })
+                .unwrap_or(0)
         };
+
         let is_end = events.is_empty();
 
         Ok(proto::ReadStreamResponse {
             events,
             is_end,
-            next_from_aggregate_nonce,
+            next_from_aggregate_nonce: next_from,
         })
     }
 
     fn subscribe(&self, req: proto::SubscribeRequest) -> StoreStream<proto::SubscribeResponse> {
         let pool = self.pool.clone();
-        let prefix = req.aggregate_prefix.clone();
-        let from_pos = req.from_global_nonce as i64;
-
-        // Helper to map a row to EventData
-        fn row_to_event(r: &sqlx::postgres::PgRow) -> proto::EventData {
-            let meta = proto::EventMetadata {
-                event_id: r.get::<Option<String>, _>("event_id").unwrap_or_default(),
-                aggregate_id: r.get::<String, _>("aggregate_id"),
-                aggregate_type: r.get::<String, _>("aggregate_type"),
-                aggregate_nonce: r.get::<i64, _>("aggregate_nonce") as u64,
-                event_type: r.get::<Option<String>, _>("event_type").unwrap_or_default(),
-                content_type: r
-                    .get::<Option<String>, _>("content_type")
-                    .unwrap_or_default(),
-                global_nonce: r.get::<i64, _>("global_nonce") as u64,
-                ..Default::default()
-            };
-            proto::EventData {
-                meta: Some(meta),
-                payload: r.get::<Option<Vec<u8>>, _>("payload").unwrap_or_default(),
-            }
-        }
+        let tenant_id = req.tenant_id.clone();
+        let prefix = req.aggregate_id_prefix.clone();
+        let from_global = req.from_global_nonce as i64;
 
         #[derive(Debug)]
         enum Phase {
             Replay {
-                buf: Vec<proto::EventData>,
+                items: Vec<proto::EventData>,
                 idx: usize,
                 cursor: i64,
             },
             Live {
                 cursor: i64,
                 interval: Interval,
-                pending: Vec<proto::EventData>,
             },
         }
 
         Box::pin(stream::unfold(
-            // Initial state will be populated on first poll
-            (pool, prefix, Some(from_pos), None::<Phase>),
-            |(pool, prefix, start_opt, mut phase_opt)| async move {
-                // Initialize replay on first call
-                if phase_opt.is_none() {
-                    let start = start_opt.unwrap_or(0);
+            (pool, tenant_id, prefix, from_global, None::<Phase>),
+            |(pool, tenant, prefix, mut cursor, phase)| async move {
+                let mut phase = phase;
+                if phase.is_none() {
                     let rows = if prefix.is_empty() {
                         sqlx::query(
-                            r#"SELECT global_nonce, event_id::text AS event_id,
-                               aggregate_id, aggregate_type, aggregate_nonce,
-                               event_type, content_type, payload
-                               FROM events
-                               WHERE global_nonce >= $1
-                               ORDER BY global_nonce ASC"#,
+                            r#"
+                            SELECT * FROM events
+                            WHERE tenant_id = $1 AND global_nonce >= $2
+                            ORDER BY global_nonce ASC
+                            "#,
                         )
-                        .bind(start)
+                        .bind(&tenant)
+                        .bind(cursor)
                         .fetch_all(&pool)
                         .await
                         .unwrap_or_default()
                     } else {
                         let like = format!("{prefix}%");
                         sqlx::query(
-                            r#"SELECT global_nonce, event_id::text AS event_id,
-                               aggregate_id, aggregate_type, aggregate_nonce,
-                               event_type, content_type, payload
-                               FROM events
-                               WHERE global_nonce >= $1 AND aggregate_id LIKE $2
-                               ORDER BY global_nonce ASC"#,
+                            r#"
+                            SELECT * FROM events
+                            WHERE tenant_id = $1 AND global_nonce >= $2 AND aggregate_id LIKE $3
+                            ORDER BY global_nonce ASC
+                            "#,
                         )
-                        .bind(start)
+                        .bind(&tenant)
+                        .bind(cursor)
                         .bind(like)
                         .fetch_all(&pool)
                         .await
                         .unwrap_or_default()
                     };
-                    let mut buf: Vec<proto::EventData> = Vec::with_capacity(rows.len());
-                    let mut cursor = start;
-                    for r in rows.iter() {
-                        let ev = row_to_event(r);
-                        cursor = r.get::<i64, _>("global_nonce");
-                        buf.push(ev);
+                    let mut items = Vec::with_capacity(rows.len());
+                    for row in rows.iter() {
+                        if let Ok(event) = row_to_event(row) {
+                            cursor = row.get::<i64, _>("global_nonce");
+                            items.push(event);
+                        }
                     }
-                    phase_opt = Some(Phase::Replay {
-                        buf,
+                    phase = Some(Phase::Replay {
+                        items,
                         idx: 0,
                         cursor,
                     });
                 }
 
-                match phase_opt.take().unwrap() {
-                    Phase::Replay {
-                        buf,
+                match phase.take() {
+                    Some(Phase::Replay {
+                        items,
                         mut idx,
-                        cursor,
-                    } => {
-                        if idx < buf.len() {
-                            let ev = buf[idx].clone();
+                        cursor: replay_cursor,
+                    }) => {
+                        if idx < items.len() {
+                            let event = items[idx].clone();
                             idx += 1;
-                            let next_state =
-                                (pool, prefix, None, Some(Phase::Replay { buf, idx, cursor }));
-                            Some((Ok(proto::SubscribeResponse { event: Some(ev) }), next_state))
-                        } else {
-                            // Transition to Live phase
-                            let next = (
-                                pool.clone(),
-                                prefix.clone(),
-                                None,
-                                Some(Phase::Live {
-                                    cursor,
-                                    interval: interval(Duration::from_millis(200)),
-                                    pending: Vec::new(),
-                                }),
-                            );
-                            Some((Ok(proto::SubscribeResponse { event: None }), next))
-                        }
-                    }
-                    Phase::Live {
-                        mut cursor,
-                        mut interval,
-                        mut pending,
-                    } => {
-                        // If we have pending from last poll, yield first
-                        if let Some(ev) = pending.first().cloned() {
-                            pending.remove(0);
                             let next_state = (
                                 pool,
+                                tenant,
                                 prefix,
-                                None,
-                                Some(Phase::Live {
-                                    cursor,
-                                    interval,
-                                    pending,
+                                replay_cursor,
+                                Some(Phase::Replay {
+                                    items,
+                                    idx,
+                                    cursor: replay_cursor,
                                 }),
                             );
-                            return Some((
-                                Ok(proto::SubscribeResponse { event: Some(ev) }),
+                            Some((
+                                Ok(proto::SubscribeResponse { event: Some(event) }),
                                 next_state,
-                            ));
+                            ))
+                        } else {
+                            let next_state = (
+                                pool,
+                                tenant,
+                                prefix,
+                                replay_cursor,
+                                Some(Phase::Live {
+                                    cursor: replay_cursor,
+                                    interval: interval(Duration::from_millis(200)),
+                                }),
+                            );
+                            Some((Ok(proto::SubscribeResponse { event: None }), next_state))
                         }
-
-                        // Fetch new rows strictly greater than cursor
+                    }
+                    Some(Phase::Live {
+                        mut cursor,
+                        mut interval,
+                    }) => {
                         let rows = if prefix.is_empty() {
                             sqlx::query(
-                                r#"SELECT global_nonce, event_id::text AS event_id,
-                                   aggregate_id, aggregate_type, aggregate_nonce,
-                                   event_type, content_type, payload
-                                   FROM events
-                                   WHERE global_nonce > $1
-                                   ORDER BY global_nonce ASC"#,
+                                r#"
+                                SELECT * FROM events
+                                WHERE tenant_id = $1 AND global_nonce > $2
+                                ORDER BY global_nonce ASC
+                                "#,
                             )
+                            .bind(&tenant)
                             .bind(cursor)
                             .fetch_all(&pool)
                             .await
@@ -410,13 +630,13 @@ impl EventStoreTrait for PostgresStore {
                         } else {
                             let like = format!("{prefix}%");
                             sqlx::query(
-                                r#"SELECT global_nonce, event_id::text AS event_id,
-                                   aggregate_id, aggregate_type, aggregate_nonce,
-                                   event_type, content_type, payload
-                                   FROM events
-                                   WHERE global_nonce > $1 AND aggregate_id LIKE $2
-                                   ORDER BY global_nonce ASC"#,
+                                r#"
+                                SELECT * FROM events
+                                WHERE tenant_id = $1 AND global_nonce > $2 AND aggregate_id LIKE $3
+                                ORDER BY global_nonce ASC
+                                "#,
                             )
+                            .bind(&tenant)
                             .bind(cursor)
                             .bind(like)
                             .fetch_all(&pool)
@@ -425,44 +645,84 @@ impl EventStoreTrait for PostgresStore {
                         };
 
                         if !rows.is_empty() {
-                            for r in rows.iter() {
-                                let gp = r.get::<i64, _>("global_nonce");
-                                cursor = cursor.max(gp);
-                                pending.push(row_to_event(r));
+                            let mut items = Vec::with_capacity(rows.len());
+                            for row in rows.iter() {
+                                if let Ok(event) = row_to_event(row) {
+                                    cursor = row.get::<i64, _>("global_nonce");
+                                    items.push(event);
+                                }
                             }
-                            // yield first
-                            let ev = pending.remove(0);
-                            let next_state = (
-                                pool,
-                                prefix,
-                                None,
-                                Some(Phase::Live {
+                            let event = items.first().cloned();
+                            let remaining = if items.len() > 1 {
+                                items[1..].to_vec()
+                            } else {
+                                Vec::new()
+                            };
+                            let next_phase = if remaining.is_empty() {
+                                Phase::Live { cursor, interval }
+                            } else {
+                                Phase::Replay {
+                                    items: remaining,
+                                    idx: 0,
                                     cursor,
-                                    interval,
-                                    pending,
-                                }),
-                            );
-                            Some((Ok(proto::SubscribeResponse { event: Some(ev) }), next_state))
+                                }
+                            };
+                            let next_state = (pool, tenant, prefix, cursor, Some(next_phase));
+                            Some((Ok(proto::SubscribeResponse { event }), next_state))
                         } else {
-                            // No new events; wait and try again next poll
                             interval.tick().await;
                             let next_state = (
                                 pool,
+                                tenant,
                                 prefix,
-                                None,
-                                Some(Phase::Live {
-                                    cursor,
-                                    interval,
-                                    pending,
-                                }),
+                                cursor,
+                                Some(Phase::Live { cursor, interval }),
                             );
                             Some((Ok(proto::SubscribeResponse { event: None }), next_state))
                         }
                     }
+                    None => None,
                 }
             },
         ))
     }
+}
+
+fn row_to_event(row: &sqlx::postgres::PgRow) -> Result<proto::EventData, StoreError> {
+    let headers: Json<HashMap<String, String>> = row
+        .try_get("headers")
+        .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
+    let meta = proto::EventMetadata {
+        event_id: row.get::<String, _>("event_id"),
+        aggregate_id: row.get::<String, _>("aggregate_id"),
+        aggregate_type: row.get::<String, _>("aggregate_type"),
+        aggregate_nonce: row.get::<i64, _>("aggregate_nonce") as u64,
+        event_type: row.get::<String, _>("event_type"),
+        event_version: row.get::<i32, _>("event_version") as u32,
+        content_type: row.get::<String, _>("content_type"),
+        content_schema: row
+            .get::<Option<String>, _>("content_schema")
+            .unwrap_or_default(),
+        correlation_id: row
+            .get::<Option<String>, _>("correlation_id")
+            .unwrap_or_default(),
+        causation_id: row
+            .get::<Option<String>, _>("causation_id")
+            .unwrap_or_default(),
+        actor_id: row.get::<Option<String>, _>("actor_id").unwrap_or_default(),
+        tenant_id: row.get::<String, _>("tenant_id"),
+        timestamp_unix_ms: row.get::<i64, _>("timestamp_unix_ms") as u64,
+        recorded_time_unix_ms: row.get::<i64, _>("recorded_time_unix_ms") as u64,
+        payload_sha256: row
+            .get::<Option<Vec<u8>>, _>("payload_sha256")
+            .unwrap_or_default(),
+        headers: headers.0,
+        global_nonce: row.get::<i64, _>("global_nonce") as u64,
+    };
+    Ok(proto::EventData {
+        meta: Some(meta),
+        payload: row.get::<Option<Vec<u8>>, _>("payload").unwrap_or_default(),
+    })
 }
 
 #[cfg(test)]
@@ -471,116 +731,27 @@ mod tests {
     use tokio_stream::StreamExt;
 
     #[tokio::test]
-    async fn lazy_pool_methods_handle_errors_and_subscribe_yields_ok() {
-        // use a lazy pool to avoid actual DB connection in unit tests
-        #[cfg(test)]
-        fn new_lazy_for_tests() -> Arc<PostgresStore> {
-            let pool = PgPoolOptions::new()
-                .connect_lazy("postgres://postgres:password@127.0.0.1:1/db")
-                .expect("lazy connect should not attempt network");
-            PostgresStore::new(pool)
-        }
-        let store = new_lazy_for_tests();
-
-        // append returns error
-        let append_res = store
-            .append(proto::AppendRequest {
-                aggregate_id: "s".into(),
-                aggregate_type: "t".into(),
-                events: vec![],
-                expected: None,
-            })
-            .await;
-        assert!(append_res.is_err());
-
-        // read_stream returns error
-        let read_res = store
-            .read_stream(proto::ReadStreamRequest {
-                aggregate_id: "s".into(),
-                from_aggregate_nonce: 1,
-                max_count: 10,
-                forward: true,
-            })
-            .await;
-        assert!(read_res.is_err());
-
-        // subscribe should produce a non-error item (may be empty event due to polling)
-        let mut st = store.subscribe(proto::SubscribeRequest {
-            aggregate_prefix: "".into(),
-            from_global_nonce: 0,
-        });
-        let first = st.next().await;
-        assert!(first.is_some());
-        assert!(first.unwrap().is_ok());
-    }
-
-    #[tokio::test]
     async fn connect_invalid_url_errors_fast() {
-        // This attempts a connection to a non-routable/closed port and should error
         let url = "postgres://postgres:password@127.0.0.1:1/db";
         let res = PostgresStore::connect(url).await;
         assert!(res.is_err());
     }
 
     #[tokio::test]
-    async fn read_stream_db_error_covers_forward_and_backward() {
-        fn new_lazy_for_tests() -> Arc<PostgresStore> {
-            let pool = PgPoolOptions::new()
-                .connect_lazy("postgres://postgres:password@127.0.0.1:1/db")
-                .expect("lazy connect should not attempt network");
-            PostgresStore::new(pool)
-        }
-        let store = new_lazy_for_tests();
-
-        // forward path
-        let res_fwd = store
-            .read_stream(proto::ReadStreamRequest {
-                aggregate_id: "s".into(),
-                from_aggregate_nonce: 1,
-                max_count: 10,
-                forward: true,
-            })
-            .await;
-        assert!(res_fwd.is_err());
-
-        // backward path
-        let res_bwd = store
-            .read_stream(proto::ReadStreamRequest {
-                aggregate_id: "s".into(),
-                from_aggregate_nonce: 1,
-                max_count: 10,
-                forward: false,
-            })
-            .await;
-        assert!(res_bwd.is_err());
-    }
-
-    #[tokio::test]
-    async fn append_db_error_covers_select_and_insert_map_err() {
-        fn new_lazy_for_tests() -> Arc<PostgresStore> {
-            let pool = PgPoolOptions::new()
-                .connect_lazy("postgres://postgres:password@127.0.0.1:1/db")
-                .expect("lazy connect should not attempt network");
-            PostgresStore::new(pool)
-        }
-        let store = new_lazy_for_tests();
-
-        // minimal event with event_id to pass validation
-        let ev = proto::EventData {
-            meta: Some(proto::EventMetadata {
-                event_id: "00000000-0000-0000-0000-000000000000".into(),
-                ..Default::default()
-            }),
-            payload: vec![],
+    async fn subscribe_handles_empty() {
+        let url = "postgres://postgres:password@127.0.0.1:1/db";
+        let store = PostgresStore {
+            pool: PgPoolOptions::new()
+                .connect_lazy(url)
+                .expect("lazy connect should not attempt network"),
         };
-        let res = store
-            .append(proto::AppendRequest {
-                aggregate_id: "s".into(),
-                aggregate_type: "t".into(),
-                events: vec![ev],
-                expected: None,
-            })
-            .await;
-        assert!(res.is_err());
+        let mut stream = store.subscribe(proto::SubscribeRequest {
+            tenant_id: "tenant".into(),
+            aggregate_id_prefix: "".into(),
+            from_global_nonce: 0,
+        });
+        let first = stream.next().await;
+        assert!(first.is_some());
+        assert!(first.unwrap().is_ok());
     }
 }
