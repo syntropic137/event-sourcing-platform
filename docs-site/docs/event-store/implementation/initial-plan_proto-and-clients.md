@@ -7,27 +7,6 @@ This document explains what the `.proto` file is, how gRPC stubs are generated f
 - We generate language clients from `.proto` so Rust, TS, and Python can interoperate against the same service.
 - Backend is injected via a Rust `EventStore` trait, allowing in-memory or Postgres with the same gRPC facade.
 
-- [Event Store Proto, Codegen, Clients, and V1 Design Notes](#event-store-proto-codegen-clients-and-v1-design-notes)
-  - [Overview](#overview)
-  - [What is a .proto (Protocol Buffers) file?](#what-is-a-proto-protocol-buffers-file)
-  - [Rust codegen: build.rs + tonic-build](#rust-codegen-buildrs--tonic-build)
-  - [TypeScript and Python stubs](#typescript-and-python-stubs)
-  - [Event payload strategies: Protobuf vs Opaque bytes](#event-payload-strategies-protobuf-vs-opaque-bytes)
-  - [Backend injection (in-memory vs Postgres)](#backend-injection-in-memory-vs-postgres)
-  - [Postgres migrations (Rust-based options)](#postgres-migrations-rust-based-options)
-  - [Subscribe implementation v1](#subscribe-implementation-v1)
-  - [Filter semantics (Subscribe)](#filter-semantics-subscribe)
-  - [Backpressure and windowing defaults](#backpressure-and-windowing-defaults)
-  - [IDs and timestamps](#ids-and-timestamps)
-  - [TDD with Given-When-Then (G/W/T)](#tdd-with-given-when-then-gwt)
-  - [Transport and tenancy posture](#transport-and-tenancy-posture)
-  - [Client SDKs: minimal v1 scope](#client-sdks-minimal-v1-scope)
-  - [Suggested monorepo structure (sub-crates)](#suggested-monorepo-structure-sub-crates)
-  - [Notes against the plan](#notes-against-the-plan)
-  - [Getting Started](#getting-started)
-  - [Pluggable backends (Memory, Postgres, Kurrent future)](#pluggable-backends-memory-postgres-kurrent-future)
-
-
 ## What is a .proto (Protocol Buffers) file?
 - It declares message types and gRPC services.
 - Example (from the plan): package `eventstore.v1` defines `EventMetadata`, `EventData`, and service `EventStore` with RPCs `Append`, `ReadStream`, `Subscribe`.

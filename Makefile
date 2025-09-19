@@ -4,6 +4,8 @@
 .PHONY: help build clean test qa qa-fast qa-full setup dev-setup
 .PHONY: event-store event-sourcing examples tools
 .PHONY: start-services stop-services smoke-test run-event-store
+.PHONY: docs docs-start docs-build docs-serve
+.PHONY: dev-init dev-start dev-stop dev-restart dev-clean test-fast dev-status dev-logs dev-shell
 
 # Default target
 help:
@@ -20,9 +22,18 @@ help:
 	@echo "  dev-setup         - Setup development environment"
 	@echo "  build             - Build all components"
 	@echo "  test              - Run all tests"
+	@echo "  test-fast         - Run tests with fast infrastructure (⚡)"
 	@echo "  qa                - Run fast QA checks (no slow tests/coverage)"
 	@echo "  qa-full           - Run full QA sweep (may be slow)"
 	@echo "  clean             - Clean all build artifacts"
+	@echo ""
+	@echo "Fast Development Infrastructure:"
+	@echo "  dev-init          - Initialize fast dev environment"
+	@echo "  dev-start         - Start infrastructure (Postgres + Redis)"
+	@echo "  dev-stop          - Stop infrastructure"
+	@echo "  dev-restart       - Restart infrastructure"
+	@echo "  dev-clean         - Clean all containers and data"
+	@echo "  dev-status        - Show infrastructure status"
 	@echo ""
 	@echo "Services:"
 	@echo "  start-services    - Start development services (PostgreSQL, etc.)"
@@ -39,6 +50,34 @@ help:
 	@echo "  examples-007      - E-commerce complete"
 	@echo "  examples-008      - Banking complete"
 	@echo "  examples-009      - Inventory complete"
+	@echo ""
+	@echo "Documentation:"
+	@echo "  docs             - List documentation targets"
+	@echo "  docs-start       - Run docs dev server (Docusaurus)"
+	@echo "  docs-build       - Build static docs site"
+	@echo "  docs-serve       - Serve the built docs"
+
+# Documentation commands ---------------------------------------------------
+
+docs:
+	@echo "Docs commands:" && \
+	echo "  make docs-start   # start docs dev server on :3000" && \
+	echo "  make docs-build   # build static site into docs-site/build" && \
+	echo "  make docs-serve   # serve built site"
+
+docs-start:
+	@if [ ! -d docs-site ]; then echo "docs-site directory missing"; exit 2; fi
+	@pnpm install --filter docs-site...
+	@pnpm --filter docs-site run start
+
+docs-build:
+	@if [ ! -d docs-site ]; then echo "docs-site directory missing"; exit 2; fi
+	@pnpm install --filter docs-site...
+	@pnpm --filter docs-site run build
+
+docs-serve:
+	@if [ ! -d docs-site ]; then echo "docs-site directory missing"; exit 2; fi
+	@pnpm --filter docs-site run serve
 
 # Setup targets
 setup:
@@ -302,3 +341,87 @@ examples-009:
 	else \
 		echo "Example 009 not found"; \
 	fi
+
+# --- Fast Development Infrastructure (EMP Dev Tools) ------------------------
+
+dev-init:
+	@echo "🔧 Initializing fast development environment..."
+	@if [ -d event-store ]; then \
+		cd event-store && $(MAKE) dev-init; \
+	else \
+		echo "❌ event-store directory not found"; \
+		exit 1; \
+	fi
+
+dev-start:
+	@echo "🚀 Starting fast development infrastructure..."
+	@if [ -d event-store ]; then \
+		cd event-store && $(MAKE) dev-start; \
+	else \
+		echo "❌ event-store directory not found"; \
+		exit 1; \
+	fi
+
+dev-stop:
+	@echo "🛑 Stopping development infrastructure..."
+	@if [ -d event-store ]; then \
+		cd event-store && $(MAKE) dev-stop; \
+	else \
+		echo "❌ event-store directory not found"; \
+		exit 1; \
+	fi
+
+dev-restart:
+	@echo "🔄 Restarting development infrastructure..."
+	@if [ -d event-store ]; then \
+		cd event-store && $(MAKE) dev-restart; \
+	else \
+		echo "❌ event-store directory not found"; \
+		exit 1; \
+	fi
+
+dev-clean:
+	@echo "🧹 Cleaning development infrastructure..."
+	@if [ -d event-store ]; then \
+		cd event-store && $(MAKE) dev-clean; \
+	else \
+		echo "❌ event-store directory not found"; \
+		exit 1; \
+	fi
+
+dev-status:
+	@echo "📊 Development infrastructure status..."
+	@if [ -d event-store ]; then \
+		cd event-store && $(MAKE) dev-status; \
+	else \
+		echo "❌ event-store directory not found"; \
+		exit 1; \
+	fi
+
+test-fast:
+	@echo "⚡ Running tests with fast infrastructure..."
+	@if [ -d event-store ]; then \
+		cd event-store && $(MAKE) test-fast; \
+	else \
+		echo "❌ event-store directory not found"; \
+		exit 1; \
+	fi
+
+dev-logs:
+	@if [ -d event-store ]; then \
+		cd event-store && $(MAKE) dev-logs $(filter-out $@,$(MAKECMDGOALS)); \
+	else \
+		echo "❌ event-store directory not found"; \
+		exit 1; \
+	fi
+
+dev-shell:
+	@if [ -d event-store ]; then \
+		cd event-store && $(MAKE) dev-shell $(filter-out $@,$(MAKECMDGOALS)); \
+	else \
+		echo "❌ event-store directory not found"; \
+		exit 1; \
+	fi
+
+# Convenience aliases
+dev: dev-start

@@ -2,23 +2,19 @@
 sidebar_position: 1
 ---
 
-# Event Sourcing Platform
+# Event Sourcing Platform Docs
 
-Welcome to the documentation hub.
+Quick links to the areas we maintain.
 
-- Concepts that explain how the event store and SDKs work.
-- Development guides for running and contributing to the repository.
-- Implementation details and ADRs for architectural decisions.
+## 📘 How the site is organised
 
-## Mermaid example
+- **Event Store** – architecture decisions, protocols, SDK guides, and runbooks. Start at the [Event Store overview](../event-store/index.md).
+- **Docs Overview** – you are here. Use this page as a directory; add future domains (e.g., Event Sourcing services) alongside the Event Store category.
 
-```mermaid
-sequenceDiagram
-  participant C as Client
-  participant ES as Event Store
-  participant P as Projection
-  C->>ES: Append(Event)
-  ES-->>C: Ack + Version
-  ES->>P: Project(Event)
-  P-->>ES: Projection Updated
-```
+## ✍️ Editing tips
+
+1. Keep pages short. Link to source files or ADRs rather than duplicating detail.
+2. Update `_category_.json` whenever you add a folder so the sidebar stays readable.
+3. Run `npm run build` inside `docs-site/` before publishing to catch broken links.
+
+If something feels heavy, delete or consolidate it—the goal is "simple, but no simpler." 

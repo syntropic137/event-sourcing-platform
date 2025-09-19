@@ -1,12 +1,10 @@
----
-sidebar_position: 1
----
+# Shared Concepts
 
-# Concepts Overview
+Core ideas that apply across the platform. Most detailed walkthroughs now live in the [Event Store](../event-store/index.md) section; use this area for cross-cutting concepts as we expand the event sourcing layer.
 
-This section explains core concepts of the platform:
-
-- Event store vs event bus
+- Event store vs. event bus
 - Aggregate patterns and stream design
-- Event modeling and schema evolution
-- Ubiquitous language
+- Event modelling and schema evolution
+- Shared vocabulary between services
+
+_Add new concept notes here when they are not specific to a single component._
