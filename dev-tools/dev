@@ -1,0 +1,30 @@
+#!/bin/bash
+# dev - EMP Development Infrastructure Tool
+# Principles: Smart conflicts resolution, robust lifecycle, developer-friendly, labeled containers, health checks, graceful degradation
+
+set -e
+
+# Load modules
+DEV_TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$DEV_TOOLS_DIR/lib/core.sh"
+source "$DEV_TOOLS_DIR/lib/docker.sh"
+source "$DEV_TOOLS_DIR/lib/ports.sh"
+source "$DEV_TOOLS_DIR/lib/cleanup.sh"
+
+# Initialize project context
+init_project_context
+
+case "${1:-help}" in
+  init)     cmd_init ;;
+  start)    cmd_start ;;
+  restart)  cmd_restart ;;
+  stop)     cmd_stop ;;
+  kill)     cmd_kill ;;
+  clean)    cmd_clean ;;
+  status)   cmd_status ;;
+  logs)     cmd_logs "$2" ;;
+  shell)    cmd_shell "$2" ;;
+  test)     cmd_test "${@:2}" ;;
+  cleanup-all) cmd_cleanup_all ;;
+  *)        cmd_help ;;
+esac

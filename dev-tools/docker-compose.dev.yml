@@ -1,0 +1,48 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15
+    container_name: "dev-tools_f9a9bf26_postgres"
+    environment:
+      POSTGRES_DB: dev
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+    ports:
+      - "15994:5432"
+    volumes:
+      - "dev-tools_f9a9bf26_postgres:/var/lib/postgresql/data"
+    command: >
+      postgres 
+      -c fsync=off 
+      -c synchronous_commit=off
+      -c shared_buffers=128MB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    labels:
+      - "dev-tools.project=dev-tools"
+      - "dev-tools.hash=f9a9bf26"
+      - "dev-tools.auto-cleanup=true"
+
+  redis:
+    image: redis:7-alpine
+    container_name: "dev-tools_f9a9bf26_redis"
+    ports:
+      - "16994:6379"
+    volumes:
+      - "dev-tools_f9a9bf26_redis:/data"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    labels:
+      - "dev-tools.project=dev-tools"
+      - "dev-tools.hash=f9a9bf26"
+      - "dev-tools.auto-cleanup=true"
+
+volumes:
+  "dev-tools_f9a9bf26_postgres":
+  "dev-tools_f9a9bf26_redis":
