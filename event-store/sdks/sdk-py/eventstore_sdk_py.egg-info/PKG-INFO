@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: eventstore-sdk-py
+Version: 0.2.0
+Summary: Python SDK for Rust Event Store (experimental)
+Author: EventStore
+Requires-Python: >=3.10
+Requires-Dist: grpcio>=1.60.0
+Requires-Dist: grpcio-tools>=1.60.0

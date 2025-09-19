@@ -139,28 +139,6 @@ smoke:
 	  $(SMOKE_ADDR) eventstore.v1.EventStore/ReadStream
 
 # --- Docs Site ---------------------------------------------------------------
-.PHONY: docs docs-start docs-build docs-serve
-
-docs:
-	@echo "Docs commands:" && \
-	echo "  make docs-start   # dev server on :4321" && \
-	echo "  make docs-build   # static build into docs-site/build" && \
-	echo "  make docs-serve   # serve built site"
-
-docs-start:
-	@if [ ! -d docs-site ]; then echo "docs-site not present"; exit 2; fi
-	@npm --prefix docs-site install
-	@npm --prefix docs-site run start
-
-docs-build:
-	@if [ ! -d docs-site ]; then echo "docs-site not present"; exit 2; fi
-	@npm --prefix docs-site install
-	@npm --prefix docs-site run build
-
-docs-serve:
-	@if [ ! -d docs-site ]; then echo "docs-site not present"; exit 2; fi
-	@npm --prefix docs-site run serve
-
 # Generate TypeScript stubs using ts-proto (requires Node + ts-proto)
 gen-ts:
 	@if [ ! -d sdks/sdk-ts ]; then echo "sdk-ts not present; skipping. Create sdks/sdk-ts/ to enable"; exit 0; fi
@@ -183,12 +161,13 @@ gen-ts:
 gen-py:
 	@if [ ! -d sdks/sdk-py ]; then echo "sdk-py not present; skipping. Create sdks/sdk-py/ to enable"; exit 0; fi
 	@if ! command -v python >/dev/null 2>&1; then echo "python not found"; exit 2; fi
-	@echo "Generating Python stubs into sdks/sdk-py/gen ..."
-	@mkdir -p sdks/sdk-py/gen
+	@echo "Generating Python stubs into sdks/sdk-py/sdk_py/gen ..."
+	@rm -rf sdks/sdk-py/sdk_py/gen
+	@mkdir -p sdks/sdk-py/sdk_py/gen
 	@python -m grpc_tools.protoc \
 	  -I ./eventstore-proto/proto \
-	  --python_out=./sdks/sdk-py/gen \
-	  --grpc_python_out=./sdks/sdk-py/gen \
+	  --python_out=./sdks/sdk-py/sdk_py/gen \
+	  --grpc_python_out=./sdks/sdk-py/sdk_py/gen \
 	  eventstore-proto/proto/eventstore/v1/eventstore.proto
 
 # Show process listening on BIND_ADDR's port
@@ -257,4 +236,5 @@ dev-shell:
 
 # Convenience aliases
 dev: dev-start
+test-fast: dev-test
 fast-test: dev-test

@@ -20,6 +20,8 @@ sha2 = "0.10"
 default = []
 # Enables Postgres integration tests using testcontainers
 pg-integration = []
+# Enables test utilities for integration tests
+test-utils = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
