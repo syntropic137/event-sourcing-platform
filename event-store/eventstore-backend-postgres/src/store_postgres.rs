@@ -107,6 +107,9 @@ impl PostgresStore {
     pub async fn connect(database_url: &str) -> anyhow::Result<Arc<Self>> {
         let pool = PgPoolOptions::new()
             .max_connections(5)
+            .acquire_timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(30))
+            .idle_timeout(Duration::from_secs(600))
             .connect(database_url)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
