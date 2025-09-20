@@ -10,7 +10,7 @@ eventstore-core = { path = "../eventstore-core" }
 eventstore-proto = { path = "../eventstore-proto" }
 tokio-stream = "0.1"
 thiserror = "1"
-sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio", "macros", "postgres", "migrate"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "macros", "postgres", "migrate"] }
 tokio = { version = "1", features = ["time"] }
 futures = "0.3"
 prost = "0.13"
@@ -20,6 +20,8 @@ sha2 = "0.10"
 default = []
 # Enables Postgres integration tests using testcontainers
 pg-integration = []
+# Enables test utilities for integration tests
+test-utils = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

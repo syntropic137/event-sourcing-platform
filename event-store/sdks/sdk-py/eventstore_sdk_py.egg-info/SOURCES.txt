@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+eventstore_sdk_py.egg-info/PKG-INFO
+eventstore_sdk_py.egg-info/SOURCES.txt
+eventstore_sdk_py.egg-info/dependency_links.txt
+eventstore_sdk_py.egg-info/requires.txt
+eventstore_sdk_py.egg-info/top_level.txt
+sdk_py/__init__.py
+sdk_py/client_rt.py
+sdk_py/gen/eventstore/v1/eventstore_pb2.py
+sdk_py/gen/eventstore/v1/eventstore_pb2_grpc.py

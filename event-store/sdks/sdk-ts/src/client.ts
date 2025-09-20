@@ -111,7 +111,9 @@ export class EventStoreClientTS {
           tenantId: e.meta.tenantId ?? tenantId,
           timestampUnixMs: e.meta.timestampUnixMs ?? 0,
           recordedTimeUnixMs: 0,
-          payloadSha256: e.meta.payloadSha256 ?? new Uint8Array(),
+          payloadSha256: e.meta.payloadSha256
+            ? Buffer.from(e.meta.payloadSha256)
+            : Buffer.alloc(0),
           headers: e.meta.headers ?? {},
           globalNonce: 0,
         }),

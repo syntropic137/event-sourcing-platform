@@ -327,16 +327,25 @@ async fn service_append_concurrency_conflict_exact() {
 
 #[tokio::test]
 async fn service_pg_concurrency_conflict_exact() {
-    // Start Postgres via testcontainers
-    use testcontainers::runners::AsyncRunner;
-    use testcontainers_modules::postgres::Postgres as PgImage;
+    // Use fast dev infrastructure or fallback to testcontainers
+    let url = if let Ok(test_url) = std::env::var("TEST_DATABASE_URL") {
+        println!("🚀 Using fast dev infrastructure for service test");
+        test_url
+    } else if let Ok(dev_url) = std::env::var("DATABASE_URL") {
+        println!("🚀 Using fast dev infrastructure for service test");
+        dev_url
+    } else {
+        println!("🐳 Using testcontainers for service test");
+        use testcontainers::runners::AsyncRunner;
+        use testcontainers_modules::postgres::Postgres as PgImage;
 
-    let container = PgImage::default().start().await.expect("start postgres");
-    let port = container
-        .get_host_port_ipv4(5432)
-        .await
-        .expect("get mapped port");
-    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+        let container = PgImage::default().start().await.expect("start postgres");
+        let port = container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("get mapped port");
+        format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres")
+    };
 
     // Connect Postgres store and spawn server
     let store = eventstore_backend_postgres::PostgresStore::connect(&url)

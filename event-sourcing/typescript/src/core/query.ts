@@ -4,6 +4,33 @@
 
 import { DomainEvent, EventEnvelope } from './event';
 
+type AnyQueryHandler = QueryHandler<Query, unknown>;
+
+const QUERY_HANDLER_MAP: unique symbol = Symbol('queryHandlerMap');
+const PROJECTION_HANDLER_MAP: unique symbol = Symbol('projectionHandlerMap');
+
+type QueryHandlerAwareConstructor = {
+  [QUERY_HANDLER_MAP]?: Map<string, string>;
+};
+
+type ProjectionHandlerAwareConstructor = {
+  [PROJECTION_HANDLER_MAP]?: Map<string, string>;
+};
+
+function ensureQueryHandlerMap(ctor: QueryHandlerAwareConstructor): Map<string, string> {
+  if (!ctor[QUERY_HANDLER_MAP]) {
+    ctor[QUERY_HANDLER_MAP] = new Map<string, string>();
+  }
+  return ctor[QUERY_HANDLER_MAP]!;
+}
+
+function ensureProjectionHandlerMap(ctor: ProjectionHandlerAwareConstructor): Map<string, string> {
+  if (!ctor[PROJECTION_HANDLER_MAP]) {
+    ctor[PROJECTION_HANDLER_MAP] = new Map<string, string>();
+  }
+  return ctor[PROJECTION_HANDLER_MAP]!;
+}
+
 /** Base interface for queries */
 export interface Query {
   /** Query identifier for routing */
@@ -42,11 +69,11 @@ export interface QueryBus {
 
 /** Simple in-memory query bus implementation */
 export class InMemoryQueryBus implements QueryBus {
-  private handlers = new Map<string, QueryHandler<any>>();
+  private handlers = new Map<string, AnyQueryHandler>();
 
   /** Register a query handler */
   registerHandler<TQuery extends Query>(queryType: string, handler: QueryHandler<TQuery>): void {
-    this.handlers.set(queryType, handler);
+    this.handlers.set(queryType, handler as AnyQueryHandler);
   }
 
   /** Send a query */
@@ -54,7 +81,7 @@ export class InMemoryQueryBus implements QueryBus {
     query: TQuery
   ): Promise<QueryResult<TResult>> {
     const queryType = query.constructor.name;
-    const handler = this.handlers.get(queryType);
+    const handler = this.handlers.get(queryType) as QueryHandler<TQuery, TResult> | undefined;
 
     if (!handler) {
       return {
@@ -77,13 +104,13 @@ export class InMemoryQueryBus implements QueryBus {
 }
 
 /** Decorator for query handler methods */
+// eslint-disable-next-line @typescript-eslint/no-redeclare
 export function QueryHandler(queryType: string) {
-  return function (target: any, propertyKey: string, descriptor: PropertyDescriptor) {
+  return function (target: object, propertyKey: string, descriptor: PropertyDescriptor) {
     // Store metadata for the query handler
-    if (!target.constructor._queryHandlers) {
-      target.constructor._queryHandlers = new Map<string, string>();
-    }
-    target.constructor._queryHandlers.set(queryType, propertyKey);
+    const ctor = target.constructor as QueryHandlerAwareConstructor;
+    const handlers = ensureQueryHandlerMap(ctor);
+    handlers.set(queryType, propertyKey);
 
     return descriptor;
   };
@@ -125,7 +152,7 @@ export abstract class BaseProjection<TEvent extends DomainEvent = DomainEvent>
   abstract handleEvent(event: EventEnvelope<TEvent>): Promise<void>;
 
   /** Check if this projection handles a specific event type */
-  protected handlesEventType(eventType: string): boolean {
+  protected handlesEventType(_eventType: string): boolean {
     // Default implementation - subclasses should override
     return true;
   }
@@ -175,12 +202,11 @@ export class InMemoryProjectionManager implements ProjectionManager {
 
 /** Event handler decorator for projection methods */
 export function ProjectionHandler(eventType: string) {
-  return function (target: any, propertyKey: string, descriptor: PropertyDescriptor) {
+  return function (target: object, propertyKey: string, descriptor: PropertyDescriptor) {
     // Store metadata for the event handler
-    if (!target.constructor._projectionHandlers) {
-      target.constructor._projectionHandlers = new Map<string, string>();
-    }
-    target.constructor._projectionHandlers.set(eventType, propertyKey);
+    const ctor = target.constructor as ProjectionHandlerAwareConstructor;
+    const handlers = ensureProjectionHandlerMap(ctor);
+    handlers.set(eventType, propertyKey);
 
     return descriptor;
   };
@@ -192,14 +218,18 @@ export abstract class AutoDispatchProjection<
 > extends BaseProjection<TEvent> {
   /** Handle event using automatic method dispatch */
   async handleEvent(event: EventEnvelope<TEvent>): Promise<void> {
-    const handlers = (this.constructor as any)._projectionHandlers as Map<string, string>;
+    const ctor = this.constructor as ProjectionHandlerAwareConstructor;
+    const handlers = ctor[PROJECTION_HANDLER_MAP];
 
     if (handlers && handlers.has(event.event.eventType)) {
       const methodName = handlers.get(event.event.eventType)!;
-      const handler = (this as any)[methodName];
+      const handler = (this as Record<string, unknown>)[methodName];
 
       if (typeof handler === 'function') {
-        await handler.call(this, event);
+        await (handler as (payload: EventEnvelope<TEvent>) => Promise<void> | void).call(
+          this,
+          event
+        );
         return;
       }
     }

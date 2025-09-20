@@ -15,11 +15,8 @@ export * from './core/query';
 export * from './core/errors';
 
 // Event store client integration
-export {
-  EventStoreClient,
-  EventStoreClientConfig,
-  EventStoreClientFactory,
-} from './client/event-store-client';
+export type { EventStoreClient, EventStoreClientConfig } from './client/event-store-client';
+export { EventStoreClientFactory } from './client/event-store-client';
 
 // gRPC adapter (thin wrapper around event-store TS SDK)
 export { GrpcEventStoreAdapter } from './integrations/grpc-event-store';
@@ -39,11 +36,23 @@ export type {
   DomainEvent,
   EventEnvelope,
   EventMetadata,
-  CommandHandler,
-  Aggregate,
   Repository,
   Projection,
   Query,
   QueryHandler,
   QueryResult,
 } from './core';
+
+// Re-export decorators and classes with convenient names
+export {
+  AggregateDecorator as Aggregate,
+  EventSourcingHandler,
+  AggregateRoot,
+  AutoDispatchAggregate,
+} from './core/aggregate';
+
+export { CommandHandler } from './core/command';
+
+// Re-export commonly used classes
+export { EventSerializer, BaseDomainEvent } from './core/event';
+export { RepositoryFactory } from './core/repository';
