@@ -85,6 +85,10 @@ This document tracks known issues, technical debt, and planned enhancements for 
 
 - **Build warnings**: Some dependencies may have minor version conflicts (to be reviewed)
 - **Coverage instrumentation mismatch**: `cargo llvm-cov report --text` emits "functions have mismatched data" for `eventstore-sdk-rs` async client helpers. Coverage still completes, but we should investigate whether multiple instrumented builds are being merged or if the crate should be excluded from coverage aggregation.
+- **Future Rust compatibility**: `sqlx-postgres v0.7.4` contains code that will be rejected by a future version of Rust
+  - **Warning**: `warning: the following packages contain code that will be rejected by a future version of Rust: sqlx-postgres v0.7.4`
+  - **Action**: Monitor for sqlx updates or consider upgrading to newer version when available
+  - **Impact**: Non-blocking, but should be addressed before future Rust version upgrades
 
 ## 📋 Technical Debt
 
