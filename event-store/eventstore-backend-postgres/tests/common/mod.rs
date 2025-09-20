@@ -41,13 +41,13 @@ pub async fn get_test_database_url() -> String {
         match sqlx::PgPool::connect(&url).await {
             Ok(pool) => {
                 println!("🐳 PostgreSQL connection successful on attempt {attempt}");
-                
+
                 // Also test that we can create multiple connections (like the actual store will)
                 match sqlx::postgres::PgPoolOptions::new()
                     .max_connections(3)
                     .acquire_timeout(Duration::from_secs(10))
                     .connect(&url)
-                    .await 
+                    .await
                 {
                     Ok(test_pool) => {
                         println!("🐳 PostgreSQL pool test successful");
