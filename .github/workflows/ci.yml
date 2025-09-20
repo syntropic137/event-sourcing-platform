@@ -147,18 +147,11 @@ jobs:
           node-version: 20
           cache: pnpm
 
-      - name: Cache protoc installation
-        id: cache-protoc
-        uses: actions/cache@v4
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
         with:
-          path: /usr/bin/protoc
-          key: protoc-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
-
-      - name: Install protoc
-        if: steps.cache-protoc.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+          version: "25.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache generated protobuf files
         uses: actions/cache@v4
