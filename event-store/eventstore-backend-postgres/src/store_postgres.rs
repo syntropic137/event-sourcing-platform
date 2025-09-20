@@ -108,7 +108,6 @@ impl PostgresStore {
         let pool = PgPoolOptions::new()
             .max_connections(5)
             .acquire_timeout(Duration::from_secs(30))
-            .connect_timeout(Duration::from_secs(30))
             .idle_timeout(Duration::from_secs(600))
             .connect(database_url)
             .await?;

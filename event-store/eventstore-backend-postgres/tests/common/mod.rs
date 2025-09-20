@@ -1,6 +1,6 @@
 /// Common test utilities for Postgres backend tests
 /// Simple, lightweight helpers that don't need to be part of the main crate
-
+///
 /// Get database URL for testing - fast dev infrastructure or skip
 pub async fn get_test_database_url() -> String {
     // Try fast dev infrastructure first (check environment variables)
@@ -23,7 +23,7 @@ pub async fn get_test_database_url() -> String {
     // Configure testcontainers for CI environment
     let postgres_image = PgImage::default()
         .with_db_name("postgres")
-        .with_username("postgres")
+        .with_user("postgres")
         .with_password("postgres");
 
     println!("🐳 Starting PostgreSQL testcontainer...");
