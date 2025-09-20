@@ -338,7 +338,7 @@ async fn service_pg_concurrency_conflict_exact() {
         println!("🐳 Using testcontainers for service test");
         use testcontainers::runners::AsyncRunner;
         use testcontainers_modules::postgres::Postgres as PgImage;
-        
+
         let container = PgImage::default().start().await.expect("start postgres");
         let port = container
             .get_host_port_ipv4(5432)

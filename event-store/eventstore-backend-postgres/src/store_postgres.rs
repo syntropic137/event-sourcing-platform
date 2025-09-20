@@ -753,6 +753,5 @@ mod tests {
             from_global_nonce: 0,
         });
         // Test passes if we can create the stream without panicking
-        assert!(true);
     }
 }

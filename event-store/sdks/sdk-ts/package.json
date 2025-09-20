@@ -12,8 +12,14 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepare": "pnpm run build",
     "gen": "(cd ../.. && make gen-ts)",
     "example": "tsx src/examples/typed-basic.ts",
     "typed-example": "tsx src/examples/typed-basic.ts",
@@ -22,6 +28,7 @@
   "dependencies": {
     "@grpc/grpc-js": "^1.10.6",
     "@grpc/proto-loader": "^0.7.13",
+    "long": "^5.2.3",
     "protobufjs": "^7.5.0"
   },
   "devDependencies": {
