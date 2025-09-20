@@ -1,0 +1,8 @@
+{
+  "label": "Event Sourcing",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "title": "Event Sourcing SDK"
+  }
+}
