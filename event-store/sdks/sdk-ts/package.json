@@ -19,7 +19,7 @@
   "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "prepare": "pnpm run build",
+    "prepare": "pnpm run gen && pnpm run build",
     "gen": "(cd ../.. && make gen-ts)",
     "example": "tsx src/examples/typed-basic.ts",
     "typed-example": "tsx src/examples/typed-basic.ts",
