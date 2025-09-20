@@ -16,9 +16,9 @@ pub async fn get_test_database_url() -> String {
 
     // If no fast infrastructure, fall back to testcontainers
     println!("🐳 No fast dev infrastructure found, using testcontainers");
+    use std::time::Duration;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres as PgImage;
-    use std::time::Duration;
 
     // Configure testcontainers for CI environment
     let postgres_image = PgImage::default()
@@ -28,13 +28,13 @@ pub async fn get_test_database_url() -> String {
 
     println!("🐳 Starting PostgreSQL testcontainer...");
     let container = postgres_image.start().await.expect("start postgres");
-    
+
     println!("🐳 Getting container port...");
     let port = container.get_host_port_ipv4(5432).await.expect("port");
-    
+
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     println!("🐳 PostgreSQL testcontainer ready at: {url}");
-    
+
     // Wait for PostgreSQL to be fully ready by attempting a connection
     println!("🐳 Waiting for PostgreSQL to be ready...");
     for attempt in 1..=10 {
@@ -53,6 +53,6 @@ pub async fn get_test_database_url() -> String {
             }
         }
     }
-    
+
     url
 }
