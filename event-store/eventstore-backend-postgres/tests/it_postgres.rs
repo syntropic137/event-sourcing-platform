@@ -30,7 +30,7 @@ fn new_event(nonce: u64, event_id: &str, event_type: &str) -> proto::EventData {
 #[tokio::test]
 async fn postgres_end_to_end_append_read_and_migrations() {
     let url = common::get_test_database_url().await;
-    let store = PostgresStore::connect(&url).await.expect("connect+init");
+    let store = PostgresStore::connect_for_tests(&url).await.expect("connect+init");
 
     // migrations should have created tables
     let count: i64 = query_scalar("SELECT COUNT(*) FROM events")
@@ -117,7 +117,7 @@ async fn postgres_end_to_end_append_read_and_migrations() {
 #[tokio::test]
 async fn postgres_immutability_triggers_block_update_delete() {
     let url = common::get_test_database_url().await;
-    let store = PostgresStore::connect(&url).await.expect("connect");
+    let store = PostgresStore::connect_for_tests(&url).await.expect("connect");
 
     store
         .append(proto::AppendRequest {
@@ -160,7 +160,7 @@ async fn postgres_immutability_triggers_block_update_delete() {
 #[tokio::test]
 async fn postgres_sequencing_trigger_enforces_prev_plus_one() {
     let url = common::get_test_database_url().await;
-    let store = PostgresStore::connect(&url).await.expect("connect");
+    let store = PostgresStore::connect_for_tests(&url).await.expect("connect");
 
     store
         .append(proto::AppendRequest {

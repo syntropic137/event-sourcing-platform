@@ -37,19 +37,42 @@ pub async fn get_test_database_url() -> String {
 
     // Wait for PostgreSQL to be fully ready by attempting a connection
     println!("🐳 Waiting for PostgreSQL to be ready...");
-    for attempt in 1..=10 {
+    for attempt in 1..=15 {
         match sqlx::PgPool::connect(&url).await {
             Ok(pool) => {
                 println!("🐳 PostgreSQL connection successful on attempt {attempt}");
-                pool.close().await;
-                break;
+                
+                // Also test that we can create multiple connections (like the actual store will)
+                match sqlx::postgres::PgPoolOptions::new()
+                    .max_connections(3)
+                    .acquire_timeout(Duration::from_secs(10))
+                    .connect(&url)
+                    .await 
+                {
+                    Ok(test_pool) => {
+                        println!("🐳 PostgreSQL pool test successful");
+                        test_pool.close().await;
+                        pool.close().await;
+                        break;
+                    }
+                    Err(e) if attempt < 15 => {
+                        println!("🐳 Pool test attempt {attempt} failed: {e}, retrying...");
+                        pool.close().await;
+                        tokio::time::sleep(Duration::from_millis(2000)).await;
+                        continue;
+                    }
+                    Err(e) => {
+                        pool.close().await;
+                        panic!("🐳 Failed to create connection pool after 15 attempts: {e}");
+                    }
+                }
             }
-            Err(e) if attempt < 10 => {
+            Err(e) if attempt < 15 => {
                 println!("🐳 Connection attempt {attempt} failed: {e}, retrying...");
-                tokio::time::sleep(Duration::from_millis(1000)).await;
+                tokio::time::sleep(Duration::from_millis(2000)).await;
             }
             Err(e) => {
-                panic!("🐳 Failed to connect to PostgreSQL after 10 attempts: {e}");
+                panic!("🐳 Failed to connect to PostgreSQL after 15 attempts: {e}");
             }
         }
     }

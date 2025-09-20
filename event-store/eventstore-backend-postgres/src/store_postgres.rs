@@ -115,6 +115,20 @@ impl PostgresStore {
         Ok(Self::new(pool))
     }
 
+    /// Connect with test-friendly timeouts for CI environments
+    #[cfg(test)]
+    pub async fn connect_for_tests(database_url: &str) -> anyhow::Result<Arc<Self>> {
+        let pool = PgPoolOptions::new()
+            .max_connections(3) // Fewer connections for tests
+            .acquire_timeout(Duration::from_secs(60)) // Longer timeout for CI
+            .connect_timeout(Duration::from_secs(30))
+            .idle_timeout(Duration::from_secs(300))
+            .connect(database_url)
+            .await?;
+        sqlx::migrate!("./migrations").run(&pool).await?;
+        Ok(Self::new(pool))
+    }
+
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
