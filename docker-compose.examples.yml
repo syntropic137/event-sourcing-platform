@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: eventstore
+      POSTGRES_PASSWORD: eventstore
+      POSTGRES_DB: eventstore
+    ports:
+      - "5435:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "eventstore"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  eventstore:
+    build:
+      context: ./event-store
+      dockerfile: Dockerfile
+    environment:
+      BACKEND: postgres
+      DATABASE_URL: postgres://eventstore:eventstore@postgres:5432/eventstore
+      BIND_ADDR: 0.0.0.0:50051
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "50051:50051"
+
+volumes:
+  pgdata:

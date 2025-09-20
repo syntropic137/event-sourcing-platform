@@ -52,15 +52,15 @@ ifdef FAST_TEST_EXCLUDES
 	@for PKG in $(FAST_TEST_EXCLUDES); do \
 		echo "Excluding $$PKG from fast unit tests"; \
 	done
-	cargo test --workspace --all-features --lib $(foreach P,$(FAST_TEST_EXCLUDES),--exclude $(P))
-	cargo test --workspace --all-features --doc $(foreach P,$(FAST_TEST_EXCLUDES),--exclude $(P))
+	cargo test --workspace --all-features --lib $(foreach P,$(FAST_TEST_EXCLUDES),--exclude $(P)) $(CARGO_TEST_FLAGS)
+	cargo test --workspace --all-features --doc $(foreach P,$(FAST_TEST_EXCLUDES),--exclude $(P)) $(CARGO_TEST_FLAGS)
 else
-	cargo test --workspace --all-features --lib
-	cargo test --workspace --all-features --doc
+	cargo test --workspace --all-features --lib $(CARGO_TEST_FLAGS)
+	cargo test --workspace --all-features --doc $(CARGO_TEST_FLAGS)
 endif
 
 test-full:
-	cargo test --workspace --all-features
+	cargo test --workspace --all-features $(CARGO_TEST_FLAGS)
 
 test: test-full
 
@@ -99,7 +99,19 @@ coverage:
 	@if ! command -v cargo-llvm-cov >/dev/null 2>&1; then echo "cargo-llvm-cov not found. Run 'make cov-setup' first."; exit 2; fi
 	@mkdir -p coverage
 	@echo "Generating coverage (this will run tests) ..."
-	@cargo llvm-cov --workspace --all-features --lcov --output-path coverage/lcov.info
+	@if [ -n "$(POSTGRES_CONTAINER)" ] && command -v docker >/dev/null 2>&1; then \
+		docker exec "$(POSTGRES_CONTAINER)" psql -U dev -d dev -c "DROP DATABASE IF EXISTS test;" >/dev/null 2>&1 || true; \
+		docker exec "$(POSTGRES_CONTAINER)" psql -U dev -d dev -c "CREATE DATABASE test;" >/dev/null 2>&1 || true; \
+	fi
+	@cargo llvm-cov clean --workspace >/dev/null 2>&1 || true
+	@TMP=$$(mktemp); \
+	 cargo llvm-cov --workspace --all-features --no-cfg-coverage --lcov --output-path coverage/lcov.info $(CARGO_TEST_FLAGS) 2>&1 | tee "$$TMP"; \
+	 if grep -qi "error.*mismatched data" "$$TMP"; then \
+		 echo "❌ Coverage instrumentation mismatch detected"; \
+		 rm -f "$$TMP"; \
+		 exit 1; \
+	 fi; \
+	 rm -f "$$TMP"
 	@cargo llvm-cov report --html \
 	  --ignore-filename-regex "$(COV_IGNORE)" \
 	  --output-dir coverage/html
@@ -110,10 +122,27 @@ coverage-text:
 	@if ! command -v cargo-llvm-cov >/dev/null 2>&1; then echo "cargo-llvm-cov not found. Run 'make cov-setup' first."; exit 2; fi
 	@echo "Coverage (text):"
 	@cargo llvm-cov clean --workspace >/dev/null 2>&1 || true
-	@cargo llvm-cov --workspace --all-features --no-report >/dev/null
-	@cargo llvm-cov report --text --show-missing-lines \
-	  --ignore-filename-regex "$(COV_IGNORE)" \
-	  || true
+	@if [ -n "$(POSTGRES_CONTAINER)" ] && command -v docker >/dev/null 2>&1; then \
+		docker exec "$(POSTGRES_CONTAINER)" psql -U dev -d dev -c "DROP DATABASE IF EXISTS test;" >/dev/null 2>&1 || true; \
+		docker exec "$(POSTGRES_CONTAINER)" psql -U dev -d dev -c "CREATE DATABASE test;" >/dev/null 2>&1 || true; \
+	fi
+	@TMP=$$(mktemp); \
+	 cargo llvm-cov --workspace --all-features --no-cfg-coverage --no-report $(CARGO_TEST_FLAGS) 2>&1 | tee "$$TMP" >/dev/null; \
+	 if grep -qi "error.*mismatched data" "$$TMP"; then \
+		 echo "❌ Coverage instrumentation mismatch detected"; \
+		 rm -f "$$TMP"; \
+		 exit 1; \
+	 fi; \
+	 rm -f "$$TMP"
+	@TMP=$$(mktemp); \
+	 cargo llvm-cov report --text --show-missing-lines \
+	  --ignore-filename-regex "$(COV_IGNORE)" 2>&1 | tee "$$TMP"; \
+	 if grep -qi "error.*mismatched data" "$$TMP"; then \
+		 echo "❌ Coverage instrumentation mismatch detected"; \
+		 rm -f "$$TMP"; \
+		 exit 1; \
+	 fi; \
+	 rm -f "$$TMP"
 
 # Placeholder run until server binary exists
 run:
@@ -139,28 +168,6 @@ smoke:
 	  $(SMOKE_ADDR) eventstore.v1.EventStore/ReadStream
 
 # --- Docs Site ---------------------------------------------------------------
-.PHONY: docs docs-start docs-build docs-serve
-
-docs:
-	@echo "Docs commands:" && \
-	echo "  make docs-start   # dev server on :4321" && \
-	echo "  make docs-build   # static build into docs-site/build" && \
-	echo "  make docs-serve   # serve built site"
-
-docs-start:
-	@if [ ! -d docs-site ]; then echo "docs-site not present"; exit 2; fi
-	@npm --prefix docs-site install
-	@npm --prefix docs-site run start
-
-docs-build:
-	@if [ ! -d docs-site ]; then echo "docs-site not present"; exit 2; fi
-	@npm --prefix docs-site install
-	@npm --prefix docs-site run build
-
-docs-serve:
-	@if [ ! -d docs-site ]; then echo "docs-site not present"; exit 2; fi
-	@npm --prefix docs-site run serve
-
 # Generate TypeScript stubs using ts-proto (requires Node + ts-proto)
 gen-ts:
 	@if [ ! -d sdks/sdk-ts ]; then echo "sdk-ts not present; skipping. Create sdks/sdk-ts/ to enable"; exit 0; fi
@@ -183,12 +190,13 @@ gen-ts:
 gen-py:
 	@if [ ! -d sdks/sdk-py ]; then echo "sdk-py not present; skipping. Create sdks/sdk-py/ to enable"; exit 0; fi
 	@if ! command -v python >/dev/null 2>&1; then echo "python not found"; exit 2; fi
-	@echo "Generating Python stubs into sdks/sdk-py/gen ..."
-	@mkdir -p sdks/sdk-py/gen
+	@echo "Generating Python stubs into sdks/sdk-py/sdk_py/gen ..."
+	@rm -rf sdks/sdk-py/sdk_py/gen
+	@mkdir -p sdks/sdk-py/sdk_py/gen
 	@python -m grpc_tools.protoc \
 	  -I ./eventstore-proto/proto \
-	  --python_out=./sdks/sdk-py/gen \
-	  --grpc_python_out=./sdks/sdk-py/gen \
+	  --python_out=./sdks/sdk-py/sdk_py/gen \
+	  --grpc_python_out=./sdks/sdk-py/sdk_py/gen \
 	  eventstore-proto/proto/eventstore/v1/eventstore.proto
 
 # Show process listening on BIND_ADDR's port
@@ -257,4 +265,7 @@ dev-shell:
 
 # Convenience aliases
 dev: dev-start
+test-fast: dev-test
 fast-test: dev-test
+# Extra flags passed to cargo test (e.g., -- --test-threads=1 when using dev infra)
+CARGO_TEST_FLAGS ?=

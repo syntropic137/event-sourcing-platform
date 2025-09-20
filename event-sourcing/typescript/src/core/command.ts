@@ -6,6 +6,21 @@ import { AggregateId } from '../types/common';
 import { DomainEvent } from './event';
 import { Aggregate } from './aggregate';
 
+type AnyCommandHandler = CommandHandler<Command, DomainEvent>;
+
+const COMMAND_HANDLER_MAP: unique symbol = Symbol('commandHandlerMap');
+
+type CommandHandlerAwareConstructor = {
+  [COMMAND_HANDLER_MAP]?: Map<string, string>;
+};
+
+function ensureCommandHandlerMap(ctor: CommandHandlerAwareConstructor): Map<string, string> {
+  if (!ctor[COMMAND_HANDLER_MAP]) {
+    ctor[COMMAND_HANDLER_MAP] = new Map<string, string>();
+  }
+  return ctor[COMMAND_HANDLER_MAP]!;
+}
+
 /** Base interface for commands */
 export interface Command {
   /** The ID of the aggregate this command targets */
@@ -57,20 +72,20 @@ export interface CommandBus {
 
 /** Simple in-memory command bus implementation */
 export class InMemoryCommandBus implements CommandBus {
-  private handlers = new Map<string, CommandHandler<any>>();
+  private handlers = new Map<string, AnyCommandHandler>();
 
   /** Register a command handler */
   registerHandler<TCommand extends Command>(
     commandType: string,
     handler: CommandHandler<TCommand>
   ): void {
-    this.handlers.set(commandType, handler);
+    this.handlers.set(commandType, handler as AnyCommandHandler);
   }
 
   /** Send a command */
   async send<TCommand extends Command>(command: TCommand): Promise<CommandResult> {
     const commandType = command.constructor.name;
-    const handler = this.handlers.get(commandType);
+    const handler = this.handlers.get(commandType) as CommandHandler<TCommand> | undefined;
 
     if (!handler) {
       return {
@@ -93,13 +108,13 @@ export class InMemoryCommandBus implements CommandBus {
 }
 
 /** Decorator for command handler methods */
+// eslint-disable-next-line @typescript-eslint/no-redeclare
 export function CommandHandler(commandType: string) {
-  return function (target: any, propertyKey: string, descriptor: PropertyDescriptor) {
+  return function (target: object, propertyKey: string, descriptor: PropertyDescriptor) {
     // Store metadata for the command handler
-    if (!target.constructor._commandHandlers) {
-      target.constructor._commandHandlers = new Map<string, string>();
-    }
-    target.constructor._commandHandlers.set(commandType, propertyKey);
+    const ctor = target.constructor as CommandHandlerAwareConstructor;
+    const handlers = ensureCommandHandlerMap(ctor);
+    handlers.set(commandType, propertyKey);
 
     return descriptor;
   };

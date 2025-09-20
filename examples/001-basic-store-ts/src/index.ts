@@ -1,123 +1,140 @@
-/**
- * Example 001: Basic Event Store Usage
- * 
- * This example demonstrates:
- * - Connecting to the event store
- * - Writing events to streams
- * - Reading events from streams
- * - No event sourcing patterns (just raw event store usage)
- */
+import { randomUUID } from "crypto";
 
-import { EventStoreClientFactory, BaseDomainEvent, EventFactory } from '@event-sourcing-platform/typescript';
+import {
+  EventFactory,
+  EventStoreClient,
+  EventStoreClientFactory,
+  MemoryEventStoreClient,
+} from "@event-sourcing-platform/typescript";
 
-// Define some basic events
-class UserRegistered extends BaseDomainEvent {
-  readonly eventType = 'UserRegistered';
-  readonly schemaVersion = 1;
+type ClientMode = "memory" | "grpc";
 
-  constructor(
-    public readonly userId: string,
-    public readonly email: string,
-    public readonly name: string
-  ) {
-    super();
+type Options = {
+  mode: ClientMode;
+};
+
+function parseOptions(): Options {
+  if (process.argv.includes("--memory")) {
+    return { mode: "memory" };
   }
+  const envMode = (process.env.EVENT_STORE_MODE ?? "").toLowerCase();
+  if (envMode === "memory") {
+    return { mode: "memory" };
+  }
+  return { mode: "grpc" };
 }
 
-class UserEmailChanged extends BaseDomainEvent {
-  readonly eventType = 'UserEmailChanged';
-  readonly schemaVersion = 1;
-
-  constructor(
-    public readonly userId: string,
-    public readonly oldEmail: string,
-    public readonly newEmail: string
-  ) {
-    super();
+async function createClient(opts: Options): Promise<EventStoreClient> {
+  if (opts.mode === "memory") {
+    console.log(
+      "🧪 Using in-memory event store client (override via --memory).",
+    );
+    const client = new MemoryEventStoreClient();
+    await client.connect();
+    return client;
   }
-}
 
-async function runBasicStoreExample() {
-  console.log('🚀 Starting Basic Event Store Example');
-  console.log('=====================================');
+  const serverAddress = process.env.EVENT_STORE_ADDR ?? "127.0.0.1:50051";
+  const tenantId = process.env.EVENT_STORE_TENANT ?? "example-tenant";
+  console.log(
+    `🛰️  Using gRPC event store at ${serverAddress} (tenant=${tenantId})`,
+  );
 
-  // Create event store client
-  const eventStoreClient = EventStoreClientFactory.createGrpcClient({
-    serverAddress: 'localhost:50051',
-    eventStoreUrl: 'grpc://localhost:50051',
-    timeoutMs: 5000,
+  const client = EventStoreClientFactory.createGrpcClient({
+    serverAddress,
+    tenantId,
   });
+  try {
+    await client.connect();
+  } catch (error) {
+    console.error(
+      "⚠️  Failed to connect to the gRPC event store.\n" +
+      "   To start dev infrastructure: make dev-start\n" +
+      "   To use in-memory mode instead: rerun with --memory"
+    );
+    throw error;
+  }
+  return client;
+}
+
+async function main(): Promise<void> {
+  const options = parseOptions();
+  const client = await createClient(options);
 
   try {
-    // Connect to event store
-    console.log('📡 Connecting to event store...');
-    await eventStoreClient.connect();
-    console.log('✅ Connected to event store');
+    const userId = randomUUID();
+    const streamName = `User-${userId}`;
 
-    const userId = crypto.randomUUID();
-    const streamName = `user-${userId}`;
+    const registered = EventFactory.create(
+      {
+        eventType: "UserRegistered",
+        schemaVersion: 1,
+        toJson: () => ({
+          userId,
+          email: "john@example.com",
+          name: "John Doe",
+          eventType: "UserRegistered",
+          schemaVersion: 1,
+        }),
+      },
+      {
+        aggregateId: userId,
+        aggregateType: "User",
+        aggregateVersion: 1,
+      },
+    );
 
-    // Create some events
-    const userRegistered = new UserRegistered(userId, 'john@example.com', 'John Doe');
-    const emailChanged = new UserEmailChanged(userId, 'john@example.com', 'john.doe@example.com');
+    const emailChanged = EventFactory.create(
+      {
+        eventType: "UserEmailChanged",
+        schemaVersion: 1,
+        toJson: () => ({
+          userId,
+          previousEmail: "john@example.com",
+          nextEmail: "john.doe@example.com",
+          eventType: "UserEmailChanged",
+          schemaVersion: 1,
+        }),
+      },
+      {
+        aggregateId: userId,
+        aggregateType: "User",
+        aggregateVersion: 2,
+      },
+    );
 
-    // Create event envelopes
-    const registeredEnvelope = EventFactory.create(userRegistered, {
-      aggregateId: userId,
-      aggregateType: 'User',
-      aggregateVersion: 1,
+    console.log(`📝 Appending initial registration to ${streamName}`);
+    await client.appendEvents(streamName, [registered]);
+
+    console.log(
+      "📝 Appending email change with optimistic concurrency (expected version = 1)",
+    );
+    await client.appendEvents(streamName, [emailChanged], 1);
+
+    console.log(`📖 Reading back the stream`);
+    const envelopes = await client.readEvents(streamName);
+    envelopes.forEach((envelope, idx) => {
+      console.log(
+        `  ${idx + 1}. ${envelope.event.eventType} (v${envelope.metadata.aggregateVersion})`,
+      );
+      console.log("     Payload:", envelope.event.toJson());
     });
 
-    const emailChangedEnvelope = EventFactory.create(emailChanged, {
-      aggregateId: userId,
-      aggregateType: 'User',
-      aggregateVersion: 2,
-    });
+    const exists = await client.streamExists(streamName);
+    console.log(`🔍 Stream ${streamName} exists? ${exists}`);
 
-    // Write events to stream
-    console.log(`📝 Writing events to stream: ${streamName}`);
-    await eventStoreClient.appendEvents(streamName, [registeredEnvelope]);
-    console.log('✅ Written UserRegistered event');
-
-    await eventStoreClient.appendEvents(streamName, [emailChangedEnvelope], 1);
-    console.log('✅ Written UserEmailChanged event');
-
-    // Read events from stream
-    console.log(`📖 Reading events from stream: ${streamName}`);
-    const events = await eventStoreClient.readEvents(streamName);
-    
-    console.log(`📋 Found ${events.length} events:`);
-    events.forEach((envelope, index) => {
-      console.log(`  ${index + 1}. ${envelope.event.eventType} (v${envelope.metadata.aggregateVersion})`);
-      console.log(`     Event ID: ${envelope.metadata.eventId}`);
-      console.log(`     Timestamp: ${envelope.metadata.timestamp}`);
-      console.log(`     Data:`, envelope.event.toJson());
-    });
-
-    // Check if stream exists
-    console.log(`🔍 Checking if stream exists: ${streamName}`);
-    const exists = await eventStoreClient.streamExists(streamName);
-    console.log(`✅ Stream exists: ${exists}`);
-
-    // Read events from non-existent stream
-    const nonExistentStream = 'non-existent-stream';
-    console.log(`📖 Reading from non-existent stream: ${nonExistentStream}`);
-    const noEvents = await eventStoreClient.readEvents(nonExistentStream);
-    console.log(`📋 Found ${noEvents.length} events (expected 0)`);
-
-  } catch (error) {
-    console.error('❌ Error:', error);
+    const ghostStream = await client.readEvents("User-non-existent");
+    console.log(`📭 Non-existent stream returns ${ghostStream.length} events.`);
   } finally {
-    // Disconnect
-    console.log('📡 Disconnecting from event store...');
-    await eventStoreClient.disconnect();
-    console.log('✅ Disconnected');
+    await client.disconnect();
   }
 
-  console.log('🎉 Basic Event Store Example completed');
+  console.log("🎉 Example complete");
 }
 
-// Run the example
 if (require.main === module) {
-  runBasicStoreExample().catch(console.error);
+  main().catch((error) => {
+    console.error("❌ Example failed", error);
+    process.exitCode = 1;
+  });
 }

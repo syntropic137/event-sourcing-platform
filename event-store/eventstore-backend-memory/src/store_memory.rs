@@ -421,20 +421,21 @@ impl EventStore for InMemoryStore {
         let prefix = req.aggregate_id_prefix.clone();
         let from_global = req.from_global_nonce;
 
-        let replay_items: Vec<Result<SubscribeResponse, StoreError>> = {
-            let all = self.all.read();
-            all.iter()
-                .filter(|ev| {
-                    ev.meta.as_ref().is_some_and(|m| {
-                        m.tenant_id == tenant_id
-                            && m.global_nonce >= from_global
-                            && (prefix.is_empty() || m.aggregate_id.starts_with(&prefix))
-                    })
+        let replay_items: Vec<Result<SubscribeResponse, StoreError>> = self
+            .all
+            .read()
+            .iter()
+            .filter(|ev| {
+                ev.meta.as_ref().is_some_and(|m| {
+                    m.tenant_id == tenant_id
+                        && m.global_nonce >= from_global
+                        && (prefix.is_empty() || m.aggregate_id.starts_with(&prefix))
                 })
-                .cloned()
-                .map(|event| Ok(SubscribeResponse { event: Some(event) }))
-                .collect()
-        };
+            })
+            .cloned()
+            .map(|event| Ok(SubscribeResponse { event: Some(event) }))
+            .collect();
+
         let replay = ts::iter(replay_items);
 
         let rx = self.tx.subscribe();
@@ -447,9 +448,10 @@ impl EventStore for InMemoryStore {
                 Ok(event) => {
                     let keep = event.meta.as_ref().is_some_and(|m| {
                         m.tenant_id == tenant
-                            && m.global_nonce > from_global
+                            && m.global_nonce >= from_global
                             && (prefix.is_empty() || m.aggregate_id.starts_with(&prefix))
                     });
+
                     if keep {
                         Some(Ok(SubscribeResponse { event: Some(event) }))
                     } else {

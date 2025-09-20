@@ -6,6 +6,21 @@ import { AggregateId, Version } from '../types/common';
 import { DomainEvent, EventEnvelope, EventFactory } from './event';
 import { InvalidAggregateStateError } from './errors';
 
+const EVENT_HANDLER_MAP: unique symbol = Symbol('eventHandlerMap');
+
+type EventHandlerAwareConstructor = {
+  [EVENT_HANDLER_MAP]?: Map<string, EventHandlerMetadata>;
+};
+
+function ensureEventHandlerMap(
+  ctor: EventHandlerAwareConstructor
+): Map<string, EventHandlerMetadata> {
+  if (!ctor[EVENT_HANDLER_MAP]) {
+    ctor[EVENT_HANDLER_MAP] = new Map<string, EventHandlerMetadata>();
+  }
+  return ctor[EVENT_HANDLER_MAP]!;
+}
+
 /** Core interface for event-sourced aggregates */
 export interface Aggregate<TEvent extends DomainEvent = DomainEvent> {
   /** The aggregate's unique identifier */
@@ -25,6 +40,9 @@ export interface Aggregate<TEvent extends DomainEvent = DomainEvent> {
 
   /** Check if the aggregate has any uncommitted events */
   hasUncommittedEvents(): boolean;
+
+  /** Rehydrate the aggregate from committed history */
+  rehydrate(events: EventEnvelope<TEvent>[]): void;
 }
 
 /** Base class for event-sourced aggregates */
@@ -64,6 +82,12 @@ export abstract class BaseAggregate<TEvent extends DomainEvent = DomainEvent>
   /** Check if there are uncommitted events */
   hasUncommittedEvents(): boolean {
     return this._uncommittedEvents.length > 0;
+  }
+
+  /** Initialize a brand-new aggregate instance with an identifier */
+  protected initialize(id: AggregateId): void {
+    this.setId(id);
+    this._version = 0;
   }
 
   /** Set the aggregate ID (used during loading) */
@@ -106,19 +130,22 @@ export abstract class BaseAggregate<TEvent extends DomainEvent = DomainEvent>
   /** Load the aggregate from a sequence of events */
   protected loadFromEvents(events: EventEnvelope<TEvent>[]): void {
     this._uncommittedEvents = [];
+    this._id = null;
+    this._version = 0;
 
     for (const envelope of events) {
-      // Set ID from first event
       if (this._id === null) {
         this.setId(envelope.metadata.aggregateId);
       }
 
-      // Apply the event
       this.applyEvent(envelope.event);
-
-      // Update version
       this._version = envelope.metadata.aggregateVersion;
     }
+  }
+
+  /** Public rehydration entry point used by repositories */
+  public rehydrate(events: EventEnvelope<TEvent>[]): void {
+    this.loadFromEvents(events);
   }
 }
 
@@ -128,20 +155,41 @@ export interface EventHandlerMetadata {
   methodName: string;
 }
 
+/** Aggregate decorator metadata */
+const AGGREGATE_METADATA: unique symbol = Symbol('aggregateMetadata');
+
+interface AggregateMetadata {
+  aggregateType?: string;
+}
+
+type AggregateAwareConstructor = {
+  [AGGREGATE_METADATA]?: AggregateMetadata;
+};
+
+/** Decorator for marking aggregate root classes */
+export function AggregateDecorator(aggregateType?: string) {
+  return function <T extends new (...args: unknown[]) => object>(constructor: T) {
+    const metadata: AggregateMetadata = {
+      aggregateType: aggregateType || constructor.name,
+    };
+
+    (constructor as AggregateAwareConstructor)[AGGREGATE_METADATA] = metadata;
+    return constructor;
+  };
+}
+
 /** Decorator for marking event handler methods */
 export function EventSourcingHandler(eventType: string) {
-  return function (target: any, propertyKey: string, descriptor: PropertyDescriptor) {
+  return function (target: object, propertyKey: string, descriptor: PropertyDescriptor) {
     // Store metadata for the event handler
     const metadata: EventHandlerMetadata = {
       eventType,
       methodName: propertyKey,
     };
 
-    // Store metadata on the class prototype
-    if (!target.constructor._eventHandlers) {
-      target.constructor._eventHandlers = new Map<string, string>();
-    }
-    target.constructor._eventHandlers.set(eventType, propertyKey);
+    const ctor = target.constructor as EventHandlerAwareConstructor;
+    const handlers = ensureEventHandlerMap(ctor);
+    handlers.set(eventType, metadata);
 
     return descriptor;
   };
@@ -153,14 +201,15 @@ export abstract class AutoDispatchAggregate<
 > extends BaseAggregate<TEvent> {
   /** Apply event using automatic method dispatch */
   applyEvent(event: TEvent): void {
-    const eventHandlers = (this.constructor as any)._eventHandlers as Map<string, string>;
+    const ctor = this.constructor as EventHandlerAwareConstructor;
+    const eventHandlers = ctor[EVENT_HANDLER_MAP];
 
     if (eventHandlers && eventHandlers.has(event.eventType)) {
-      const methodName = eventHandlers.get(event.eventType)!;
-      const handler = (this as any)[methodName];
+      const handlerMetadata = eventHandlers.get(event.eventType)!;
+      const handler = (this as Record<string, unknown>)[handlerMetadata.methodName];
 
       if (typeof handler === 'function') {
-        handler.call(this, event);
+        (handler as (payload: TEvent) => void).call(this, event);
         return;
       }
     }
@@ -173,6 +222,43 @@ export abstract class AutoDispatchAggregate<
   protected handleUnknownEvent(event: TEvent): void {
     // Default: ignore unknown events
     console.warn(`No handler found for event type: ${event.eventType}`);
+  }
+}
+
+/**
+ * AggregateRoot - Production-ready aggregate base class
+ * This is the main class that aggregates should extend
+ */
+export abstract class AggregateRoot<
+  TEvent extends DomainEvent = DomainEvent,
+> extends AutoDispatchAggregate<TEvent> {
+  /** Get the aggregate identifier */
+  get aggregateId(): AggregateId | null {
+    return this.id;
+  }
+
+  /**
+   * Apply an event - this is the main method for emitting events from command handlers
+   * This method both applies the event to the aggregate state and adds it to uncommitted events
+   */
+  protected apply(event: TEvent): void {
+    this.raiseEvent(event);
+  }
+
+  /**
+   * Initialize the aggregate with an ID - used when creating new aggregates
+   */
+  protected initialize(aggregateId: AggregateId): void {
+    super.initialize(aggregateId);
+  }
+
+  /**
+   * Get the aggregate type from decorator metadata or class name
+   */
+  getAggregateType(): string {
+    const ctor = this.constructor as AggregateAwareConstructor;
+    const metadata = ctor[AGGREGATE_METADATA];
+    return metadata?.aggregateType || this.constructor.name;
   }
 }
 
