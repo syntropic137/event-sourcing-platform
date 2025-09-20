@@ -136,10 +136,42 @@ jobs:
           node-version: 20
           cache: pnpm
 
+      - name: Cache protoc installation
+        id: cache-protoc
+        uses: actions/cache@v4
+        with:
+          path: /usr/bin/protoc
+          key: protoc-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
+
       - name: Install protoc
+        if: steps.cache-protoc.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
+
+      - name: Cache generated protobuf files
+        uses: actions/cache@v4
+        with:
+          path: |
+            event-store/sdks/sdk-ts/src/gen
+          key: protobuf-gen-${{ runner.os }}-${{ hashFiles('event-store/eventstore-proto/proto/**/*.proto') }}
+          restore-keys: |
+            protobuf-gen-${{ runner.os }}-
+
+      - name: Cache TypeScript build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            event-sourcing/typescript/dist
+            event-sourcing/typescript/tsconfig.tsbuildinfo
+            event-store/sdks/sdk-ts/dist
+            examples/*/dist
+            node_modules/.cache
+            .turbo
+          key: ts-build-${{ runner.os }}-${{ hashFiles('**/package.json', '**/pnpm-lock.yaml', '**/tsconfig*.json', 'turbo.json') }}-${{ hashFiles('event-sourcing/typescript/src/**/*.ts', 'event-store/sdks/sdk-ts/src/**/*.ts', 'examples/*/src/**/*.ts') }}
+          restore-keys: |
+            ts-build-${{ runner.os }}-${{ hashFiles('**/package.json', '**/pnpm-lock.yaml', '**/tsconfig*.json', 'turbo.json') }}-
+            ts-build-${{ runner.os }}-
 
       - name: Install dependencies (workspace)
         run: pnpm -w install --frozen-lockfile
