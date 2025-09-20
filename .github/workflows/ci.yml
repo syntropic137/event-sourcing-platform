@@ -62,6 +62,7 @@ jobs:
   rust_event_store_full:
     name: event-store • qa-full + coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Keep independent so it runs in parallel with other jobs
     steps:
       - name: Checkout
@@ -79,22 +80,18 @@ jobs:
             event-store/target
           key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Setup Docker for testcontainers
-        run: |
-          # Ensure Docker is running and accessible
-          docker info
-          # Pre-pull PostgreSQL image to avoid timeout during test
-          docker pull postgres:15
-
       - name: Coverage setup
         run: make -C event-store cov-setup
 
       - name: QA full
         run: make -C event-store qa-full
+        timeout-minutes: 10
         env:
           # Testcontainers configuration for CI
           TESTCONTAINERS_RYUK_DISABLED: true
           TESTCONTAINERS_CHECKS_DISABLE: true
+          # Reduce testcontainers startup time
+          TESTCONTAINERS_WAIT_STRATEGY_TIMEOUT: 60s
 
       - name: Upload coverage artifacts
         if: always()
