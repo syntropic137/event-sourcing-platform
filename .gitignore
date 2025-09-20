@@ -205,3 +205,25 @@ __pycache__/
 # Generated SDK sources
 event-store/sdks/sdk-ts/src/gen/
 event-store/sdks/sdk-py/gen/
+
+# SDK build outputs (should be in dist/, not src/)
+event-store/sdks/sdk-ts/src/*.js
+event-store/sdks/sdk-ts/src/*.d.ts
+event-store/sdks/sdk-ts/src/*.js.map
+event-store/sdks/sdk-ts/src/*.d.ts.map
+
+# Example build outputs
+examples/*/dist/
+examples/*/build/
+
+# Dashboard temporary files
+examples/009-web-dashboard-ts/public/temp/
+
+# Development artifacts
+*.tmp
+*.temp
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local

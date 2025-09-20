@@ -1,18 +1,47 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:15
-    container_name: event-store-postgres
+    container_name: "event-sourcing-platform_15695cf1_postgres"
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: eventstore
+      POSTGRES_DB: dev
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
     ports:
-      - "5432:5432"
+      - "15342:5432"
+    volumes:
+      - "event-sourcing-platform_15695cf1_postgres:/var/lib/postgresql/data"
+    command: >
+      postgres 
+      -c fsync=off 
+      -c synchronous_commit=off
+      -c shared_buffers=128MB
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    labels:
+      - "dev-tools.project=event-sourcing-platform"
+      - "dev-tools.hash=15695cf1"
+      - "dev-tools.auto-cleanup=true"
+
+  redis:
+    image: redis:7-alpine
+    container_name: "event-sourcing-platform_15695cf1_redis"
+    ports:
+      - "16342:6379"
+    volumes:
+      - "event-sourcing-platform_15695cf1_redis:/data"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
-    restart: unless-stopped
+    labels:
+      - "dev-tools.project=event-sourcing-platform"
+      - "dev-tools.hash=15695cf1"
+      - "dev-tools.auto-cleanup=true"
+
+volumes:
+  "event-sourcing-platform_15695cf1_postgres":
+  "event-sourcing-platform_15695cf1_redis":

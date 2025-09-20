@@ -7,6 +7,48 @@
 .PHONY: docs docs-start docs-build docs-serve
 .PHONY: dev-init dev-start dev-stop dev-restart dev-clean test-fast dev-status dev-logs dev-shell
 
+PROJECT_NAME := $(notdir $(CURDIR))
+DEV_ENV_FILE := $(CURDIR)/dev-tools/.env.dev
+EVENT_STORE_ENV_FILE := $(CURDIR)/event-store/.env.dev
+
+define RUN_EVENT_STORE_QA
+	@if [ -d event-store ]; then \
+		if [ -z "$$CI" ] && [ "${FORCE_TESTCONTAINERS:-0}" != "1" ] && command -v docker >/dev/null 2>&1; then \
+			if [ -f "$(EVENT_STORE_ENV_FILE)" ]; then \
+				. "$(EVENT_STORE_ENV_FILE)"; \
+				POSTGRES_CONTAINER_NAME="event-store_$${PROJECT_HASH}_postgres"; \
+			elif [ -f "$(DEV_ENV_FILE)" ]; then \
+				. "$(DEV_ENV_FILE)"; \
+				POSTGRES_CONTAINER_NAME="$(PROJECT_NAME)_$${PROJECT_HASH}_postgres"; \
+			else \
+				POSTGRES_CONTAINER_NAME=$$(docker ps --format '{{.Names}}' | grep -E '^[a-z0-9-]+_[0-9a-f]{8}_postgres$$' | head -n 1); \
+				if [ -n "$$POSTGRES_CONTAINER_NAME" ]; then \
+					POSTGRES_PORT=$$(docker inspect --format='{{(index .NetworkSettings.Ports "5432/tcp" 0).HostPort}}' "$$POSTGRES_CONTAINER_NAME"); \
+					DATABASE_URL="postgres://dev:dev@localhost:$${POSTGRES_PORT}/dev"; \
+					TEST_DATABASE_URL="postgres://dev:dev@localhost:$${POSTGRES_PORT}/test"; \
+					REDIS_CONTAINER_NAME=$$(echo "$$POSTGRES_CONTAINER_NAME" | sed 's/_postgres/_redis/'); \
+					if docker ps --format '{{.Names}}' | grep -q "^$$REDIS_CONTAINER_NAME$$"; then \
+						REDIS_PORT=$$(docker inspect --format='{{(index .NetworkSettings.Ports "6379/tcp" 0).HostPort}}' "$$REDIS_CONTAINER_NAME"); \
+						REDIS_URL="redis://localhost:$${REDIS_PORT}"; \
+					fi; \
+				fi; \
+			fi; \
+			if [ -n "$$POSTGRES_CONTAINER_NAME" ] && docker ps --format '{{.Names}}' | grep -q "^$$POSTGRES_CONTAINER_NAME$$"; then \
+				echo "🔌 Using dev-tools infrastructure for event-store $(1)"; \
+				docker exec "$$POSTGRES_CONTAINER_NAME" psql -U dev -d dev -c "DROP DATABASE IF EXISTS test;" >/dev/null 2>&1 || true; \
+				docker exec "$$POSTGRES_CONTAINER_NAME" psql -U dev -d dev -c "CREATE DATABASE test;" >/dev/null 2>&1 || true; \
+				DATABASE_URL=$$DATABASE_URL TEST_DATABASE_URL=$$TEST_DATABASE_URL REDIS_URL=$${REDIS_URL:-redis://localhost:6379} CARGO_TEST_FLAGS="-- --test-threads=1" POSTGRES_CONTAINER=$$POSTGRES_CONTAINER_NAME $(MAKE) -C event-store $(1); \
+			else \
+				echo "ℹ️  Dev infrastructure not running; falling back to testcontainers for event-store $(1)"; \
+				$(MAKE) -C event-store $(1); \
+			fi; \
+		else \
+			echo "🧪 Using testcontainers for event-store $(1)"; \
+			$(MAKE) -C event-store $(1); \
+		fi; \
+	fi
+endef
+
 # Default target
 help:
 	@echo "Event Sourcing Platform - Available Targets:"
@@ -137,6 +179,18 @@ tools:
 		echo "⚠️  tools directory not found"; \
 	fi
 
+EXAMPLE_TS_DIRS := $(sort $(wildcard examples/0*-*-ts))
+
+.PHONY: examples-run
+examples-run:
+	@set -e; \
+	for dir in $(EXAMPLE_TS_DIRS); do \
+	  name=$$(basename $$dir); \
+	  echo "▶ Running $$name"; \
+  pnpm --filter "./$$dir" run build >/dev/null; \
+  pnpm --filter "./$$dir" run start || exit 1; \
+done
+
 # Test targets
 test: test-event-store test-event-sourcing test-examples
 
@@ -165,26 +219,20 @@ qa-fast: qa-event-store-fast qa-event-sourcing-fast
 qa: qa-fast
 	@echo "⚠️  The slow tests and coverage have NOT run. For full QA, run: make qa-full"
 
-qa-full: qa-event-store-full qa-event-sourcing-full
+qa-full: qa-event-store-full qa-event-sourcing-full qa-grpc-harness
 	@echo "✅ Full QA passed across modules"
 
 qa-event-store:
 	@echo "QA checks for event-store..."
-	@if [ -d event-store ]; then \
-		cd event-store && $(MAKE) qa; \
-	fi
+	$(call RUN_EVENT_STORE_QA,qa)
 
 qa-event-store-fast:
 	@echo "Fast QA for event-store..."
-	@if [ -d event-store ]; then \
-		cd event-store && $(MAKE) qa-fast; \
-	fi
+	$(call RUN_EVENT_STORE_QA,qa-fast)
 
 qa-event-store-full:
 	@echo "Full QA for event-store..."
-	@if [ -d event-store ]; then \
-		cd event-store && $(MAKE) qa-full; \
-	fi
+	$(call RUN_EVENT_STORE_QA,qa-full)
 
 qa-event-sourcing:
 	@echo "QA checks for event-sourcing..."
@@ -203,6 +251,11 @@ qa-event-sourcing-full:
 	@if [ -d event-sourcing ]; then \
 		cd event-sourcing && $(MAKE) qa-full; \
 	fi
+
+.PHONY: qa-grpc-harness
+qa-grpc-harness:
+	@echo "Running TypeScript gRPC harness smoke test..."
+	@pnpm --filter @event-sourcing-platform/typescript exec jest --runInBand tests/repository.grpc.test.ts
 
 qa-examples:
 	@echo "QA checks for examples..."
