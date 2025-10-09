@@ -1,3 +1,7 @@
+---
+sidebar_position: 3
+---
+
 # Fast Local Testing
 
 Get blazing fast test feedback for rapid development iteration.

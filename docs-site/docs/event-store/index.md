@@ -1,5 +1,4 @@
 ---
-id: event-store-index
 sidebar_label: Overview
 slug: /event-store/index
 ---
@@ -29,6 +28,6 @@ A compact guide to the Rust Event Store that powers the platform.
 
 ## Keep the Docs Fresh
 
-See [Docs maintenance](maintenance.md) for regeneration commands, doc style, and publishing tips.
+See [Docs maintenance](../development/docs-maintenance.md) for regeneration commands, doc style, and publishing tips.
 
 > **Mantra:** keep it simple, but no simpler. Short pages age better and are easier to trust.

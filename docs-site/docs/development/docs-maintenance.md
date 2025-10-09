@@ -1,3 +1,9 @@
+---
+sidebar_label: Docs Maintenance
+sidebar_position: 40
+slug: /development/docs-maintenance
+---
+
 # Docs Maintenance
 
 Keep the doc set lightweight and accurate:
