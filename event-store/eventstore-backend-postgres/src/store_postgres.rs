@@ -129,22 +129,8 @@ impl PostgresStore {
     /// This method is **not available** in production builds. Use `connect()` instead.
     #[cfg(any(test, feature = "test-utils"))]
     pub async fn connect_for_tests(database_url: &str) -> anyhow::Result<Arc<Self>> {
-        // Optimized for parallel test execution with testcontainers
-        // Higher connection count prevents pool exhaustion during concurrent operations
-        let pool = PgPoolOptions::new()
-            .max_connections(8) // Increased to support parallel test operations
-            .acquire_timeout(Duration::from_secs(120)) // Extended for CI environments
-            .idle_timeout(Duration::from_secs(300))
-            .max_lifetime(Duration::from_secs(1800)) // Prevent stale connections
-            .connect(database_url)
-            .await?;
-
-        // Log pool configuration for debugging in test environments
-        eprintln!(
-            "🔧 Test pool configured: max_connections=8, acquire_timeout=120s, url={}",
-            database_url.split('@').next_back().unwrap_or("unknown")
-        );
-
+        // Simple connection for test reliability
+        let pool = PgPool::connect(database_url).await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
         Ok(Self::new(pool))
     }
