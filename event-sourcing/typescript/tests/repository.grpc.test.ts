@@ -201,7 +201,7 @@ function convertEnvelopeToWireEvent(envelope: EventEnvelope, fallbackTenantId: s
       eventId: metadata.eventId,
       aggregateId: metadata.aggregateId,
       aggregateType: metadata.aggregateType,
-      aggregateNonce: metadata.aggregateVersion,
+      aggregateNonce: metadata.aggregateNonce,
       eventType: envelope.event.eventType,
       eventVersion: (envelope.event as { schemaVersion?: number }).schemaVersion ?? 0,
       contentType: metadata.contentType,
