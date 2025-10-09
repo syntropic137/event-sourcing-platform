@@ -18,7 +18,7 @@ describe('EventSerializer edge cases', () => {
     const envelope = EventFactory.create(event, {
       aggregateId: 'agg-1',
       aggregateType: 'TestAggregate',
-      aggregateVersion: 1,
+      aggregateNonce: 1,
     });
 
     const serialised = EventSerializer.serialize(envelope);
@@ -27,7 +27,7 @@ describe('EventSerializer edge cases', () => {
     expect(deserialised.event.eventType).toBe('SimpleEvent');
     expect((deserialised.event as SimpleEvent).payload).toEqual({ foo: 'bar' });
     expect(deserialised.metadata.aggregateId).toBe('agg-1');
-    expect(deserialised.metadata.aggregateVersion).toBe(1);
+    expect(deserialised.metadata.aggregateNonce).toBe(1);
   });
 
   it('throws when deserialising an unregistered event type', () => {
