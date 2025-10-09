@@ -24,7 +24,13 @@ pg-integration = []
 test-utils = []
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 testcontainers = "0.17"
 testcontainers-modules = { version = "0.5", features = ["postgres"] }
 tonic = { version = "0.12", default-features = false }
+once_cell = "1.19"
+
+[[test]]
+name = "it_postgres"
+path = "tests/it_postgres.rs"
+required-features = ["test-utils"]

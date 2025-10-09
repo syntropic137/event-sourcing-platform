@@ -575,6 +575,7 @@ dependencies = [
  "eventstore-core",
  "eventstore-proto",
  "futures",
+ "once_cell",
  "prost",
  "sha2",
  "sqlx",
