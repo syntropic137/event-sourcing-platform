@@ -120,26 +120,42 @@ interface ProductCatalog { products: Array<{id: string; name: string; price: num
 
 class SalesProjection {
   private report: SalesReport = { totalOrders: 0, totalRevenue: 0, topProducts: [] };
+  private productNames = new Map<string, string>();
   
   processEvent(envelope: any) {
     const event = envelope.event;
+    const aggregateId = envelope.metadata.aggregateId;
+    
     switch (event.eventType) {
+      case "ProductCreated":
+        this.productNames.set(aggregateId, event.name);
+        this.ensureTopProductEntry(aggregateId, event.name);
+        break;
       case "OrderPlaced":
         this.report.totalOrders++;
         this.report.totalRevenue += event.totalAmount;
         break;
       case "ProductSold":
-        let product = this.report.topProducts.find(p => p.id === envelope.metadata.aggregateId);
-        if (!product) {
-          product = { id: envelope.metadata.aggregateId, name: "Product", sold: 0 };
-          this.report.topProducts.push(product);
-        }
+        const name = this.productNames.get(aggregateId) ?? "Unknown product";
+        const product = this.ensureTopProductEntry(aggregateId, name);
+        product.name = name;
         product.sold += event.quantity;
         break;
     }
   }
+
+  private ensureTopProductEntry(id: string, name: string) {
+    let product = this.report.topProducts.find(p => p.id === id);
+    if (!product) {
+      product = { id, name, sold: 0 };
+      this.report.topProducts.push(product);
+    }
+    return product;
+  }
   
-  getReport() { return this.report; }
+  getReport() {
+    return this.report;
+  }
 }
 
 class CatalogProjection {
@@ -196,8 +212,10 @@ async function main(): Promise<void> {
     }
 
     // Create orders and sales
+    const orderIds: string[] = [];
     for (let i = 0; i < 5; i++) {
       const orderId = `order-${randomUUID()}`;
+      orderIds.push(orderId);
       const order = new OrderAggregate();
       order.place(orderId, `customer-${i}`, 150);
       await orderRepo.save(order);
@@ -223,8 +241,8 @@ async function main(): Promise<void> {
       const events = await client.readEvents(`Product-${id}`);
       allEvents.push(...events);
     }
-    for (let i = 0; i < 5; i++) {
-      const events = await client.readEvents(`Order-order-${i}`);
+    for (const orderId of orderIds) {
+      const events = await client.readEvents(`Order-${orderId}`);
       allEvents.push(...events);
     }
 

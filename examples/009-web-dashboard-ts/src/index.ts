@@ -404,7 +404,12 @@ async function main(): Promise<void> {
 
   // Create Express app
   const app = express();
-  const port = 3000;
+  const portEnv = process.env.WEB_DASHBOARD_PORT ?? process.env.PORT;
+  const parsedPort = portEnv ? Number(portEnv) : NaN;
+  const port = Number.isFinite(parsedPort) && parsedPort > 0 && parsedPort < 65536 ? parsedPort : 0;
+  const serverHost = process.env.WEB_DASHBOARD_HOST ?? '127.0.0.1';
+  const displayHost = serverHost === '0.0.0.0' ? 'localhost' : serverHost;
+  let activePort = port;
 
   // Dashboard HTML route
   app.get('/', async (req, res) => {
@@ -498,18 +503,39 @@ async function main(): Promise<void> {
   try {
     console.log("🌐 Live Web Dashboard for Event Sourcing");
     console.log("=======================================");
+    if (portEnv) {
+      console.log(`(Requested port ${portEnv})`);
+    } else {
+      console.log('(No port provided; requesting an ephemeral port from the OS)');
+    }
 
     // Start the web server
-    const server = app.listen(port, () => {
-      console.log(`\n🚀 Dashboard server running at http://localhost:${port}`);
+    const server = app.listen(port, serverHost, () => {
+      const addressInfo = server.address();
+      if (typeof addressInfo === 'object' && addressInfo) {
+        activePort = addressInfo.port;
+      }
+      console.log(`\n🚀 Dashboard server running at http://${displayHost}:${activePort}`);
       console.log("📊 Open your browser to see live projections!");
       console.log("🎲 Click 'Generate Sample Data' to create demo data");
       console.log("🔄 Dashboard auto-refreshes every 5 seconds");
+      if (!portEnv) {
+        console.log("ℹ️  Set WEB_DASHBOARD_PORT to pin a specific port if needed.");
+      }
       console.log("\n💡 This demonstrates:");
       console.log("   • Live web dashboard showing event sourcing projections");
       console.log("   • Real-time updates from event streams");
       console.log("   • Visual feedback of the event sourcing system");
       console.log("   • Making the 'opaque' system transparent and observable");
+    });
+
+    server.on('error', (err) => {
+      const error = err as NodeJS.ErrnoException;
+      if (error.code === 'EADDRINUSE' && port !== 0) {
+        console.error(`❌ Port ${port} is already in use. Set WEB_DASHBOARD_PORT to another value or stop the conflicting process.`);
+        process.exit(1);
+      }
+      throw err;
     });
 
     // Keep the process running
@@ -521,6 +547,8 @@ async function main(): Promise<void> {
         });
       });
     });
+
+    console.log(`\nℹ️  Close the browser tab and stop the server with CTRL+C when done (currently on http://${displayHost}:${activePort}).`);
 
     // Keep the main function running
     await new Promise(() => {}); // Run forever

@@ -1,7 +1,9 @@
 import { randomUUID } from "crypto";
 
 import {
+  BaseDomainEvent,
   EventFactory,
+  EventSerializer,
   EventStoreClient,
   EventStoreClientFactory,
   MemoryEventStoreClient,
@@ -57,26 +59,42 @@ async function createClient(opts: Options): Promise<EventStoreClient> {
   return client;
 }
 
+
+class UserRegistered extends BaseDomainEvent {
+  readonly eventType = "UserRegistered" as const;
+  readonly schemaVersion = 1 as const;
+
+  constructor(public userId: string, public email: string, public name: string) {
+    super();
+  }
+}
+
+class UserEmailChanged extends BaseDomainEvent {
+  readonly eventType = "UserEmailChanged" as const;
+  readonly schemaVersion = 1 as const;
+
+  constructor(
+    public userId: string,
+    public previousEmail: string,
+    public nextEmail: string,
+  ) {
+    super();
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseOptions();
   const client = await createClient(options);
+
+  EventSerializer.registerEvent("UserRegistered", UserRegistered as unknown as new () => UserRegistered);
+  EventSerializer.registerEvent("UserEmailChanged", UserEmailChanged as unknown as new () => UserEmailChanged);
 
   try {
     const userId = randomUUID();
     const streamName = `User-${userId}`;
 
     const registered = EventFactory.create(
-      {
-        eventType: "UserRegistered",
-        schemaVersion: 1,
-        toJson: () => ({
-          userId,
-          email: "john@example.com",
-          name: "John Doe",
-          eventType: "UserRegistered",
-          schemaVersion: 1,
-        }),
-      },
+      new UserRegistered(userId, "john@example.com", "John Doe"),
       {
         aggregateId: userId,
         aggregateType: "User",
@@ -85,17 +103,7 @@ async function main(): Promise<void> {
     );
 
     const emailChanged = EventFactory.create(
-      {
-        eventType: "UserEmailChanged",
-        schemaVersion: 1,
-        toJson: () => ({
-          userId,
-          previousEmail: "john@example.com",
-          nextEmail: "john.doe@example.com",
-          eventType: "UserEmailChanged",
-          schemaVersion: 1,
-        }),
-      },
+      new UserEmailChanged(userId, "john@example.com", "john.doe@example.com"),
       {
         aggregateId: userId,
         aggregateType: "User",

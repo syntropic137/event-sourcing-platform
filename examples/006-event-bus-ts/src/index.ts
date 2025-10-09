@@ -77,7 +77,7 @@ class OrderPlaced extends BaseDomainEvent {
 class PaymentProcessed extends BaseDomainEvent {
   readonly eventType = "PaymentProcessed" as const;
   readonly schemaVersion = 1 as const;
-  constructor(public paymentId: string, public orderId: string, public amount: number) { super(); }
+  constructor(public paymentId: string, public orderId: string, public amount: number, public userId: string) { super(); }
 }
 
 class NotificationSent extends BaseDomainEvent {
@@ -116,9 +116,9 @@ class OrderAggregate extends AutoDispatchAggregate<OrderPlaced> {
 class PaymentAggregate extends AutoDispatchAggregate<PaymentProcessed> {
   getAggregateType() { return "Payment"; }
   
-  process(id: string, orderId: string, amount: number) {
+  process(id: string, orderId: string, amount: number, userId: string) {
     this.initialize(id);
-    this.raiseEvent(new PaymentProcessed(id, orderId, amount));
+    this.raiseEvent(new PaymentProcessed(id, orderId, amount, userId));
   }
 
   @EventSourcingHandler("PaymentProcessed")
@@ -174,7 +174,7 @@ class PaymentHandler implements EventHandler {
     if (event.eventType === "OrderPlaced") {
       const paymentId = `payment-${randomUUID()}`;
       const payment = new PaymentAggregate();
-      payment.process(paymentId, event.orderId, event.amount);
+      payment.process(paymentId, event.orderId, event.amount, event.userId);
       await this.paymentRepo.save(payment);
       console.log(`💳 Processed payment ${paymentId} for order ${event.orderId}`);
     }
@@ -200,8 +200,7 @@ class NotificationHandler implements EventHandler {
         console.log(`📧 Sent order confirmation to user ${event.userId}`);
         break;
       case "PaymentProcessed":
-        // Would need to look up user from order, simplified here
-        notification.send(notificationId, "user", "payment", `Payment processed for $${event.amount}`);
+        notification.send(notificationId, event.userId, "payment", `Payment processed for $${event.amount}`);
         await this.notificationRepo.save(notification);
         console.log(`📧 Sent payment confirmation`);
         break;
@@ -256,7 +255,7 @@ async function main(): Promise<void> {
     await eventBus.publish(new OrderPlaced(orderId, userId, 199.99));
 
     // Simulate payment completion and publish event
-    await eventBus.publish(new PaymentProcessed(`payment-${randomUUID()}`, orderId, 199.99));
+    await eventBus.publish(new PaymentProcessed(`payment-${randomUUID()}`, orderId, 199.99, userId));
 
     console.log("\n📊 Event Flow Summary:");
     console.log("1. User registered → Welcome notification sent");
