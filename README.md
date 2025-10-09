@@ -17,32 +17,24 @@ A comprehensive event sourcing platform that packages a robust event store with 
 The platform is organized into distinct contexts following Domain-Driven Design principles:
 
 ```
-006-event-sourcing-platform/
-├── event-store/           # Core Domain: Event Storage & Retrieval
-│   ├── eventstore-core/       # Core traits and types
-│   ├── eventstore-proto/      # gRPC protocol definitions
-│   ├── eventstore-backend-*/  # Storage backends (memory, postgres)
-│   ├── eventstore-bin/        # gRPC server binary
-│   └── sdks/                  # Basic client libraries
-├── event-sourcing/        # Core Domain: Event Sourcing Patterns
-│   ├── rust/                  # Rust SDK with ES patterns
-│   ├── typescript/            # TypeScript SDK with ES patterns
-│   └── python/                # Python SDK with ES patterns
-├── examples/              # Living Documentation & Learning Examples
-│   ├── 001-basic-store/       # Simple event store usage
-│   ├── 002-simple-aggregate/  # Basic event sourcing
-│   ├── 003-multiple-aggregates/ # Multiple aggregates
-│   ├── 004-cqrs-patterns/     # Command/Query separation
-│   ├── 005-projections/       # Read model projections
-│   ├── 006-event-bus/         # Cross-aggregate communication
-│   ├── 007-ecommerce-complete/ # Complete e-commerce system
-│   ├── 008-banking-complete/  # Complete banking system
-│   └── 009-inventory-complete/ # Complete inventory system
-├── tools/                 # Development Tools & Future Code Generation
-│   ├── cli/                   # CLI tools for management
-│   ├── web-ui/               # Web interface for browsing
-│   └── helpers/              # Utility libraries
-└── tests/                 # Integration Tests
+event-sourcing-platform/
+├── event-store/           # Rust event store service, gRPC server, and client SDKs
+│   ├── eventstore-core/       # Shared traits, errors, protobuf types
+│   ├── eventstore-backend-*/  # Memory + Postgres backends
+│   └── eventstore-bin/        # gRPC server binary
+├── event-sourcing/        # Event sourcing SDKs and abstractions
+│   ├── rust/                  # Rust SDK (alpha)
+│   ├── typescript/            # TypeScript SDK (primary focus)
+│   └── python/                # Placeholder for future Python SDK
+├── examples/              # TypeScript “living documentation” examples
+│   ├── 001-basic-store-ts/    # Direct event store usage
+│   ├── 002-simple-aggregate-ts/
+│   ├── …
+│   └── 009-web-dashboard-ts/
+├── dev-tools/             # Local Postgres/Redis helper scripts and Docker Compose
+├── infra-as-code/         # Terraform + Ansible scaffolding (work in progress)
+├── docs-site/             # Docusaurus documentation site (work in progress)
+└── docs/                  # Project notes and supporting docs
 ```
 
 ## 🚀 Quick Start
@@ -57,25 +49,26 @@ The platform is organized into distinct contexts following Domain-Driven Design 
 
 ### Setup
 
-1. **Clone and setup:**
+1. **Clone and enter the repository:**
    ```bash
-   cd experiments/006-event-sourcing-platform
-   make setup
+   git clone https://github.com/<org>/event-sourcing-platform.git
+   cd event-sourcing-platform
    ```
 
-2. **Start development services:**
+2. **Install workspace dependencies (pnpm 9+ recommended):**
    ```bash
-   make start-services
+   pnpm -w install
    ```
 
-3. **Build all components:**
+3. **Start local infrastructure (PostgreSQL + Redis) – optional:**
+   ```bash
+   make dev-start      # or `make start-services` for the lightweight compose stack
+   ```
+
+4. **Build and smoke-test the platform:**
    ```bash
    make build
-   ```
-
-4. **Run smoke tests:**
-   ```bash
-   make smoke-test
+   make smoke-test     # runs the Rust event-store smoke check
    ```
 
 ### Try the Examples
@@ -151,28 +144,29 @@ make help
 
 ## 📚 Examples
 
-The examples are designed for progressive learning:
+All examples are implemented in TypeScript today. They default to the gRPC event store provided by `dev-tools`; append `-- --memory` to run against the in-memory client.
 
-### Basic Examples (001-003)
-- **001-basic-store**: Direct event store usage without event sourcing
-- **002-simple-aggregate**: Single aggregate with command/event flow
-- **003-multiple-aggregates**: Multiple aggregates with interactions
+| Example | Status | Highlights |
+| ------- | ------ | ---------- |
+| 001-basic-store-ts | ✅ Ready | Append/read streams, optimistic concurrency basics |
+| 002-simple-aggregate-ts | ✅ Ready | Aggregate decorators, repository pattern |
+| 003-multiple-aggregates-ts | ✅ Ready | Aggregate collaboration and sequencing |
+| 004-cqrs-patterns-ts | ✅ Ready | Separate write/read models with projections |
+| 005-projections-ts | ✅ Ready | Analytics projections and reporting views |
+| 006-event-bus-ts | ✅ Ready | Event-driven interactions across bounded contexts |
+| 007-ecommerce-complete-ts | 🚧 Placeholder | Wiring for future full e-commerce workflow |
+| 007-inventory-complete-ts | ✅ Ready | Inventory lifecycle with projections and alerts |
+| 008-observability-ts | ✅ Ready | Operational metrics and health instrumentation |
+| 008-banking-complete-ts | 🚧 Placeholder | Scaffold for banking domain (commands TBD) |
+| 009-web-dashboard-ts | ✅ Ready | Express-based dashboard consuming projections |
 
-### Advanced Examples (004-006)
-- **004-cqrs-patterns**: Command/Query separation with read models
-- **005-projections**: Building projections and managing read models
-- **006-event-bus**: Cross-aggregate communication patterns
+Run an example with:
 
-### Complete Systems (007-009)
-- **007-ecommerce-complete**: Full e-commerce system (Orders, Products, Customers)
-- **008-banking-complete**: Full banking system (Accounts, Transfers, Audit)
-- **009-inventory-complete**: Full inventory system (Products, Warehouses, Supply Chain)
-
-Each example includes:
-- 📖 Comprehensive README with learning objectives
-- 🐳 Docker Compose setup for dependencies
-- 🧪 Tests demonstrating functionality
-- 📊 Performance benchmarks where applicable
+```bash
+make examples-001           # replace with desired example number
+# or directly with pnpm:
+pnpm --filter ./examples/001-basic-store-ts run start -- --memory
+```
 
 ## 🛠️ Development
 
@@ -228,25 +222,16 @@ make smoke-test
 
 ## 🧪 Testing
 
-The platform uses a comprehensive testing strategy:
+Current automated coverage focuses on the pieces that ship today:
 
-### Unit Tests
-- Event store core functionality
-- Event sourcing abstractions
-- SDK implementations
-- Utility functions
+- **Rust event store** – cargo unit + integration tests cover the core traits, in-memory backend, Postgres backend, and gRPC server wiring. Postgres tests automatically spin up Testcontainers when a local database is not available.
+- **TypeScript event-sourcing SDK** – Jest tests validate aggregate lifecycle, optimistic concurrency, and event serialisation helpers.
 
-### Integration Tests
-- Event store with different backends
-- Event sourcing patterns end-to-end
-- Cross-language SDK compatibility
-- Example validation
+Planned additions (not yet automated):
 
-### End-to-End Tests
-- Complete example workflows
-- Docker Compose stack validation
-- Performance benchmarks
-- Stress testing
+- Cross-language SDK compatibility suites (Rust ↔︎ TypeScript ↔︎ future Python).
+- Example-level end-to-end checks and smoke tests for each scenario.
+- Performance/stress benchmarks and observability regression tests.
 
 ## 🎯 Core Principles
 
@@ -309,10 +294,13 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 🏷️ Status
 
-- ✅ **Event Store**: Complete with memory and PostgreSQL backends
-- 🚧 **Event Sourcing SDKs**: In progress
-- 🚧 **Examples**: In progress (001 basic TypeScript example present)
-- 📋 **Tools**: Planned
+- ✅ **Event Store (Rust)** – Memory and Postgres backends with a production-ready gRPC surface.
+- ✅ **TypeScript SDK** – Drives all current examples; adding richer patterns iteratively.
+- 🔄 **Rust SDK** – Early alpha; core abstractions present, feature parity in progress.
+- 📋 **Python SDK** – Placeholder directory waiting for implementation.
+- ✅ **Examples** – TypeScript examples 001–006, 007 inventory, 008 observability, and 009 dashboard are runnable today.
+- 🚧 **Examples (future)** – 007 e-commerce and 008 banking are scaffolds awaiting domain logic.
+- 🚧 **Infra-as-code & docs-site** – Module scaffolding exists; provider-specific stacks and walkthroughs are being built.
 
 ---
 
