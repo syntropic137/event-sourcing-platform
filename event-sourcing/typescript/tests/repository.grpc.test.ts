@@ -149,14 +149,14 @@ class NativeGrpcClient implements EventStoreClient {
   async appendEvents(
     streamName: string,
     events: EventEnvelope[],
-    expectedVersion?: number
+    expectedAggregateNonce?: number
   ): Promise<void> {
     const { aggregateId, aggregateType } = parseStreamName(streamName);
     const request: AppendRequest = {
       tenantId: this.tenantId,
       aggregateId,
       aggregateType,
-      expectedAggregateNonce: expectedVersion ?? 0,
+      expectedAggregateNonce: expectedAggregateNonce ?? 0,
       idempotencyKey: '',
       events: events.map((envelope) => convertEnvelopeToWireEvent(envelope, this.tenantId)),
     };

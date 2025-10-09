@@ -95,7 +95,7 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
             eventId: meta.eventId,
             timestamp: timestampIso,
             recordedTimestamp: recordedIso,
-            aggregateVersion: Number(meta.aggregateNonce),
+            aggregateNonce: Number(meta.aggregateNonce),
             aggregateId: meta.aggregateId,
             aggregateType: meta.aggregateType || aggregateType,
             tenantId: meta.tenantId || '',
@@ -141,23 +141,23 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
   async appendEvents(
     streamName: string,
     events: EventEnvelope[],
-    expectedVersion?: number
+    expectedAggregateNonce?: number
   ): Promise<void> {
     const { aggregateId, aggregateType } = parseStreamName(streamName);
     try {
       const aggType = (events[0]?.metadata.aggregateType as string) || aggregateType;
       const tenantId = resolveTenantId(events, this.tenantId);
-      const expectedAggregateNonce = expectedVersion ?? 0;
+      const nonce = expectedAggregateNonce ?? 0;
 
       const client = await this.clientPromise;
       await client.appendTyped({
         tenantId,
         aggregateId,
         aggregateType: aggType,
-        expectedAggregateNonce,
+        expectedAggregateNonce: nonce,
         events: events.map((env) => ({
           meta: {
-            aggregateNonce: Number(env.metadata.aggregateVersion),
+            aggregateNonce: Number(env.metadata.aggregateNonce),
             eventType: env.event.eventType,
             eventVersion: (env.event as { schemaVersion?: number }).schemaVersion ?? 0,
             eventId: env.metadata.eventId,

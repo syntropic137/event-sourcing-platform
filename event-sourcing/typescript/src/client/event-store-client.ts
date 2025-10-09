@@ -28,7 +28,7 @@ export interface EventStoreClient {
   appendEvents(
     streamName: string,
     events: EventEnvelope[],
-    expectedVersion?: number
+    expectedAggregateNonce?: number
   ): Promise<void>;
 
   /** Check if a stream exists */
@@ -59,8 +59,8 @@ export class EventStoreClientFactory {
       async readEvents(streamName: string, fromVersion?: number) {
         return adapter.readEvents(streamName, fromVersion);
       },
-      async appendEvents(streamName: string, events: EventEnvelope[], expectedVersion?: number) {
-        return adapter.appendEvents(streamName, events, expectedVersion);
+      async appendEvents(streamName: string, events: EventEnvelope[], expectedAggregateNonce?: number) {
+        return adapter.appendEvents(streamName, events, expectedAggregateNonce);
       },
       async streamExists(streamName: string) {
         return adapter.streamExists(streamName);

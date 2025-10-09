@@ -114,7 +114,7 @@ export abstract class BaseAggregate<TEvent extends DomainEvent = DomainEvent>
     const envelope = EventFactory.create(event, {
       aggregateId: this._id,
       aggregateType: this.getAggregateType(),
-      aggregateVersion: this._version + 1,
+      aggregateNonce: this._version + 1,
     });
 
     // Apply the event to update state
@@ -139,7 +139,7 @@ export abstract class BaseAggregate<TEvent extends DomainEvent = DomainEvent>
       }
 
       this.applyEvent(envelope.event);
-      this._version = envelope.metadata.aggregateVersion;
+      this._version = envelope.metadata.aggregateNonce;
     }
   }
 

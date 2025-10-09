@@ -72,19 +72,19 @@ export class EventStoreRepository<TAggregate extends Aggregate> implements Repos
       const streamName = this.getStreamName(aggregate.id);
       const events = aggregate.getUncommittedEvents();
 
-      // Calculate expected version (current version - number of new events)
-      const expectedVersion = aggregate.version - events.length;
+      // Calculate expected aggregate nonce (current version - number of new events)
+      const expectedAggregateNonce = aggregate.version - events.length;
 
       // Append events to the stream
-      await this.eventStoreClient.appendEvents(streamName, events, expectedVersion);
+      await this.eventStoreClient.appendEvents(streamName, events, expectedAggregateNonce);
 
       // Mark events as committed
       aggregate.markEventsAsCommitted();
     } catch (error) {
       if (this.isConcurrencyError(error)) {
         const pendingEvents = aggregate.getUncommittedEvents().length;
-        const expectedVersion = aggregate.version - pendingEvents;
-        throw new ConcurrencyConflictError(expectedVersion, aggregate.version);
+        const expectedAggregateNonce = aggregate.version - pendingEvents;
+        throw new ConcurrencyConflictError(expectedAggregateNonce, aggregate.version);
       }
 
       throw new EventStoreError(

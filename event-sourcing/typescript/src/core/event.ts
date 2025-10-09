@@ -33,8 +33,8 @@ export interface EventMetadata {
   /** When the event was recorded by the store */
   readonly recordedTimestamp: Timestamp;
 
-  /** Version of the aggregate when this event was created */
-  readonly aggregateVersion: Version;
+  /** Aggregate nonce (sequence number) when this event was created */
+  readonly aggregateNonce: Version;
 
   /** ID of the aggregate that produced this event */
   readonly aggregateId: string;
@@ -100,7 +100,7 @@ export abstract class BaseDomainEvent implements DomainEvent {
       eventId: generateUuid(),
       timestamp,
       recordedTimestamp,
-      aggregateVersion: params.aggregateVersion,
+      aggregateNonce: params.aggregateNonce,
       aggregateId: params.aggregateId,
       aggregateType: params.aggregateType,
       tenantId: params.tenantId,
@@ -190,7 +190,7 @@ export class EventSerializer {
 export interface EventFactoryParams {
   aggregateId: string;
   aggregateType: string;
-  aggregateVersion: Version;
+  aggregateNonce: Version;
   tenantId?: string;
   globalPosition?: number;
   contentType?: string;
@@ -234,7 +234,7 @@ function metadataFromJson(json: JsonObject): EventMetadata {
     eventId: (json.eventId as UUID) ?? generateUuid(),
     timestamp: baseTimestamp,
     recordedTimestamp,
-    aggregateVersion: Number(json.aggregateVersion ?? 0) as Version,
+    aggregateNonce: Number(json.aggregateNonce ?? json.aggregateVersion ?? 0) as Version,
     aggregateId: String(json.aggregateId ?? ''),
     aggregateType: String(json.aggregateType ?? ''),
     tenantId: json.tenantId === undefined ? undefined : String(json.tenantId),
