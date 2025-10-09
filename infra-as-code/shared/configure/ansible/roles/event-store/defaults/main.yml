@@ -1,0 +1,39 @@
+---
+# Default variables for the event-store role.
+
+# Event Store service configuration
+install_dir: /opt/event-store
+binary_url: ""
+binary_checksum: ""
+service_user: eventstore
+service_group: eventstore
+service_name: eventstore
+service_description: Event Store Service
+
+# Systemd configuration
+systemd_restart: on-failure
+systemd_restart_sec: 5
+
+# Environment configuration
+config_env_path: /etc/event-store/env
+environment_overrides: {}
+
+# PostgreSQL configuration
+postgres_container_name: eventstore-postgres
+postgres_db: eventstore
+postgres_user: eventstore
+postgres_password: "changeme"  # Override in group_vars with Ansible Vault
+postgres_port: 5432
+postgres_data_dir: /var/lib/eventstore/postgres
+docker_compose_dir: /opt/eventstore/docker
+
+# Event Store configuration
+eventstore_grpc_port: 50051
+eventstore_backend: postgres
+eventstore_rust_log: info
+
+# Database URL - can be local PostgreSQL or external (Supabase, RDS)
+eventstore_database_url: "postgres://{{ postgres_user }}:{{ postgres_password }}@postgres:{{ postgres_port }}/{{ postgres_db }}"
+
+# Deploy local PostgreSQL with Docker Compose
+use_local_postgres: true

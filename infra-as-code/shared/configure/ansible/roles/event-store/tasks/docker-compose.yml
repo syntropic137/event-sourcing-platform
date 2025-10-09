@@ -1,0 +1,94 @@
+---
+# Docker Compose deployment tasks
+# Deploy Event Store as a Docker Compose stack
+
+- name: Create Event Store directory
+  ansible.builtin.file:
+    path: /opt/eventstore
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0755"
+
+- name: Check if Docker image exists on local machine
+  delegate_to: localhost
+  become: false
+  ansible.builtin.stat:
+    path: /tmp/event-store-amd64.tar.gz
+  register: local_image
+
+- name: Fail if Docker image not built
+  ansible.builtin.fail:
+    msg: |
+      Docker image not found at /tmp/event-store-amd64.tar.gz
+      
+      Please build the image first:
+        cd infra-as-code && make docker-build-and-save
+  when: not local_image.stat.exists
+
+- name: Transfer Docker image to VM
+  ansible.builtin.copy:
+    src: /tmp/event-store-amd64.tar.gz
+    dest: /tmp/event-store-amd64.tar.gz
+    mode: "0644"
+  register: image_transfer
+
+- name: Load Docker image on VM
+  ansible.builtin.shell:
+    cmd: gunzip -c /tmp/event-store-amd64.tar.gz | docker load
+  when: image_transfer.changed
+  register: image_load
+
+- name: Display image load result
+  ansible.builtin.debug:
+    var: image_load.stdout_lines
+  when: image_transfer.changed
+
+- name: Clean up transferred image file
+  ansible.builtin.file:
+    path: /tmp/event-store-amd64.tar.gz
+    state: absent
+
+- name: Create docker-compose.yml from template
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/eventstore/docker-compose.yml
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0644"
+
+- name: Create .env file from template
+  ansible.builtin.template:
+    src: env.j2
+    dest: /opt/eventstore/.env
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0600"
+
+- name: Start Event Store with Docker Compose
+  community.docker.docker_compose_v2:
+    project_src: /opt/eventstore
+    state: present
+  register: compose_result
+
+- name: Wait for Event Store to be ready
+  ansible.builtin.wait_for:
+    host: localhost
+    port: "{{ eventstore_grpc_port }}"
+    delay: 5
+    timeout: 60
+    state: started
+
+- name: Display Event Store status
+  ansible.builtin.debug:
+    msg: "Event Store is running on port {{ eventstore_grpc_port }}"
+
+- name: Show running containers
+  ansible.builtin.command:
+    cmd: docker ps --filter "name=event-store"
+  register: docker_ps
+  changed_when: false
+
+- name: Display running containers
+  ansible.builtin.debug:
+    var: docker_ps.stdout_lines

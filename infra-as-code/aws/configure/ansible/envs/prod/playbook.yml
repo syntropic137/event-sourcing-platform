@@ -1,0 +1,8 @@
+---
+- name: Configure event store on AWS EC2 instance
+  hosts: event_store
+  become: true
+  vars_files:
+    - group_vars/all.yml
+  roles:
+    - role: ../../../shared/configure/ansible/roles/event-store

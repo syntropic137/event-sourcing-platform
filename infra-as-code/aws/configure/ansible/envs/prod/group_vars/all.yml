@@ -1,0 +1,19 @@
+---
+service_environment:
+  BACKEND: postgres
+  DATABASE_URL: "{{ lookup('aws_secretsmanager', backend_secret_arn) }}"
+  GRPC_PORT: "50051"
+  HTTP_PORT: "8080"
+  METRICS_PORT: "9100"
+  ENVIRONMENT: prod
+
+environment_overrides: {}
+
+backend_secret_arn: arn:aws:secretsmanager:us-west-2:123456789012:secret:event-store/prod/database
+
+binary_url: "https://example-bucket.s3.us-west-2.amazonaws.com/event-store/latest/event-store"
+binary_checksum: "sha256:REPLACE_ME"
+service_user: eventstore
+service_group: eventstore
+service_name: eventstore
+install_dir: /opt/event-store

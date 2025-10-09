@@ -1,0 +1,24 @@
+#cloud-config
+# Basic VM setup - application configuration is handled by Ansible
+
+# User configuration
+user: ${ciuser}
+ssh_authorized_keys:
+  - ${ssh_public_key}
+
+# Package management
+package_update: true
+package_upgrade: true
+packages:
+  - curl
+  - ca-certificates
+  - unzip
+  - python3
+  - python3-pip
+  - qemu-guest-agent
+
+# Start services
+runcmd:
+  - systemctl start qemu-guest-agent
+  - systemctl enable qemu-guest-agent
+  - [ bash, -c, "echo 'VM provisioning complete. Ready for Ansible configuration.'" ]
