@@ -40,6 +40,7 @@ async fn next_event_within(
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn service_append_and_read_with_postgres_backend() {
     // Start Postgres via testcontainers
     use testcontainers::runners::AsyncRunner;
@@ -326,6 +327,7 @@ async fn service_append_concurrency_conflict_exact() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn service_pg_concurrency_conflict_exact() {
     // Use fast dev infrastructure or fallback to testcontainers
     let url = if let Ok(test_url) = std::env::var("TEST_DATABASE_URL") {
@@ -344,14 +346,32 @@ async fn service_pg_concurrency_conflict_exact() {
             .get_host_port_ipv4(5432)
             .await
             .expect("get mapped port");
-        format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres")
+        let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+        
+        // Wait for Postgres to be ready
+        println!("🐳 Waiting for PostgreSQL to be ready...");
+        for attempt in 1..=10 {
+            match sqlx::PgPool::connect(&url).await {
+                Ok(test_pool) => {
+                    println!("🐳 PostgreSQL ready on attempt {attempt}");
+                    test_pool.close().await;
+                    break;
+                }
+                Err(e) if attempt < 10 => {
+                    println!("🐳 Attempt {attempt} failed: {e}, retrying...");
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+                Err(e) => panic!("PostgreSQL not ready after 10 attempts: {e}"),
+            }
+        }
+        url
     };
 
     // Connect Postgres store and spawn server
-    let store = eventstore_backend_postgres::PostgresStore::connect(&url)
+    let store = eventstore_backend_postgres::PostgresStore::connect_for_tests(&url)
         .await
         .expect("connect+init");
-    let (endpoint, _jh) = spawn_server_with_store(store).await;
+    let (endpoint, _jh) = spawn_server_with_store(store.clone()).await;
 
     let mut client = EventStoreClient::connect(endpoint.clone()).await.unwrap();
 
@@ -393,6 +413,9 @@ async fn service_pg_concurrency_conflict_exact() {
         .await
         .expect_err("expected concurrency error");
     assert_eq!(err.code(), tonic::Code::Aborted);
+    
+    // Explicitly close the pool to release connections
+    store.pool().close().await;
 }
 
 #[tokio::test]
