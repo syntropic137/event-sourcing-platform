@@ -1,0 +1,8 @@
+{
+  "label": "Go SDK",
+  "position": 4,
+  "link": {
+    "type": "doc",
+    "id": "event-sourcing/sdks/go/go-sdk"
+  }
+}
