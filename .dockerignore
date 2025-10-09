@@ -1,0 +1,57 @@
+# Rust build artifacts
+target/
+**/target/
+
+# Cargo lock for libraries
+**/Cargo.lock
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Tests
+**/tests/
+
+# Examples
+examples/
+
+# Dev tools
+dev-tools/
+
+# Infrastructure
+infra-as-code/
+
+# CI/CD
+.github/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Node modules (for TypeScript SDK)
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
