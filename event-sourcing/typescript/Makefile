@@ -50,9 +50,12 @@ fmt: install
 lint: install
 	@pnpm exec eslint "src" "tests" --ext .ts
 
-# Type check
+# Type check (src and tests separately to catch all issues)
 type-check: install
+	@echo "Type checking src/..."
 	@pnpm exec tsc --noEmit
+	@echo "Type checking tests/..."
+	@pnpm exec tsc --noEmit --project tsconfig.jest.json
 
 # Run tests
 test: install

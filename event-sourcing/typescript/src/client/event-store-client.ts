@@ -59,7 +59,11 @@ export class EventStoreClientFactory {
       async readEvents(streamName: string, fromVersion?: number) {
         return adapter.readEvents(streamName, fromVersion);
       },
-      async appendEvents(streamName: string, events: EventEnvelope[], expectedAggregateNonce?: number) {
+      async appendEvents(
+        streamName: string,
+        events: EventEnvelope[],
+        expectedAggregateNonce?: number
+      ) {
         return adapter.appendEvents(streamName, events, expectedAggregateNonce);
       },
       async streamExists(streamName: string) {

@@ -38,10 +38,13 @@ export class ConcurrencyConflictError extends BaseEventSourcingError {
   readonly code = 'CONCURRENCY_CONFLICT';
 
   constructor(expectedAggregateNonce: number, actualAggregateNonce: number) {
-    super(`Concurrency conflict: expected aggregate nonce ${expectedAggregateNonce}, got ${actualAggregateNonce}`, {
-      expectedAggregateNonce,
-      actualAggregateNonce,
-    });
+    super(
+      `Concurrency conflict: expected aggregate nonce ${expectedAggregateNonce}, got ${actualAggregateNonce}`,
+      {
+        expectedAggregateNonce,
+        actualAggregateNonce,
+      }
+    );
   }
 }
 
