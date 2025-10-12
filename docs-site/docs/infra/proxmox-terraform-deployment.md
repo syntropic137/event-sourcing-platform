@@ -894,5 +894,3 @@ If the Proxmox console shows "Starting serial terminal interface 00" and gets st
 
 - [Architecture Decisions](./architecture-decisions.md) - Core principles and design decisions
 - [Infrastructure as Code Structure](./infra-as-code-structure.md)
-- [Ansible Configuration Guide](./ansible-configuration.md) *(coming soon)*
-- [AWS Terraform Deployment](./aws-terraform-deployment.md) *(coming soon)*
