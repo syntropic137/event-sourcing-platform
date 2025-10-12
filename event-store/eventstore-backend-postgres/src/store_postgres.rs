@@ -23,15 +23,16 @@ fn batch_fingerprint(events: &[proto::EventData]) -> Vec<u8> {
     let mut hasher = Sha256::new();
     for ev in events {
         if let Some(meta) = &ev.meta {
-            let mut clone = proto::EventData {
-                meta: Some(meta.clone()),
-                payload: ev.payload.clone(),
-            };
-            if let Some(m) = clone.meta.as_mut() {
-                m.recorded_time_unix_ms = 0;
-                m.global_nonce = 0;
-            }
-            hasher.update(clone.encode_to_vec());
+            // Hash metadata fields and payload
+            // Note: We normalize by zeroing out recorded_time_unix_ms and global_nonce
+            // since these are set by the store and not part of the client-provided data
+            let mut normalized_meta = meta.clone();
+            normalized_meta.recorded_time_unix_ms = 0;
+            normalized_meta.global_nonce = 0;
+
+            // Hash the normalized metadata and payload
+            hasher.update(normalized_meta.encode_to_vec());
+            hasher.update(&ev.payload);
         }
     }
     hasher.finalize().to_vec()
@@ -669,9 +670,17 @@ impl EventStoreTrait for PostgresStore {
                         if !rows.is_empty() {
                             let mut items = Vec::with_capacity(rows.len());
                             for row in rows.iter() {
+                                // Always advance cursor to prevent infinite loop on malformed rows
+                                let row_cursor = row.get::<i64, _>("global_nonce");
+                                cursor = cursor.max(row_cursor);
+
                                 if let Ok(event) = row_to_event(row) {
-                                    cursor = row.get::<i64, _>("global_nonce");
                                     items.push(event);
+                                } else {
+                                    // Log warning for malformed row but continue processing
+                                    eprintln!(
+                                        "Warning: Failed to parse event at global_nonce={row_cursor}, skipping"
+                                    );
                                 }
                             }
                             let event = items.first().cloned();

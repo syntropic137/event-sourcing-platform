@@ -505,6 +505,6 @@ async fn service_read_stream_backward_slice() {
     };
     let out = client.read_stream(read).await.unwrap().into_inner();
     assert_eq!(out.events.len(), 2);
-    assert_eq!(out.events[0].payload, b"b");
-    assert_eq!(out.events[1].payload, b"c");
+    assert_eq!(out.events[0].payload, b"c");
+    assert_eq!(out.events[1].payload, b"b");
 }

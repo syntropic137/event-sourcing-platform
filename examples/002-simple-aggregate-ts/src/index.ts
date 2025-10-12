@@ -114,7 +114,9 @@ class OrderAggregate extends AggregateRoot<OrderEvent> {
       this.initialize(command.orderId);
     }
     if (this.status !== OrderStatus.New) {
-      throw new Error("Invalid state");
+      throw new Error(
+        `Cannot submit order: Order is in '${this.status}' state, expected '${OrderStatus.New}'`
+      );
     }
     this.apply(new OrderSubmitted(command.orderId, command.customerId));
   }
@@ -122,7 +124,9 @@ class OrderAggregate extends AggregateRoot<OrderEvent> {
   @CommandHandler("CancelOrderCommand")
   cancel(command: CancelOrderCommand): void {
     if (this.status !== OrderStatus.Submitted) {
-      throw new Error("Invalid state");
+      throw new Error(
+        `Cannot cancel order: Order is in '${this.status}' state, expected '${OrderStatus.Submitted}'`
+      );
     }
     this.apply(new OrderCancelled(command.reason));
   }

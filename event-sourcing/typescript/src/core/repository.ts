@@ -2,10 +2,11 @@
  * Repository pattern for loading and saving aggregates
  */
 
-import { AggregateId } from '../types/common';
-import { Aggregate } from './aggregate';
+import { EventStoreClient } from '../client/event-store-client';
 import { ConcurrencyConflictError, EventStoreError } from './errors';
-import type { EventStoreClient } from '../client/event-store-client';
+import { isConcurrencyError } from '../utils/error-classifier';
+import type { Aggregate } from './aggregate';
+import type { AggregateId } from '../types/common';
 
 /** Repository interface for aggregate persistence */
 export interface Repository<TAggregate extends Aggregate> {
@@ -114,31 +115,7 @@ export class EventStoreRepository<TAggregate extends Aggregate> implements Repos
 
   /** Check if an error is a concurrency error */
   private isConcurrencyError(error: unknown): boolean {
-    if (!error) {
-      return false;
-    }
-
-    if (error instanceof ConcurrencyConflictError) {
-      return true;
-    }
-
-    if (error instanceof Error) {
-      const message = error.message.toLowerCase();
-      return (
-        message.includes('concurrency') ||
-        message.includes('expected version') ||
-        message.includes('precondition')
-      );
-    }
-
-    if (typeof error === 'object' && error !== null) {
-      const code = (error as { code?: unknown }).code;
-      if (typeof code === 'string') {
-        return code.toUpperCase() === 'FAILED_PRECONDITION' || code.toUpperCase() === 'ABORTED';
-      }
-    }
-
-    return false;
+    return isConcurrencyError(error);
   }
 }
 

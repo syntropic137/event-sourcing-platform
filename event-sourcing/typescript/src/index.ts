@@ -26,6 +26,7 @@ export { MemoryEventStoreClient } from './client/event-store-memory';
 
 // Utilities and helpers
 export * from './utils/decorators';
+export * from './utils/error-classifier';
 // Note: AggregateRoot decorator from utils/metadata is NOT exported here
 // to avoid collision with AggregateRoot base class from core/aggregate.
 // Use @Aggregate decorator instead (exported below).
