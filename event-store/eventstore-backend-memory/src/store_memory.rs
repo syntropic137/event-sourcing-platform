@@ -367,6 +367,7 @@ impl EventStore for InMemoryStore {
                 }
             }
         } else {
+            // For backward reads, iterate in reverse to get most recent first
             for ev in events.iter().rev() {
                 let nonce = ev
                     .meta
@@ -382,9 +383,8 @@ impl EventStore for InMemoryStore {
             }
         }
 
-        if !req.forward {
-            page.reverse();
-        }
+        // Note: No need to reverse for backward reads - iter().rev() already
+        // returns events in the correct order (most recent first)
 
         let next_from = if req.forward {
             page.last()

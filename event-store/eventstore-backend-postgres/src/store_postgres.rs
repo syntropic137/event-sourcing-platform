@@ -499,9 +499,8 @@ impl EventStoreTrait for PostgresStore {
             events.push(row_to_event(&row)?);
         }
 
-        if !req.forward {
-            events.reverse();
-        }
+        // Note: No need to reverse for backward reads - the SQL ORDER BY DESC
+        // already returns events in the correct order (most recent first)
 
         let next_from = if req.forward {
             events
