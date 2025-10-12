@@ -1,0 +1,60 @@
+# AWS production environment configuration for the event store deployment.
+# Adjust values per environment and render into Terraform/Ansible variables via the helper script.
+
+aws:
+  region: us-west-2
+  profile: default
+  shared_credentials_file: ~/.aws/credentials
+
+network:
+  vpc_id: vpc-xxxxxxxx
+  public_subnet_ids:
+    - subnet-aaaaaaaa
+    - subnet-bbbbbbbb
+  ssh_allowed_cidrs:
+    - 0.0.0.0/0
+
+compute:
+  instance_type: t3.small
+  ami_id: ami-xxxxxxxx
+  key_pair_name: event-store-prod
+  root_volume_gb: 50
+  ssh_user: ubuntu
+
+security:
+  iam_instance_profile: event-store-instance-profile
+  allow_public_grpc: true
+  allow_public_dashboard: false
+
+postgres:
+  database_url_secret_arn: arn:aws:secretsmanager:us-west-2:123456789012:secret:event-store/prod/database
+  extra_env: {}
+
+metadata:
+  environment: prod
+  owner: platform-team
+  extra_tags:
+    project: event-sourcing-platform
+
+event_store:
+  version: latest
+  grpc_port: 50051
+  http_port: 8080
+  metrics_port: 9100
+
+ansible:
+  inventory_host_group: event_store
+  ssh_user: ubuntu
+  ssh_private_key_path: ~/.ssh/event-store-prod.pem
+  inventory_hostname: aws-event-store
+  host: 0.0.0.0 # replace with elastic IP or public DNS after terraform apply
+  binary:
+    url: https://example-bucket.s3.us-west-2.amazonaws.com/event-store/latest/event-store
+    checksum: sha256:REPLACE_ME
+  service:
+    user: eventstore
+    group: eventstore
+    name: eventstore
+    description: Event Store Service
+    install_dir: /opt/event-store
+  environment_overrides: {}

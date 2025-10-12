@@ -19,12 +19,12 @@ export class MemoryEventStoreClient implements EventStoreClient {
   async appendEvents(
     streamName: string,
     events: EventEnvelope[],
-    expectedVersion?: number
+    expectedAggregateNonce?: number
   ): Promise<void> {
     const existing = this.streams.get(streamName) ?? [];
-    if (expectedVersion !== undefined && existing.length !== expectedVersion) {
+    if (expectedAggregateNonce !== undefined && existing.length !== expectedAggregateNonce) {
       throw new EventStoreError(
-        `Concurrency conflict: expected ${expectedVersion}, got ${existing.length}`
+        `Concurrency conflict: expected aggregate nonce ${expectedAggregateNonce}, got ${existing.length}`
       );
     }
     this.streams.set(streamName, existing.concat(events));

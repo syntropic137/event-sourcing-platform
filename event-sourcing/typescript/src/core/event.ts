@@ -4,6 +4,12 @@
 
 import { UUID, Timestamp, JsonObject, JsonValue, EventType, Version } from '../types/common';
 
+/** Metadata headers map */
+export type MetadataHeaders = Record<string, string>;
+
+/** Arbitrary metadata payload */
+export type CustomMetadata = Record<string, JsonValue>;
+
 /** Trait for domain events */
 export interface DomainEvent {
   /** Get the event type identifier */
@@ -24,8 +30,11 @@ export interface EventMetadata {
   /** When the event occurred */
   readonly timestamp: Timestamp;
 
-  /** Version of the aggregate when this event was created */
-  readonly aggregateVersion: Version;
+  /** When the event was recorded by the store */
+  readonly recordedTimestamp: Timestamp;
+
+  /** Aggregate nonce (sequence number) when this event was created */
+  readonly aggregateNonce: Version;
 
   /** ID of the aggregate that produced this event */
   readonly aggregateId: string;
@@ -33,8 +42,32 @@ export interface EventMetadata {
   /** Type of the aggregate that produced this event */
   readonly aggregateType: string;
 
+  /** Tenant that owns the aggregate */
+  readonly tenantId?: string;
+
+  /** Global position assigned by the store */
+  readonly globalPosition?: number;
+
+  /** Content type associated with the payload */
+  readonly contentType: string;
+
+  /** Optional correlation identifier */
+  readonly correlationId?: string;
+
+  /** Optional causation identifier */
+  readonly causationId?: string;
+
+  /** Optional actor identifier */
+  readonly actorId?: string;
+
+  /** Event headers (often tracing or compression data) */
+  readonly headers: MetadataHeaders;
+
+  /** Optional integrity hash of the payload */
+  readonly payloadHash?: string;
+
   /** Additional metadata */
-  readonly metadata: Record<string, unknown>;
+  readonly customMetadata: CustomMetadata;
 }
 
 /** Event envelope that wraps a domain event with metadata */
@@ -59,19 +92,26 @@ export abstract class BaseDomainEvent implements DomainEvent {
   }
 
   /** Create event metadata */
-  static createMetadata(params: {
-    aggregateId: string;
-    aggregateType: string;
-    aggregateVersion: Version;
-    metadata?: Record<string, unknown>;
-  }): EventMetadata {
+  static createMetadata(params: EventFactoryParams): EventMetadata {
+    const nowIso = new Date().toISOString();
+    const timestamp = params.eventTimestamp ?? nowIso;
+    const recordedTimestamp = params.recordedTimestamp ?? timestamp;
     return {
-      eventId: crypto.randomUUID(),
-      timestamp: new Date().toISOString(),
-      aggregateVersion: params.aggregateVersion,
+      eventId: generateUuid(),
+      timestamp,
+      recordedTimestamp,
+      aggregateNonce: params.aggregateNonce,
       aggregateId: params.aggregateId,
       aggregateType: params.aggregateType,
-      metadata: params.metadata ?? {},
+      tenantId: params.tenantId,
+      globalPosition: params.globalPosition,
+      contentType: params.contentType ?? 'application/json',
+      correlationId: params.correlationId,
+      causationId: params.causationId,
+      actorId: params.actorId,
+      headers: { ...(params.headers ?? {}) },
+      payloadHash: params.payloadHash,
+      customMetadata: { ...(params.customMetadata ?? {}) },
     };
   }
 
@@ -92,12 +132,7 @@ export class EventFactory {
   /** Create an event envelope with generated metadata */
   static create<TEvent extends DomainEvent>(
     event: TEvent,
-    params: {
-      aggregateId: string;
-      aggregateType: string;
-      aggregateVersion: Version;
-      metadata?: Record<string, unknown>;
-    }
+    params: EventFactoryParams
   ): EventEnvelope<TEvent> {
     const metadata = BaseDomainEvent.createMetadata(params);
     return BaseDomainEvent.envelope(event, metadata);
@@ -124,14 +159,14 @@ export class EventSerializer {
         schemaVersion: envelope.event.schemaVersion,
         data: envelope.event.toJson(),
       },
-      metadata: envelope.metadata as unknown as Record<string, JsonValue>,
+      metadata: metadataToJson(envelope.metadata),
     };
   }
 
   /** Deserialize an event envelope from JSON */
   static deserialize(json: JsonObject): EventEnvelope {
     const eventData = json.event as JsonObject;
-    const metadata = json.metadata as unknown as EventMetadata;
+    const metadata = metadataFromJson(json.metadata as JsonObject);
 
     const eventType = eventData.eventType as EventType;
     const EventClass = this.eventRegistry.get(eventType);
@@ -149,4 +184,95 @@ export class EventSerializer {
       metadata,
     };
   }
+}
+
+/** Parameters required to construct metadata for an event */
+export interface EventFactoryParams {
+  aggregateId: string;
+  aggregateType: string;
+  aggregateNonce: Version;
+  tenantId?: string;
+  globalPosition?: number;
+  contentType?: string;
+  correlationId?: string;
+  causationId?: string;
+  actorId?: string;
+  headers?: MetadataHeaders;
+  payloadHash?: string;
+  eventTimestamp?: Timestamp;
+  recordedTimestamp?: Timestamp;
+  customMetadata?: CustomMetadata;
+}
+
+function generateUuid(): UUID {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  // Simple fallback (RFC4122 variant approximation)
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  }) as UUID;
+}
+
+function metadataToJson(metadata: EventMetadata): Record<string, JsonValue> {
+  return {
+    ...metadata,
+    headers: { ...metadata.headers },
+    customMetadata: { ...metadata.customMetadata },
+  } as Record<string, JsonValue>;
+}
+
+function metadataFromJson(json: JsonObject): EventMetadata {
+  const baseTimestamp = (json.timestamp as string | undefined) ?? new Date().toISOString();
+  const recordedTimestamp =
+    (json.recordedTimestamp as string | undefined) ?? baseTimestamp ?? new Date().toISOString();
+
+  return {
+    eventId: (json.eventId as UUID) ?? generateUuid(),
+    timestamp: baseTimestamp,
+    recordedTimestamp,
+    aggregateNonce: Number(json.aggregateNonce ?? json.aggregateVersion ?? 0) as Version,
+    aggregateId: String(json.aggregateId ?? ''),
+    aggregateType: String(json.aggregateType ?? ''),
+    tenantId: json.tenantId === undefined ? undefined : String(json.tenantId),
+    globalPosition:
+      json.globalPosition === undefined ? undefined : Number(json.globalPosition as number),
+    contentType: String(json.contentType ?? 'application/json'),
+    correlationId:
+      json.correlationId === undefined ? undefined : String(json.correlationId as string),
+    causationId: json.causationId === undefined ? undefined : String(json.causationId as string),
+    actorId: json.actorId === undefined ? undefined : String(json.actorId as string),
+    headers: normalizeHeaders(json.headers),
+    payloadHash: json.payloadHash === undefined ? undefined : String(json.payloadHash),
+    customMetadata: normalizeCustomMetadata(json.customMetadata),
+  };
+}
+
+function normalizeHeaders(value: unknown): MetadataHeaders {
+  if (!value || typeof value !== 'object') {
+    return {};
+  }
+
+  const headers: MetadataHeaders = {};
+  for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+      headers[key] = String(val);
+    }
+  }
+  return headers;
+}
+
+function normalizeCustomMetadata(value: unknown): CustomMetadata {
+  if (!value || typeof value !== 'object') {
+    return {};
+  }
+
+  const metadata: CustomMetadata = {};
+  for (const [key, val] of Object.entries(value as Record<string, JsonValue>)) {
+    metadata[key] = val as JsonValue;
+  }
+  return metadata;
 }

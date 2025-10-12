@@ -1,0 +1,23 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - curl
+  - unzip
+  - ca-certificates
+
+write_files:
+  - path: /etc/event-store/env
+    permissions: "0644"
+    owner: root:root
+    content: |
+%{ for key, value in service_environment ~}
+${key}="${replace(value, "\"", "\\\"")}"
+%{ endfor ~}
+
+runcmd:
+  - [ bash, -c, "mkdir -p /opt/event-store" ]
+  - [ bash, -c, "echo 'TODO: Fetch deployment artifact via Ansible'" ]
+  - [ bash, -c, "chown -R ${ssh_user}:${ssh_user} /opt/event-store" ]
+  - [ bash, -c, "systemctl daemon-reload" ]
+  - [ bash, -c, "echo 'Provisioning complete. Execute Ansible configure phase next.'" ]

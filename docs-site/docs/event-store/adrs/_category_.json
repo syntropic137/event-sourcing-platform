@@ -1,0 +1,10 @@
+{
+  "label": "Decision Records",
+  "position": 1,
+  "link": {
+    "type": "doc",
+    "id": "event-store/adrs/README"
+  },
+  "collapsible": true,
+  "collapsed": true
+}

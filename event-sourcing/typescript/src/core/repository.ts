@@ -2,10 +2,11 @@
  * Repository pattern for loading and saving aggregates
  */
 
-import { AggregateId } from '../types/common';
-import { Aggregate } from './aggregate';
-import { DomainEvent, EventEnvelope } from './event';
-import { AggregateNotFoundError, ConcurrencyConflictError, EventStoreError } from './errors';
+import { EventStoreClient } from '../client/event-store-client';
+import { ConcurrencyConflictError, EventStoreError } from './errors';
+import { isConcurrencyError } from '../utils/error-classifier';
+import type { Aggregate } from './aggregate';
+import type { AggregateId } from '../types/common';
 
 /** Repository interface for aggregate persistence */
 export interface Repository<TAggregate extends Aggregate> {
@@ -17,22 +18,6 @@ export interface Repository<TAggregate extends Aggregate> {
 
   /** Check if an aggregate exists */
   exists(aggregateId: AggregateId): Promise<boolean>;
-}
-
-/** Event store client interface for repository implementation */
-export interface EventStoreClient {
-  /** Read events from a stream */
-  readEvents(streamName: string, fromVersion?: number): Promise<EventEnvelope[]>;
-
-  /** Append events to a stream */
-  appendEvents(
-    streamName: string,
-    events: EventEnvelope[],
-    expectedVersion?: number
-  ): Promise<void>;
-
-  /** Check if a stream exists */
-  streamExists(streamName: string): Promise<boolean>;
 }
 
 /** Repository implementation using the event store */
@@ -63,7 +48,7 @@ export class EventStoreRepository<TAggregate extends Aggregate> implements Repos
 
       // Create aggregate and load from events
       const aggregate = this.aggregateFactory();
-      (aggregate as any).loadFromEvents(events);
+      aggregate.rehydrate(events);
 
       return aggregate;
     } catch (error) {
@@ -88,20 +73,19 @@ export class EventStoreRepository<TAggregate extends Aggregate> implements Repos
       const streamName = this.getStreamName(aggregate.id);
       const events = aggregate.getUncommittedEvents();
 
-      // Calculate expected version (current version - number of new events)
-      const expectedVersion = aggregate.version - events.length;
+      // Calculate expected aggregate nonce (current version - number of new events)
+      const expectedAggregateNonce = aggregate.version - events.length;
 
       // Append events to the stream
-      await this.eventStoreClient.appendEvents(streamName, events, expectedVersion);
+      await this.eventStoreClient.appendEvents(streamName, events, expectedAggregateNonce);
 
       // Mark events as committed
       aggregate.markEventsAsCommitted();
     } catch (error) {
       if (this.isConcurrencyError(error)) {
-        throw new ConcurrencyConflictError(
-          aggregate.version - aggregate.getUncommittedEvents().length,
-          aggregate.version
-        );
+        const pendingEvents = aggregate.getUncommittedEvents().length;
+        const expectedAggregateNonce = aggregate.version - pendingEvents;
+        throw new ConcurrencyConflictError(expectedAggregateNonce, aggregate.version);
       }
 
       throw new EventStoreError(
@@ -131,8 +115,7 @@ export class EventStoreRepository<TAggregate extends Aggregate> implements Repos
 
   /** Check if an error is a concurrency error */
   private isConcurrencyError(error: unknown): boolean {
-    // TODO: Implement based on the specific error types from the event store
-    return error instanceof Error && error.message.includes('concurrency');
+    return isConcurrencyError(error);
   }
 }
 
@@ -150,20 +133,24 @@ export class RepositoryFactory {
 }
 
 /** Repository registry for managing multiple repositories */
+type AnyAggregate = Aggregate;
+type AnyRepository = Repository<AnyAggregate>;
+
 export class RepositoryRegistry {
-  private repositories = new Map<string, Repository<any>>();
+  private repositories = new Map<string, AnyRepository>();
 
   /** Register a repository */
   register<TAggregate extends Aggregate>(
     aggregateType: string,
     repository: Repository<TAggregate>
   ): void {
-    this.repositories.set(aggregateType, repository);
+    this.repositories.set(aggregateType, repository as AnyRepository);
   }
 
   /** Get a repository by aggregate type */
   get<TAggregate extends Aggregate>(aggregateType: string): Repository<TAggregate> | null {
-    return this.repositories.get(aggregateType) || null;
+    const repository = this.repositories.get(aggregateType) as Repository<TAggregate> | undefined;
+    return repository ?? null;
   }
 
   /** Get a repository by aggregate type (throws if not found) */

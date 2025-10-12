@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: "${PROJECT_NAME}_${PROJECT_HASH}_postgres"
+    environment:
+      POSTGRES_DB: dev
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - "${PROJECT_NAME}_${PROJECT_HASH}_postgres:/var/lib/postgresql/data"
+    command: >
+      postgres 
+      -c fsync=off 
+      -c synchronous_commit=off
+      -c shared_buffers=128MB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    labels:
+      - "dev-tools.project=${PROJECT_NAME}"
+      - "dev-tools.hash=${PROJECT_HASH}"
+      - "dev-tools.auto-cleanup=true"
+
+  redis:
+    image: redis:7-alpine
+    container_name: "${PROJECT_NAME}_${PROJECT_HASH}_redis"
+    ports:
+      - "${REDIS_PORT}:6379"
+    volumes:
+      - "${PROJECT_NAME}_${PROJECT_HASH}_redis:/data"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    labels:
+      - "dev-tools.project=${PROJECT_NAME}"
+      - "dev-tools.hash=${PROJECT_HASH}"
+      - "dev-tools.auto-cleanup=true"
+
+volumes:
+  "${PROJECT_NAME}_${PROJECT_HASH}_postgres":
+  "${PROJECT_NAME}_${PROJECT_HASH}_redis":

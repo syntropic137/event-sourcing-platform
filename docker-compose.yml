@@ -1,0 +1,53 @@
+services:
+  event-store:
+    build:
+      context: .
+      dockerfile: ./event-store/Dockerfile
+    container_name: event-store
+    ports:
+      - "${GRPC_PORT:-50051}:50051"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      BACKEND: ${BACKEND:-postgres}
+      GRPC_PORT: ${GRPC_PORT:-50051}
+      RUST_LOG: ${RUST_LOG:-info}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "grpcurl", "-plaintext", "localhost:50051", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - eventstore-network
+
+  # Optional PostgreSQL - only runs with --profile local
+  postgres:
+    image: postgres:16-alpine
+    container_name: eventstore-postgres
+    profiles: ["local"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-eventstore}
+      POSTGRES_USER: ${POSTGRES_USER:-eventstore}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-eventstore}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - eventstore-network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  eventstore-network:
+    driver: bridge

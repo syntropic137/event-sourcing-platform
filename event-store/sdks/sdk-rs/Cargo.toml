@@ -1,6 +1,6 @@
 [package]
 name = "eventstore-sdk-rs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -8,6 +8,15 @@ anyhow = "1"
 tonic = { version = "0.12", features = ["transport"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 eventstore-proto = { path = "../../eventstore-proto" }
+
+[dev-dependencies]
+tokio-stream = "0.1"
+tower-http = { version = "0.5.2", features = ["trace"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tonic = { version = "0.12" }
+eventstore-backend-memory = { path = "../../eventstore-backend-memory" }
+eventstore-bin = { path = "../../eventstore-bin" }
+portpicker = "0.1.1"
 
 [lib]
 name = "eventstore_sdk_rs"

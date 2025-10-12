@@ -12,6 +12,9 @@ export interface EventStoreClientConfig extends BaseConfig {
   /** gRPC server address */
   serverAddress: string;
 
+  /** Tenant identifier to scope requests */
+  tenantId?: string;
+
   /** Connection timeout in milliseconds */
   timeoutMs?: number;
 }
@@ -25,7 +28,7 @@ export interface EventStoreClient {
   appendEvents(
     streamName: string,
     events: EventEnvelope[],
-    expectedVersion?: number
+    expectedAggregateNonce?: number
   ): Promise<void>;
 
   /** Check if a stream exists */
@@ -47,14 +50,21 @@ export class EventStoreClientFactory {
 
   /** Create a gRPC-backed event store client using the event-store TS SDK */
   static createGrpcClient(config: EventStoreClientConfig): EventStoreClient {
-    const adapter = new GrpcEventStoreAdapter({ serverAddress: config.serverAddress });
+    const adapter = new GrpcEventStoreAdapter({
+      serverAddress: config.serverAddress,
+      tenantId: config.tenantId ?? 'default',
+    });
     // Provide a simple wrapper with connect/disconnect no-ops to match interface
     return {
       async readEvents(streamName: string, fromVersion?: number) {
         return adapter.readEvents(streamName, fromVersion);
       },
-      async appendEvents(streamName: string, events: EventEnvelope[], expectedVersion?: number) {
-        return adapter.appendEvents(streamName, events, expectedVersion);
+      async appendEvents(
+        streamName: string,
+        events: EventEnvelope[],
+        expectedAggregateNonce?: number
+      ) {
+        return adapter.appendEvents(streamName, events, expectedAggregateNonce);
       },
       async streamExists(streamName: string) {
         return adapter.streamExists(streamName);

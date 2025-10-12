@@ -1,0 +1,8 @@
+{
+  "label": "TypeScript SDK",
+  "position": 1,
+  "link": {
+    "type": "doc",
+    "id": "event-sourcing/sdks/typescript/typescript-sdk"
+  }
+}

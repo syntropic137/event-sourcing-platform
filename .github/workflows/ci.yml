@@ -62,6 +62,7 @@ jobs:
   rust_event_store_full:
     name: event-store • qa-full + coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Keep independent so it runs in parallel with other jobs
     steps:
       - name: Checkout
@@ -84,6 +85,13 @@ jobs:
 
       - name: QA full
         run: make -C event-store qa-full
+        timeout-minutes: 10
+        env:
+          # Testcontainers configuration for CI
+          TESTCONTAINERS_RYUK_DISABLED: true
+          TESTCONTAINERS_CHECKS_DISABLE: true
+          # Reduce testcontainers startup time
+          TESTCONTAINERS_WAIT_STRATEGY_TIMEOUT: 60s
 
       - name: Upload coverage artifacts
         if: always()
@@ -128,7 +136,6 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 9
           run_install: false
 
       - name: Setup Node.js
@@ -136,6 +143,36 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
+
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache generated protobuf files
+        uses: actions/cache@v4
+        with:
+          path: |
+            event-store/sdks/sdk-ts/src/gen
+          key: protobuf-gen-${{ runner.os }}-${{ hashFiles('event-store/eventstore-proto/proto/**/*.proto') }}
+          restore-keys: |
+            protobuf-gen-${{ runner.os }}-
+
+      - name: Cache TypeScript build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            event-sourcing/typescript/dist
+            event-sourcing/typescript/tsconfig.tsbuildinfo
+            event-store/sdks/sdk-ts/dist
+            examples/*/dist
+            node_modules/.cache
+            .turbo
+          key: ts-build-${{ runner.os }}-${{ hashFiles('**/package.json', '**/pnpm-lock.yaml', '**/tsconfig*.json', 'turbo.json') }}-${{ hashFiles('event-sourcing/typescript/src/**/*.ts', 'event-store/sdks/sdk-ts/src/**/*.ts', 'examples/*/src/**/*.ts') }}
+          restore-keys: |
+            ts-build-${{ runner.os }}-${{ hashFiles('**/package.json', '**/pnpm-lock.yaml', '**/tsconfig*.json', 'turbo.json') }}-
+            ts-build-${{ runner.os }}-
 
       - name: Install dependencies (workspace)
         run: pnpm -w install --frozen-lockfile

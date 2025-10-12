@@ -1,0 +1,9 @@
+---
+- name: Configure event store on Proxmox VM
+  hosts: event_store
+  become: true
+  vars_files:
+    - group_vars/all.yml
+  
+  roles:
+    - role: event-store

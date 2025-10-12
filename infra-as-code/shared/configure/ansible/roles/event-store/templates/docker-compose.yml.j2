@@ -1,0 +1,42 @@
+services:
+  event-store:
+    image: event-sourcing-platform-event-store:latest
+    container_name: event-store
+    ports:
+      - "{{ eventstore_grpc_port }}:50051"
+    env_file:
+      - .env
+    restart: unless-stopped
+    networks:
+      - eventstore-network
+
+{% if use_local_postgres | default(false) %}
+  postgres:
+    image: postgres:16-alpine
+    container_name: eventstore-postgres
+    environment:
+      POSTGRES_DB: {{ postgres_db }}
+      POSTGRES_USER: {{ postgres_user }}
+      POSTGRES_PASSWORD: {{ postgres_password }}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "{{ postgres_port }}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{ postgres_user }}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - eventstore-network
+
+volumes:
+  postgres_data:
+    driver: local
+{% endif %}
+
+networks:
+  eventstore-network:
+    driver: bridge

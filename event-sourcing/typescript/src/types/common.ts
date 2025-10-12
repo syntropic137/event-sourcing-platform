@@ -39,9 +39,6 @@ export interface EventSourcingError extends Error {
 
 /** Base configuration for SDK components */
 export interface BaseConfig {
-  /** Event store server address */
-  eventStoreUrl: string;
-
   /** Connection timeout in milliseconds */
   timeoutMs?: number;
 

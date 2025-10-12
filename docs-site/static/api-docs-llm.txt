@@ -1,0 +1,5352 @@
+=== EVENT SOURCING PLATFORM API REFERENCE ===
+Generated: 2025-09-30T05:55:38.270Z
+Format: Plain Text (LLM-optimized)
+
+This document contains comprehensive API documentation for the Event Sourcing Platform,
+formatted for easy consumption by Large Language Models and AI assistants.
+
+Table of Contents:
+1. EVENT STORE SDK API REFERENCE
+2. EVENT SOURCING SDK API REFERENCE
+3. CORE CONCEPTS
+
+================================================================================
+
+
+================================================================================
+SECTION: EVENT STORE SDK API REFERENCE
+================================================================================
+
+
+--- Document: event-store/sdks/api-reference.md ---
+
+=== Event Store SDK API Reference ===
+
+This document provides a comprehensive reference for all Event Store SDK APIs across all supported languages.
+
+=== 📋 Common API Surface ===
+
+All SDKs provide the same core functionality with language-appropriate idioms:
+
+=== 🔧 Client Operations ===
+
+=== appendEvents(request) ===
+
+Appends events to an aggregate with optimistic concurrency control.
+
+Parameters:
+- tenantId (string): Tenant/partition routing key
+- aggregateId (string): Target aggregate identifier
+- aggregateType (string): Aggregate type for routing
+- events (Event[]): Array of events to append
+- expectedAggregateNonce (number): Optimistic concurrency check. Use 0 for brand new streams; otherwise supply the current stream head.
+
+Returns: { lastAggregateNonce, lastGlobalNonce }
+
+=== readStream(request) ===
+
+Reads events from an aggregate stream.
+
+Parameters:
+- aggregateId (string): Target aggregate identifier
+- fromAggregateNonce (number): Starting sequence number (inclusive)
+- maxCount (number): Maximum events to return
+- forward (boolean): Read direction (true = ascending, false = descending)
+
+Returns: { events[], isEnd, nextFromAggregateNonce }
+
+=== subscribe(request) ===
+
+Creates a real-time subscription to event streams.
+
+Parameters:
+- tenantId (string): Tenant/partition routing key
+- aggregateIdPrefix (string): Filter by aggregate id prefix (optional)
+- fromGlobalNonce (number): Starting global position
+
+Returns: AsyncIterator of events
+
+=== 🎯 Event Definition ===
+
+All SDKs use decorators/annotations for event definition:
+
+--- CODE ---
+@Event(\{
+  type: 'com.myco.domain.EventName',
+  revision: 1,
+  contentType: 'application/json' // optional
+\})
+class EventName {
+  constructor(public readonly field: string) {}
+}
+
+--- CODE ---
+
+=== 📦 Language-Specific APIs ===
+
+=== TypeScript SDK ===
+
+=== Installation ===
+
+--- CODE ---
+npm install @eventstore/sdk-ts
+
+--- CODE ---
+
+=== Client Creation ===
+
+--- CODE ---
+import { EventStoreClient } from '@eventstore/sdk-ts';
+
+const client = new EventStoreClient(\{
+  endpoint: 'localhost:50051',
+  credentials: \{
+    username: 'user',
+    password: 'pass'
+  \},
+  tls: \{
+    caCertificate: Buffer.from(caCert),
+    clientCertificate: Buffer.from(clientCert),
+    clientKey: Buffer.from(clientKey)
+  \}
+\});
+
+--- CODE ---
+
+=== Event Decorators ===
+
+--- CODE ---
+import { Event } from '@eventstore/sdk-ts';
+
+@Event(\{
+  type: 'com.myco.order.OrderCreated',
+  revision: 1
+\})
+class OrderCreated {
+  constructor(
+    public readonly orderId: string,
+    public readonly amount: number
+  ) {}
+}
+
+--- CODE ---
+
+=== Error Types ===
+
+--- CODE ---
+import {
+  ConcurrencyError,
+  ConnectionError,
+  ValidationError
+} from '@eventstore/sdk-ts';
+
+try {
+  await client.appendEvents(request);
+} catch (error) {
+  if (error instanceof ConcurrencyError) {
+    // Handle optimistic concurrency failure
+  }
+}
+
+--- CODE ---
+
+=== Python SDK ===
+
+=== Installation ===
+
+--- CODE ---
+pip install eventstore-sdk-py
+
+--- CODE ---
+
+=== Client Creation ===
+
+--- CODE ---
+from eventstore import EventStoreClient
+
+client = EventStoreClient(
+    endpoint="localhost:50051",
+    credentials={
+        "username": "user",
+        "password": "pass"
+    }
+)
+
+--- CODE ---
+
+=== Event Definition ===
+
+--- CODE ---
+from eventstore import event
+
+@event(type="com.myco.order.OrderCreated", revision=1)
+@dataclass
+class OrderCreated:
+    orderid: str
+    amount: float
+
+--- CODE ---
+
+=== Async Operations ===
+
+--- CODE ---
+async with client:
+    # All operations are async
+    response = await client.appendevents(request)
+
+--- CODE ---
+
+=== Rust SDK ===
+
+=== Installation ===
+
+--- CODE ---
+cargo add eventstore-sdk-rs
+
+--- CODE ---
+
+=== Client Creation ===
+
+--- CODE ---
+use eventstoresdkrs::EventStoreClient;
+
+let client = EventStoreClient::new("localhost:50051")
+    .withcredentials("user", "pass")
+    .build()?;
+
+--- CODE ---
+
+=== Event Definition ===
+
+--- CODE ---
+use eventstoresdkrs::Event;
+
+#[derive(Event)]
+#[event(type = "com.myco.order.OrderCreated", revision = 1)]
+struct OrderCreated {
+    pub orderid: String,
+    pub amount: f64,
+}
+
+--- CODE ---
+
+=== Error Handling ===
+
+--- CODE ---
+use eventstoresdkrs::{Error, ConcurrencyError};
+
+match client.appendevents(request).await {
+    Ok(response) => println!("Success: {:?}", response),
+    Err(Error::Concurrency(err)) => {
+        // Handle optimistic concurrency failure
+        println!("Concurrency conflict: {:?}", err);
+    }
+    Err(err) => println!("Other error: {:?}", err),
+}
+
+--- CODE ---
+
+=== 🔐 Authentication & Security ===
+
+=== TLS Configuration ===
+
+TypeScript:
+
+--- CODE ---
+const client = new EventStoreClient({
+  endpoint: 'localhost:50051',
+  tls: {
+    caCertificate: Buffer.from(caCert),
+    clientCertificate: Buffer.from(clientCert),
+    clientKey: Buffer.from(clientKey)
+  }
+});
+
+--- CODE ---
+
+Python:
+
+--- CODE ---
+client = EventStoreClient(
+    endpoint="localhost:50051",
+    tls={
+        "cacertificate": cacertbytes,
+        "clientcertificate": clientcertbytes,
+        "clientkey": clientkeybytes
+    }
+)
+
+--- CODE ---
+
+Rust:
+
+--- CODE ---
+let client = EventStoreClient::new("localhost:50051")
+    .withtlsconfig(TlsConfig {
+        cacertificate: cacert,
+        clientcertificate: clientcert,
+        clientkey: clientkey,
+    })
+    .build()?;
+
+--- CODE ---
+
+=== Connection Management ===
+
+All SDKs provide:
+- Automatic connection pooling
+- Connection retry logic
+- Configurable timeouts
+- Health checks
+
+=== 📊 Performance & Monitoring ===
+
+=== Metrics (TypeScript) ===
+
+--- CODE ---
+import { MetricsCollector } from '@eventstore/sdk-ts';
+
+const metrics = new MetricsCollector();
+client.registerMetrics(metrics);
+
+// Access metrics
+console.log('Request latency:', metrics.getLatency());
+console.log('Error rate:', metrics.getErrorRate());
+
+--- CODE ---
+
+=== Observability (All Languages) ===
+
+- Request/response logging
+- Performance metrics
+- Error tracking
+- Health status endpoints
+
+=== 🔄 Message Context ===
+
+=== Correlation & Causation IDs ===
+
+TypeScript:
+
+--- CODE ---
+import { MessageContext } from '@eventstore/sdk-ts';
+
+MessageContext.set({
+  correlationId: 'req-123',
+  causationId: 'cmd-456'
+});
+
+--- CODE ---
+
+Python:
+
+--- CODE ---
+from eventstore import MessageContext
+
+MessageContext.set(
+    correlationid="req-123",
+    causationid="cmd-456"
+)
+
+--- CODE ---
+
+Rust:
+
+--- CODE ---
+use eventstoresdkrs::MessageContext;
+
+MessageContext::set(
+    correlationid: "req-123",
+    causationid: "cmd-456"
+);
+
+--- CODE ---
+
+=== 🧪 Testing APIs ===
+
+=== Mock Clients ===
+
+TypeScript:
+
+--- CODE ---
+import { MockEventStore } from '@eventstore/sdk-ts';
+
+const mockStore = new MockEventStore();
+const client = new EventStoreClient(config, mockStore);
+
+// Setup expectations
+mockStore.expectappend(request);
+
+--- CODE ---
+
+Python:
+
+--- CODE ---
+from eventstore.testing import MockEventStore
+
+mockstore = MockEventStore()
+client = EventStoreClient(config, mockstore)
+
+=== Setup expectations ===
+
+mockstore.expectappend(request)
+
+--- CODE ---
+
+Rust:
+
+--- CODE ---
+use eventstoresdkrs::testing::MockEventStore;
+
+let mockstore = MockEventStore::new();
+let client = EventStoreClient::new(config).withstore(mockstore);
+
+// Setup expectations
+mockstore.expectappend(request);
+
+--- CODE ---
+
+=== 📋 Type Definitions ===
+
+=== Common Types ===
+
+--- CODE ---
+interface EventStoreClientConfig {
+  endpoint: string;
+  credentials?: {
+    username: string;
+    password: string;
+  };
+  tls?: TlsConfig;
+  connectionTimeout?: number;
+  requestTimeout?: number;
+}
+
+interface AppendRequest {
+  tenantId: string;
+  aggregateId: string;
+  aggregateType: string;
+  events: Event[];
+  expectedAggregateNonce: number;
+}
+
+interface ReadStreamRequest {
+  tenantId: string;
+  aggregateId: string;
+  fromAggregateNonce: number;
+  maxCount: number;
+  forward: boolean;
+}
+
+interface SubscribeRequest {
+  tenantId: string;
+  aggregateIdPrefix?: string;
+  fromGlobalNonce: number;
+}
+
+--- CODE ---
+
+=== 🚨 Error Reference ===
+
+=== Common Errors ===
+
+- ConcurrencyError: Optimistic concurrency conflict
+- ConnectionError: Network or connection issues
+- ValidationError: Invalid request parameters
+- TimeoutError: Request exceeded timeout
+- AuthenticationError: Invalid credentials
+- AuthorizationError: Insufficient permissions
+
+=== Error Handling Patterns ===
+
+--- CODE ---
+// TypeScript error handling
+try {
+  await client.appendEvents(request);
+} catch (error) {
+  switch (error.constructor) {
+    case ConcurrencyError:
+      await handleConcurrencyConflict(error, request);
+      break;
+    case ConnectionError:
+      await retryWithBackoff(request);
+      break;
+    default:
+      throw error;
+  }
+}
+
+--- CODE ---
+
+=== 📚 Additional Resources ===
+
+- SDK Overview - Architecture and workflow
+- TypeScript SDK - Complete TypeScript guide
+- Python SDK - Python implementation guide
+- Rust SDK - Rust native implementation
+- Event Model - Event envelope specification
+- Optimistic Concurrency - Concurrency details
+
+--- Document: event-store/sdks/typescript/typescript-sdk.md ---
+
+=== TypeScript SDK ===
+
+The TypeScript SDK provides a type-safe, decorator-driven interface for interacting with the Event Store. Built with modern TypeScript features and optimized for Node.js and browser environments.
+
+=== 🚀 Installation ===
+
+--- CODE ---
+npm install @eventstore/sdk-ts
+
+--- CODE ---
+
+=== 🎯 Quick Start ===
+
+--- CODE ---
+import { EventStoreClient, Event } from '@eventstore/sdk-ts';
+
+// Define your events
+@Event(\{ type: 'com.myco.order.OrderCreated', revision: 1 \})
+class OrderCreated {
+  constructor(
+    public readonly orderId: string,
+    public readonly amount: number,
+    public readonly currency: string = 'USD'
+  ) {}
+}
+
+@Event(\{ type: 'com.myco.order.OrderShipped', revision: 1 \})
+class OrderShipped {
+  constructor(
+    public readonly orderId: string,
+    public readonly trackingNumber: string
+  ) {}
+}
+
+// Create client
+const client = new EventStoreClient(\{
+  endpoint: 'localhost:50051',
+  // credentials: \{ ... \} // Add auth as needed
+\});
+
+// Append events
+await client.appendEvents(\{
+  aggregateId: 'order-123',
+  aggregateType: 'Order',
+  expectedAggregateNonce: 0, // First event -> stream must not exist yet
+  events: [
+    new OrderCreated('order-123', 99.99, 'USD'),
+    new OrderShipped('order-123', 'TRK123456')
+  ]
+\});
+
+--- CODE ---
+
+=== 📚 API Reference ===
+
+=== Client Configuration ===
+
+--- CODE ---
+interface EventStoreClientConfig {
+  endpoint: string;
+  credentials?: {
+    username: string;
+    password: string;
+  };
+  tls?: {
+    caCertificate?: Buffer;
+    clientCertificate?: Buffer;
+    clientKey?: Buffer;
+  };
+  connectionTimeout?: number;
+  requestTimeout?: number;
+}
+
+--- CODE ---
+
+=== Event Definition ===
+
+--- CODE ---
+@Event({
+  type: string,        // Fully qualified event type name
+  revision: number,    // Schema revision for evolution
+  contentType?: string // Optional: defaults to 'application/json'
+})
+class YourEvent {
+  constructor(
+    // Event properties
+    public readonly prop1: string,
+    public readonly prop2: number
+  ) {}
+}
+
+--- CODE ---
+
+=== Append Operations ===
+
+--- CODE ---
+// Append with optimistic concurrency: expect stream head to be 2
+await client.appendEvents({
+  tenantId: 'tenant-123',
+  aggregateId: 'order-123',
+  aggregateType: 'Order',
+  expectedAggregateNonce: 2,
+  events: [new OrderUpdated('order-123', { status: 'confirmed' })]
+});
+
+// Start a new stream (0 means the aggregate must not exist yet)
+await client.appendEvents({
+  tenantId: 'tenant-123',
+  aggregateId: 'order-456',
+  aggregateType: 'Order',
+  expectedAggregateNonce: 0,
+  events: [new OrderCreated('order-456', 149.99)]
+});
+
+--- CODE ---
+
+=== Read Operations ===
+
+--- CODE ---
+// Read entire stream forward
+const stream = await client.readStream({
+  aggregateId: 'order-123',
+  fromAggregateNonce: 1,  // Start from event 1
+  forward: true,          // Read forward (ascending)
+  maxCount: 100           // Limit results
+});
+
+// Read backward from latest
+const recentEvents = await client.readStream({
+  aggregateId: 'order-123',
+  fromAggregateNonce: 10, // Start from event 10
+  forward: false,         // Read backward (descending)
+  maxCount: 5             // Get last 5 events
+});
+
+--- CODE ---
+
+=== Subscription Operations ===
+
+--- CODE ---
+// Subscribe to all events from beginning
+const subscription1 = await client.subscribe({
+  tenantId: 'tenant-123',
+  fromGlobalNonce: 0  // Start from beginning
+});
+
+// Subscribe to specific aggregate type
+const subscription2 = await client.subscribe({
+  tenantId: 'tenant-123',
+  aggregateIdPrefix: 'Order-',  // Only Order aggregates
+  fromGlobalNonce: 1000         // Start from global position 1000
+});
+
+// Process events
+for await (const event of subscription1) {
+  console.log(Received: ${event.eventType}, event.payload);
+
+  // Acknowledge processing
+  await subscription1.ack(event.globalNonce);
+}
+
+--- CODE ---
+
+=== 🔧 Advanced Usage ===
+
+=== Custom Event Serialization ===
+
+--- CODE ---
+@Event({
+  type: 'com.myco.order.ComplexEvent',
+  revision: 1,
+  contentType: 'application/protobuf'  // Use protobuf serialization
+})
+class ComplexEvent {
+  constructor(
+    public readonly data: Uint8Array,  // Raw protobuf bytes
+    public readonly metadata: Map<string, any>
+  ) {}
+}
+
+--- CODE ---
+
+=== Error Handling ===
+
+--- CODE ---
+try {
+  await client.appendEvents({
+    tenantId: 'tenant-123',
+    aggregateId: 'order-123',
+    aggregateType: 'Order',
+    expectedAggregateNonce: 5,
+    events: [new OrderUpdated('order-123', { status: 'shipped' })]
+  });
+} catch (error) {
+  if (error instanceof ConcurrencyError) {
+    console.log('Concurrency conflict detected!');
+    // Reload current state and retry
+    const currentState = await loadCurrentState('order-123');
+    await retryOperation(currentState);
+  } else if (error instanceof ConnectionError) {
+    console.log('Connection failed, will retry...');
+    await retryWithBackoff();
+  } else {
+    console.error('Unexpected error:', error);
+  }
+}
+
+--- CODE ---
+
+=== Connection Pooling ===
+
+--- CODE ---
+// The client automatically manages connection pooling
+const client = new EventStoreClient({
+  endpoint: 'localhost:50051',
+  connectionTimeout: 5000,
+  requestTimeout: 30000,
+  // Pool configuration is handled internally
+});
+
+--- CODE ---
+
+=== Message Context Propagation ===
+
+--- CODE ---
+import { MessageContext } from '@eventstore/sdk-ts';
+
+// Set correlation and causation IDs for request tracing
+MessageContext.set({
+  correlationId: 'req-123',
+  causationId: 'cmd-456'
+});
+
+// All subsequent operations will include these IDs
+await client.appendEvents({ / ... / });
+
+--- CODE ---
+
+=== 🧪 Testing ===
+
+=== Unit Testing with Mocks ===
+
+--- CODE ---
+import { EventStoreClient, MockEventStore } from '@eventstore/sdk-ts';
+
+const mockStore = new MockEventStore();
+const client = new EventStoreClient({ / config / }, mockStore);
+
+// Setup mock expectations
+mockStore.expectAppend({
+  aggregateId: 'order-123',
+  events: [/ expected events /]
+});
+
+// Run test
+await client.appendEvents(/ test data /);
+
+// Verify expectations
+mockStore.verify();
+
+--- CODE ---
+
+=== Integration Testing ===
+
+--- CODE ---
+import { TestContainers } from '@eventstore/test-utils';
+
+const container = await TestContainers.startEventStore();
+const client = new EventStoreClient({
+  endpoint: container.getEndpoint()
+});
+
+// Run integration tests against real EventStore
+await client.appendEvents({ / test data / });
+
+--- CODE ---
+
+=== 📊 Performance Considerations ===
+
+=== Batching Events ===
+
+--- CODE ---
+// Instead of multiple small appends
+await client.appendEvents({ events: [event1] });
+await client.appendEvents({ events: [event2] });
+await client.appendEvents({ events: [event3] });
+
+// Batch them together
+await client.appendEvents({
+  events: [event1, event2, event3]
+});
+
+--- CODE ---
+
+=== Connection Reuse ===
+
+--- CODE ---
+// Create client once, reuse across requests
+const client = new EventStoreClient({ endpoint: 'localhost:50051' });
+
+// Client maintains connection pool internally
+await client.appendEvents(request1);
+await client.appendEvents(request2);
+
+--- CODE ---
+
+=== Subscription Optimization ===
+
+--- CODE ---
+// Use specific prefixes for better performance
+const subscription = await client.subscribe({
+  tenantId: 'tenant-123',
+  aggregateIdPrefix: 'Order-',  // Only Order events
+  fromGlobalNonce: lastProcessedPosition
+});
+
+--- CODE ---
+
+=== 🐛 Troubleshooting ===
+
+=== Common Issues ===
+
+Connection Timeouts:
+
+--- CODE ---
+const client = new EventStoreClient({
+  endpoint: 'localhost:50051',
+  connectionTimeout: 10000,  // Increase if needed
+  requestTimeout: 60000      // Increase for large payloads
+});
+
+--- CODE ---
+
+Memory Issues with Large Streams:
+
+--- CODE ---
+// Use pagination for large streams
+const pageSize = 100;
+let fromNonce = 1;
+
+while (true) {
+  const page = await client.readStream({
+    aggregateId: 'large-aggregate',
+    fromAggregateNonce: fromNonce,
+    maxCount: pageSize,
+    forward: true
+  });
+
+  if (page.events.length === 0) break;
+
+  // Process page
+  processEvents(page.events);
+
+  fromNonce += page.events.length;
+}
+
+--- CODE ---
+
+=== 📚 Related Documentation ===
+
+- SDK Overview - General SDK architecture
+- API Reference - Complete API documentation
+- Optimistic Concurrency - Concurrency details
+- Event Model - Event structure specification
+
+
+================================================================================
+SECTION: EVENT SOURCING SDK API REFERENCE
+================================================================================
+
+
+--- Document: event-sourcing/sdks/overview/sdk-overview.md ---
+
+=== SDK Overview ===
+
+The Event Sourcing SDK provides high-level abstractions for building event-sourced applications. It sits on top of the Event Store and provides developer-friendly APIs for implementing domain-driven design patterns.
+
+=== 🏗️ Architecture ===
+
+--- CODE ---
+┌─────────────────────────────────────────────────────────────┐
+│                    Your Application                          │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐            │
+│  │ Aggregates │  │ Commands   │  │ Projections│            │
+│  └────────────┘  └────────────┘  └────────────┘            │
+└─────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Event Sourcing SDK (This Layer)                 │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐            │
+│  │ Repository │  │ Serializer │  │ Event Bus  │            │
+│  └────────────┘  └────────────┘  └────────────┘            │
+└─────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Event Store                               │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐            │
+│  │ gRPC API   │  │ PostgreSQL │  │ Streams    │            │
+│  └────────────┘  └────────────┘  └────────────┘            │
+└─────────────────────────────────────────────────────────────┘
+
+--- CODE ---
+
+=== 🎯 Core Abstractions ===
+
+=== Aggregates ===
+
+Purpose: Encapsulate business logic and maintain consistency boundaries
+
+Key Features:
+- Event sourcing lifecycle management
+- Optimistic concurrency control
+- Automatic event application
+- State rehydration from history
+
+When to Use:
+- Modeling business entities with complex behavior
+- Enforcing business rules and invariants
+- Maintaining transactional consistency
+
+=== Repositories ===
+
+Purpose: Persist and retrieve aggregates using the event store
+
+Key Features:
+- Load aggregates by ID
+- Save uncommitted events
+- Handle concurrency conflicts
+- Event serialization/deserialization
+
+When to Use:
+- Saving aggregate changes
+- Loading aggregate state
+- Managing persistence concerns
+
+=== Events ===
+
+Purpose: Represent immutable facts about what happened
+
+Key Features:
+- Strongly-typed event classes
+- Automatic serialization
+- Metadata enrichment
+- Event registration
+
+When to Use:
+- Capturing state changes
+- Building audit trails
+- Enabling event-driven architecture
+
+=== Projections ===
+
+Purpose: Build read models from event streams
+
+Key Features:
+- Subscribe to event streams
+- Maintain denormalized views
+- Support multiple read models
+- Reset and rebuild capability
+
+When to Use:
+- Creating optimized query models
+- Building analytics and reports
+- Implementing CQRS patterns
+
+=== Commands ===
+
+Purpose: Represent intentions to change state
+
+Key Features:
+- Strongly-typed command classes
+- Command handler pattern
+- Validation and authorization hooks
+
+When to Use:
+- Modeling user intentions
+- Implementing use cases
+- Separating reads from writes (CQRS)
+
+=== Queries ===
+
+Purpose: Request information from read models
+
+Key Features:
+- Strongly-typed query classes
+- Query handler pattern
+- Result metadata
+
+When to Use:
+- Querying projections
+- Implementing CQRS read side
+- Building APIs
+
+=== 🔄 Typical Workflow ===
+
+=== 1. Define Events ===
+
+--- CODE ---
+class OrderPlaced extends BaseDomainEvent {
+  constructor(
+    public readonly orderId: string,
+    public readonly customerId: string,
+    public readonly items: LineItem[]
+  ) {
+    super();
+  }
+}
+
+class OrderShipped extends BaseDomainEvent {
+  constructor(
+    public readonly orderId: string,
+    public readonly trackingNumber: string
+  ) {
+    super();
+  }
+}
+
+--- CODE ---
+
+=== 2. Create Aggregate ===
+
+--- CODE ---
+class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+  private status: string = 'new';
+  private customerId: string = '';
+  private items: LineItem[] = [];
+
+  getAggregateType(): string {
+    return 'Order';
+  }
+
+  // Command: Place order
+  place(orderId: string, customerId: string, items: LineItem[]) {
+    // Validate business rules
+    if (items.length === 0) {
+      throw new Error('Order must have at least one item');
+    }
+
+    // Initialize and raise event
+    this.initialize(orderId);
+    this.raiseEvent(new OrderPlaced(orderId, customerId, items));
+  }
+
+  // Command: Ship order
+  ship(trackingNumber: string) {
+    if (this.status !== 'placed') {
+      throw new Error('Can only ship placed orders');
+    }
+    this.raiseEvent(new OrderShipped(this.id!, trackingNumber));
+  }
+
+  // Event handlers
+  @EventSourcingHandler(OrderPlaced)
+  onOrderPlaced(event: OrderPlaced): void {
+    this.status = 'placed';
+    this.customerId = event.customerId;
+    this.items = event.items;
+  }
+
+  @EventSourcingHandler(OrderShipped)
+  onOrderShipped(event: OrderShipped): void {
+    this.status = 'shipped';
+  }
+}
+
+--- CODE ---
+
+=== 3. Setup Repository ===
+
+--- CODE ---
+// Register events
+const serializer = new EventSerializer();
+serializer.registerEvent(OrderPlaced);
+serializer.registerEvent(OrderShipped);
+
+// Create event store client
+const client = EventStoreClientFactory.createGrpcClient({
+  endpoint: 'localhost:50051'
+});
+
+// Create repository
+const factory = new RepositoryFactory(client);
+const orderRepository = factory.create(
+  OrderAggregate,
+  'Order',
+  serializer
+);
+
+--- CODE ---
+
+=== 4. Process Commands ===
+
+--- CODE ---
+// Create new order
+const order = new OrderAggregate();
+order.place('order-123', 'customer-1', [
+  { productId: 'prod-1', quantity: 2, price: 29.99 }
+]);
+await orderRepository.save(order);
+
+// Load and ship order
+const loaded = await orderRepository.load('order-123');
+if (loaded) {
+  loaded.ship('TRACK-123');
+  await orderRepository.save(loaded);
+}
+
+--- CODE ---
+
+=== 5. Build Projections ===
+
+--- CODE ---
+class OrderSummaryProjection implements Projection<OrderSummary> {
+  private summary: OrderSummary = {
+    totalOrders: 0,
+    totalRevenue: 0,
+    ordersByStatus: {}
+  };
+
+  async handleEvent(event: DomainEvent): Promise<void> {
+    if (event instanceof OrderPlaced) {
+      this.summary.totalOrders++;
+      this.summary.totalRevenue += this.calculateTotal(event.items);
+      this.incrementStatus('placed');
+    } else if (event instanceof OrderShipped) {
+      this.decrementStatus('placed');
+      this.incrementStatus('shipped');
+    }
+  }
+
+  getState(): OrderSummary {
+    return this.summary;
+  }
+
+  async reset(): Promise<void> {
+    this.summary = {
+      totalOrders: 0,
+      totalRevenue: 0,
+      ordersByStatus: {}
+    };
+  }
+
+  private calculateTotal(items: LineItem[]): number {
+    return items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  }
+
+  private incrementStatus(status: string): void {
+    this.summary.ordersByStatus[status] = 
+      (this.summary.ordersByStatus[status] || 0) + 1;
+  }
+
+  private decrementStatus(status: string): void {
+    this.summary.ordersByStatus[status] = 
+      (this.summary.ordersByStatus[status] || 0) - 1;
+  }
+}
+
+--- CODE ---
+
+=== 🎨 Design Patterns ===
+
+=== Command Pattern ===
+
+Separate command definition from execution:
+
+--- CODE ---
+interface PlaceOrderCommand extends Command {
+  orderId: string;
+  customerId: string;
+  items: LineItem[];
+}
+
+class PlaceOrderCommandHandler implements CommandHandler<PlaceOrderCommand, OrderAggregate> {
+  constructor(private repository: Repository<OrderAggregate, OrderEvent>) {}
+
+  async handle(command: PlaceOrderCommand): Promise<void> {
+    const order = new OrderAggregate();
+    order.place(command.orderId, command.customerId, command.items);
+    await this.repository.save(order);
+  }
+}
+
+--- CODE ---
+
+=== CQRS Pattern ===
+
+Separate write model (aggregates) from read model (projections):
+
+--- CODE ---
+// Write side: Commands → Aggregates → Events
+await commandHandler.handle(new PlaceOrderCommand(...));
+
+// Read side: Queries → Projections → Results
+const summary = await queryHandler.handle(new GetOrderSummaryQuery());
+
+--- CODE ---
+
+=== Event Bus Pattern ===
+
+Decouple aggregates using event-driven communication:
+
+--- CODE ---
+eventBus.subscribe(OrderPlaced, async (event) => {
+  // Send notification
+  await notificationService.sendOrderConfirmation(event);
+  
+  // Update inventory
+  await inventoryService.reserveItems(event.items);
+});
+
+--- CODE ---
+
+=== 🚀 Best Practices ===
+
+=== 1. Keep Aggregates Small ===
+
+- Focus on a single consistency boundary
+- Avoid loading multiple aggregates in a transaction
+- Use event-driven communication between aggregates
+
+=== 2. Design Events Carefully ===
+
+- Events are immutable and permanent
+- Use past tense naming (OrderPlaced, not PlaceOrder)
+- Include all necessary data in events
+- Version events for schema evolution
+
+=== 3. Handle Concurrency ===
+
+- Always expect and handle ConcurrencyError
+- Implement retry logic with exponential backoff
+- Consider eventual consistency patterns
+
+=== 4. Test Thoroughly ===
+
+- Use in-memory store for fast unit tests
+- Test aggregate behavior with given-when-then pattern
+- Test projections with event replay
+- Test concurrency scenarios
+
+=== 5. Monitor and Observe ===
+
+- Track event processing latency
+- Monitor projection lag
+- Alert on concurrency conflicts
+- Log command execution
+
+=== 📚 Learn More ===
+
+- API Reference - Complete API documentation
+- TypeScript Guide - TypeScript-specific guide
+
+--- Document: event-sourcing/sdks/api-reference.md ---
+
+=== Event Sourcing SDK API Reference ===
+
+This document provides a comprehensive reference for the Event Sourcing SDK APIs across all supported languages.
+
+=== 📋 Common API Surface ===
+
+The Event Sourcing SDK provides high-level abstractions for building event-sourced applications. It builds on top of the Event Store to provide developer-friendly APIs for aggregates, commands, events, projections, and repositories.
+
+=== 🏗️ Core Concepts ===
+
+=== Aggregate ===
+
+A consistency boundary that processes commands and emits events. Aggregates maintain state by replaying their event history.
+
+=== Event ===
+
+An immutable fact about something that happened in the domain. Events are the source of truth.
+
+=== Repository ===
+
+Persistence abstraction for loading and saving aggregates using the event store.
+
+=== Projection ===
+
+Read model builder that subscribes to events and maintains denormalized views.
+
+=== Command ===
+
+An intention to change state, processed by aggregates to produce events.
+
+=== Query ===
+
+A request for information, handled by projections or read models.
+
+=== 📦 TypeScript SDK ===
+
+=== Installation ===
+
+--- CODE ---
+npm install @neurale/event-sourcing-ts
+
+=== or ===
+
+pnpm add @neurale/event-sourcing-ts
+
+--- CODE ---
+
+=== Client Setup ===
+
+--- CODE ---
+import { EventStoreClientFactory, GrpcEventStoreAdapter } from '@neurale/event-sourcing-ts';
+
+// Using gRPC Event Store
+const client = EventStoreClientFactory.createGrpcClient({
+  endpoint: 'localhost:50051',
+  credentials: {
+    username: 'user',
+    password: 'pass'
+  }
+});
+
+// Using in-memory store (for testing)
+const memoryClient = EventStoreClientFactory.createMemoryClient();
+
+--- CODE ---
+
+=== 🎯 Aggregate API ===
+
+=== BaseAggregate<TEvent> ===
+
+Base class for event-sourced aggregates.
+
+=== Properties ===
+
+- id: AggregateId | null - The aggregate's unique identifier
+- version: Version - Current version for optimistic concurrency control
+
+=== Methods ===
+
+=== initialize(id: AggregateId): void ===
+
+Initialize a brand-new aggregate instance with an identifier. Must be called before raising the first event.
+
+--- CODE ---
+class OrderAggregate extends BaseAggregate<OrderEvent> {
+  place(orderId: string, customerId: string) {
+    this.initialize(orderId); // Initialize before first event
+    this.raiseEvent(new OrderPlaced(orderId, customerId));
+  }
+}
+
+--- CODE ---
+
+=== raiseEvent(event: TEvent): void ===
+
+Raise a new domain event. The event will be applied immediately and added to uncommitted events.
+
+--- CODE ---
+this.raiseEvent(new OrderPlaced(orderId, customerId));
+
+--- CODE ---
+
+=== applyEvent(event: TEvent): void ===
+
+Abstract method to apply an event to update aggregate state. Must be implemented by subclasses.
+
+--- CODE ---
+applyEvent(event: OrderEvent): void {
+  if (event instanceof OrderPlaced) {
+    this.status = 'placed';
+    this.customerId = event.customerId;
+  }
+}
+
+--- CODE ---
+
+=== getUncommittedEvents(): EventEnvelope<TEvent>[] ===
+
+Get all uncommitted events that haven't been persisted yet.
+
+=== markEventsAsCommitted(): void ===
+
+Mark all events as committed. Called by repository after successful persistence.
+
+=== hasUncommittedEvents(): boolean ===
+
+Check if the aggregate has any uncommitted events.
+
+=== rehydrate(events: EventEnvelope<TEvent>[]): void ===
+
+Rehydrate the aggregate from committed event history.
+
+=== getAggregateType(): string ===
+
+Abstract method to return the aggregate type name. Must be implemented by subclasses.
+
+--- CODE ---
+getAggregateType(): string {
+  return 'Order';
+}
+
+--- CODE ---
+
+=== AutoDispatchAggregate<TEvent> ===
+
+Enhanced aggregate that automatically dispatches events to handler methods based on event type.
+
+--- CODE ---
+import { AutoDispatchAggregate, EventSourcingHandler } from '@neurale/event-sourcing-ts';
+
+class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+  private status: string = 'new';
+  private customerId: string = '';
+
+  getAggregateType(): string {
+    return 'Order';
+  }
+
+  // Command method
+  place(orderId: string, customerId: string) {
+    this.initialize(orderId);
+    this.raiseEvent(new OrderPlaced(orderId, customerId));
+  }
+
+  // Event handler - automatically called when OrderPlaced is applied
+  @EventSourcingHandler(OrderPlaced)
+  onOrderPlaced(event: OrderPlaced): void {
+    this.status = 'placed';
+    this.customerId = event.customerId;
+  }
+}
+
+--- CODE ---
+
+=== Decorators ===
+
+=== @EventSourcingHandler(EventClass) ===
+
+Decorator to mark a method as an event handler. The method will be automatically called when the specified event type is applied.
+
+--- CODE ---
+@EventSourcingHandler(OrderPlaced)
+onOrderPlaced(event: OrderPlaced): void {
+  // Update aggregate state
+}
+
+--- CODE ---
+
+=== 📝 Event API ===
+
+=== BaseDomainEvent ===
+
+Base class for domain events.
+
+--- CODE ---
+import { BaseDomainEvent } from '@neurale/event-sourcing-ts';
+
+class OrderPlaced extends BaseDomainEvent {
+  constructor(
+    public readonly orderId: string,
+    public readonly customerId: string
+  ) {
+    super();
+  }
+}
+
+--- CODE ---
+
+=== EventSerializer ===
+
+Handles event serialization and deserialization.
+
+=== Methods ===
+
+=== registerEvent(eventClass: EventClass): void ===
+
+Register an event class for serialization/deserialization.
+
+--- CODE ---
+import { EventSerializer } from '@neurale/event-sourcing-ts';
+
+const serializer = new EventSerializer();
+serializer.registerEvent(OrderPlaced);
+serializer.registerEvent(OrderShipped);
+
+--- CODE ---
+
+=== serialize(event: DomainEvent): string ===
+
+Serialize an event to JSON string.
+
+=== deserialize(eventType: string, data: string): DomainEvent ===
+
+Deserialize an event from JSON string.
+
+=== EventFactory ===
+
+Factory for creating event instances.
+
+--- CODE ---
+import { EventFactory } from '@neurale/event-sourcing-ts';
+
+const event = EventFactory.create(
+  'OrderPlaced',
+  { orderId: '123', customerId: 'cust-1' }
+);
+
+--- CODE ---
+
+=== Event Metadata ===
+
+Events are wrapped in envelopes with metadata:
+
+--- CODE ---
+interface EventEnvelope<TEvent extends DomainEvent> {
+  event: TEvent;
+  metadata: EventMetadata;
+}
+
+interface EventMetadata {
+  eventId: string;
+  eventType: string;
+  aggregateId: string;
+  aggregateType: string;
+  aggregateVersion: number;
+  timestamp: Date;
+  correlationId?: string;
+  causationId?: string;
+}
+
+--- CODE ---
+
+=== 🗄️ Repository API ===
+
+=== Repository<TAggregate, TEvent> ===
+
+Interface for aggregate persistence.
+
+--- CODE ---
+interface Repository<TAggregate extends Aggregate<TEvent>, TEvent extends DomainEvent> {
+  load(aggregateId: AggregateId): Promise<TAggregate | null>;
+  save(aggregate: TAggregate): Promise<void>;
+}
+
+--- CODE ---
+
+=== Methods ===
+
+=== load(aggregateId: AggregateId): Promise<TAggregate | null> ===
+
+Load an aggregate by ID. Returns null if the aggregate doesn't exist.
+
+--- CODE ---
+const order = await repository.load('order-123');
+if (order) {
+  // Process the order
+}
+
+--- CODE ---
+
+=== save(aggregate: TAggregate): Promise<void> ===
+
+Save an aggregate's uncommitted events to the event store.
+
+--- CODE ---
+const order = new OrderAggregate();
+order.place('order-123', 'customer-1');
+await repository.save(order);
+
+--- CODE ---
+
+=== RepositoryFactory ===
+
+Factory for creating repository instances.
+
+--- CODE ---
+import { RepositoryFactory } from '@neurale/event-sourcing-ts';
+
+const factory = new RepositoryFactory(eventStoreClient);
+
+const orderRepository = factory.create(
+  OrderAggregate,
+  'Order',
+  serializer
+);
+
+--- CODE ---
+
+=== Methods ===
+
+=== create<TAggregate, TEvent>(aggregateClass, aggregateType, serializer): Repository<TAggregate, TEvent> ===
+
+Create a repository instance for a specific aggregate type.
+
+Parameters:
+- aggregateClass: Constructor function for the aggregate
+- aggregateType: String identifier for the aggregate type
+- serializer: EventSerializer instance with registered events
+
+=== 📊 Projection API ===
+
+=== Projection<TState> ===
+
+Base interface for projections that build read models from events.
+
+--- CODE ---
+interface Projection<TState = any> {
+  handleEvent(event: DomainEvent, metadata: EventMetadata): Promise<void>;
+  getState(): TState;
+  reset(): Promise<void>;
+}
+
+--- CODE ---
+
+=== Methods ===
+
+=== handleEvent(event: DomainEvent, metadata: EventMetadata): Promise<void> ===
+
+Process an event and update the projection state.
+
+--- CODE ---
+class OrderSummaryProjection implements Projection<OrderSummary> {
+  private summary: OrderSummary = { totalOrders: 0, totalRevenue: 0 };
+
+  async handleEvent(event: DomainEvent): Promise<void> {
+    if (event instanceof OrderPlaced) {
+      this.summary.totalOrders++;
+      this.summary.totalRevenue += event.amount;
+    }
+  }
+
+  getState(): OrderSummary {
+    return this.summary;
+  }
+
+  async reset(): Promise<void> {
+    this.summary = { totalOrders: 0, totalRevenue: 0 };
+  }
+}
+
+--- CODE ---
+
+=== getState(): TState ===
+
+Get the current projection state.
+
+=== reset(): Promise<void> ===
+
+Reset the projection to its initial state.
+
+=== 🎯 Command API ===
+
+=== Command ===
+
+Interface for commands that represent intentions to change state.
+
+--- CODE ---
+interface Command {
+  readonly commandId: string;
+  readonly aggregateId: AggregateId;
+  readonly timestamp: Date;
+}
+
+--- CODE ---
+
+=== CommandHandler<TCommand, TAggregate> ===
+
+Interface for command handlers that process commands and update aggregates.
+
+--- CODE ---
+interface CommandHandler<TCommand extends Command, TAggregate extends Aggregate> {
+  handle(command: TCommand, aggregate: TAggregate): Promise<void>;
+}
+
+--- CODE ---
+
+=== Example ===
+
+--- CODE ---
+class PlaceOrderCommandHandler implements CommandHandler<PlaceOrderCommand, OrderAggregate> {
+  async handle(command: PlaceOrderCommand, aggregate: OrderAggregate): Promise<void> {
+    aggregate.place(command.orderId, command.customerId, command.items);
+  }
+}
+
+--- CODE ---
+
+=== CommandBus ===
+
+Interface for routing commands to their handlers. Provides centralized command dispatching with error handling.
+
+--- CODE ---
+interface CommandBus {
+  registerHandler<TCommand extends Command>(
+    commandType: string,
+    handler: CommandHandler<TCommand>
+  ): void;
+  
+  send<TCommand extends Command>(command: TCommand): Promise<CommandResult>;
+}
+
+--- CODE ---
+
+=== Methods ===
+
+=== registerHandler(commandType, handler): void ===
+
+Register a command handler for a specific command type.
+
+=== send(command): Promise<CommandResult> ===
+
+Send a command for processing. Returns a result indicating success or failure.
+
+=== InMemoryCommandBus ===
+
+In-memory implementation of CommandBus for local command routing.
+
+--- CODE ---
+import { InMemoryCommandBus } from '@neurale/event-sourcing-ts';
+
+// Create command bus
+const commandBus = new InMemoryCommandBus();
+
+// Register handlers
+commandBus.registerHandler('PlaceOrderCommand', new PlaceOrderCommandHandler(repository));
+commandBus.registerHandler('CancelOrderCommand', new CancelOrderCommandHandler(repository));
+
+// Send commands
+const result = await commandBus.send(new PlaceOrderCommand({
+  aggregateId: 'order-123',
+  customerId: 'customer-1',
+  items: [{ productId: 'prod-1', quantity: 2 }]
+}));
+
+if (result.success) {
+  console.log('Command processed successfully');
+  console.log('Events produced:', result.events);
+} else {
+  console.error('Command failed:', result.error);
+}
+
+--- CODE ---
+
+=== Error Handling ===
+
+The command bus automatically catches errors and returns them in the result:
+
+--- CODE ---
+const result = await commandBus.send(command);
+
+if (!result.success) {
+  // Handle error
+  switch (result.error) {
+    case 'No handler registered':
+      // Register missing handler
+      break;
+    case 'Validation failed':
+      // Handle validation error
+      break;
+    default:
+      // Handle other errors
+  }
+}
+
+--- CODE ---
+
+=== CommandResult<TEvent> ===
+
+Result of command execution with events and status.
+
+--- CODE ---
+interface CommandResult<TEvent extends DomainEvent = DomainEvent> {
+  readonly events: TEvent[];
+  readonly success: boolean;
+  readonly error?: string;
+}
+
+--- CODE ---
+
+=== 🔍 Query API ===
+
+=== Query<TResult> ===
+
+Interface for queries that request information.
+
+--- CODE ---
+interface Query<TResult = any> {
+  readonly queryId: string;
+  readonly timestamp: Date;
+}
+
+--- CODE ---
+
+=== QueryHandler<TQuery, TResult> ===
+
+Interface for query handlers that process queries and return results.
+
+--- CODE ---
+interface QueryHandler<TQuery extends Query<TResult>, TResult = any> {
+  handle(query: TQuery): Promise<QueryResult<TResult>>;
+}
+
+--- CODE ---
+
+=== QueryResult<TData> ===
+
+Wrapper for query results with metadata.
+
+--- CODE ---
+interface QueryResult<TData = any> {
+  data: TData;
+  metadata: {
+    queryId: string;
+    executedAt: Date;
+    executionTimeMs: number;
+  };
+}
+
+--- CODE ---
+
+=== Example ===
+
+--- CODE ---
+class GetOrderSummaryQuery implements Query<OrderSummary> {
+  readonly queryId: string = uuid();
+  readonly timestamp: Date = new Date();
+}
+
+class GetOrderSummaryQueryHandler implements QueryHandler<GetOrderSummaryQuery, OrderSummary> {
+  constructor(private projection: OrderSummaryProjection) {}
+
+  async handle(query: GetOrderSummaryQuery): Promise<QueryResult<OrderSummary>> {
+    const startTime = Date.now();
+    const data = this.projection.getState();
+    
+    return {
+      data,
+      metadata: {
+        queryId: query.queryId,
+        executedAt: new Date(),
+        executionTimeMs: Date.now() - startTime
+      }
+    };
+  }
+}
+
+--- CODE ---
+
+=== QueryBus ===
+
+Interface for routing queries to their handlers. Provides centralized query dispatching.
+
+--- CODE ---
+interface QueryBus {
+  registerHandler<TQuery extends Query>(
+    queryType: string,
+    handler: QueryHandler<TQuery>
+  ): void;
+  
+  send<TQuery extends Query, TResult = unknown>(
+    query: TQuery
+  ): Promise<QueryResult<TResult>>;
+}
+
+--- CODE ---
+
+=== Methods ===
+
+=== registerHandler(queryType, handler): void ===
+
+Register a query handler for a specific query type.
+
+=== send(query): Promise<QueryResult<TResult>> ===
+
+Execute a query and return the result.
+
+=== InMemoryQueryBus ===
+
+In-memory implementation of QueryBus for local query routing.
+
+--- CODE ---
+import { InMemoryQueryBus } from '@neurale/event-sourcing-ts';
+
+// Create query bus
+const queryBus = new InMemoryQueryBus();
+
+// Register handlers
+queryBus.registerHandler('GetOrderQuery', new GetOrderQueryHandler(projection));
+queryBus.registerHandler('ListOrdersQuery', new ListOrdersQueryHandler(projection));
+
+// Execute queries
+const result = await queryBus.send(new GetOrderQuery({ orderId: 'order-123' }));
+
+if (result.success) {
+  console.log('Query result:', result.data);
+} else {
+  console.error('Query failed:', result.error);
+}
+
+--- CODE ---
+
+=== Query Result Pattern ===
+
+Queries always return a structured result with success status:
+
+--- CODE ---
+const result = await queryBus.send(query);
+
+if (result.success) {
+  // Access data
+  const orders = result.data;
+  processOrders(orders);
+} else {
+  // Handle error
+  console.error('Query failed:', result.error);
+}
+
+--- CODE ---
+
+=== 📊 Projection API (Advanced) ===
+
+=== ProjectionManager ===
+
+Manages multiple projections and coordinates event processing across them.
+
+--- CODE ---
+interface ProjectionManager {
+  register<TEvent extends DomainEvent>(projection: Projection<TEvent>): void;
+  processEvent<TEvent extends DomainEvent>(event: EventEnvelope<TEvent>): Promise<void>;
+  start(): Promise<void>;
+  stop(): Promise<void>;
+}
+
+--- CODE ---
+
+=== Methods ===
+
+=== register(projection): void ===
+
+Register a projection for event processing.
+
+=== processEvent(event): Promise<void> ===
+
+Process an event through all registered projections.
+
+=== start(): Promise<void> ===
+
+Start the projection manager and begin processing events.
+
+=== stop(): Promise<void> ===
+
+Stop the projection manager.
+
+=== InMemoryProjectionManager ===
+
+In-memory implementation for managing projections.
+
+--- CODE ---
+import { InMemoryProjectionManager } from '@neurale/event-sourcing-ts';
+
+// Create projection manager
+const projectionManager = new InMemoryProjectionManager();
+
+// Register projections
+projectionManager.register(new OrderListProjection());
+projectionManager.register(new OrderSummaryProjection());
+projectionManager.register(new SalesReportProjection());
+
+// Start processing
+await projectionManager.start();
+
+// Process events
+await projectionManager.processEvent(eventEnvelope);
+
+// Stop when done
+await projectionManager.stop();
+
+--- CODE ---
+
+=== AutoDispatchProjection<TEvent> ===
+
+Base class for projections with automatic event routing using decorators.
+
+--- CODE ---
+import { AutoDispatchProjection, ProjectionHandler } from '@neurale/event-sourcing-ts';
+
+class OrderListProjection extends AutoDispatchProjection<OrderEvent> {
+  private orders: Map<string, Order> = new Map();
+
+  getName(): string {
+    return 'OrderListProjection';
+  }
+
+  getVersion(): number {
+    return 1;
+  }
+
+  // Automatically called when OrderPlaced event is processed
+  @ProjectionHandler('OrderPlaced')
+  async onOrderPlaced(envelope: EventEnvelope<OrderPlaced>): Promise<void> {
+    const event = envelope.event;
+    this.orders.set(event.orderId, {
+      id: event.orderId,
+      customerId: event.customerId,
+      status: 'placed',
+      createdAt: envelope.metadata.timestamp
+    });
+  }
+
+  // Automatically called when OrderShipped event is processed
+  @ProjectionHandler('OrderShipped')
+  async onOrderShipped(envelope: EventEnvelope<OrderShipped>): Promise<void> {
+    const order = this.orders.get(envelope.event.orderId);
+    if (order) {
+      order.status = 'shipped';
+      order.shippedAt = envelope.metadata.timestamp;
+    }
+  }
+
+  // Query methods
+  getOrder(orderId: string): Order | undefined {
+    return this.orders.get(orderId);
+  }
+
+  getAllOrders(): Order[] {
+    return Array.from(this.orders.values());
+  }
+}
+
+--- CODE ---
+
+=== Benefits of AutoDispatchProjection ===
+
+- Automatic routing: Events are routed to handler methods by type
+- Clean code: Each event type has its own handler method
+- Type safety: TypeScript ensures correct event types
+- Easy to maintain: Adding new event handlers is straightforward
+
+=== @ProjectionHandler Decorator ===
+
+Decorator to mark methods as event handlers in AutoDispatchProjection.
+
+--- CODE ---
+@ProjectionHandler('EventTypeName')
+async onEventName(envelope: EventEnvelope<EventType>): Promise<void> {
+  // Handle event
+}
+
+--- CODE ---
+
+=== 🚨 Error Handling ===
+
+=== Error Types ===
+
+--- CODE ---
+import {
+  InvalidAggregateStateError,
+  ConcurrencyError,
+  EventSerializationError,
+  RepositoryError
+} from '@neurale/event-sourcing-ts';
+
+--- CODE ---
+
+=== InvalidAggregateStateError ===
+
+Thrown when an aggregate is in an invalid state for the requested operation.
+
+=== ConcurrencyError ===
+
+Thrown when optimistic concurrency check fails during save.
+
+=== EventSerializationError ===
+
+Thrown when event serialization/deserialization fails.
+
+=== RepositoryError ===
+
+Thrown when repository operations fail.
+
+=== Error Handling Pattern ===
+
+--- CODE ---
+try {
+  await repository.save(aggregate);
+} catch (error) {
+  if (error instanceof ConcurrencyError) {
+    // Handle concurrency conflict - reload and retry
+    const latest = await repository.load(aggregate.id);
+    // Retry logic
+  } else if (error instanceof InvalidAggregateStateError) {
+    // Handle invalid state
+  } else {
+    throw error;
+  }
+}
+
+--- CODE ---
+
+=== 🧪 Testing Utilities ===
+
+=== MemoryEventStoreClient ===
+
+In-memory event store for testing without external dependencies.
+
+--- CODE ---
+import { MemoryEventStoreClient, RepositoryFactory } from '@neurale/event-sourcing-ts';
+
+// Setup for tests
+const memoryStore = new MemoryEventStoreClient();
+const factory = new RepositoryFactory(memoryStore);
+const repository = factory.create(OrderAggregate, 'Order', serializer);
+
+// Test aggregate behavior
+const order = new OrderAggregate();
+order.place('order-123', 'customer-1');
+await repository.save(order);
+
+const loaded = await repository.load('order-123');
+expect(loaded?.status).toBe('placed');
+
+--- CODE ---
+
+=== Testing Pattern ===
+
+--- CODE ---
+describe('OrderAggregate', () => {
+  let repository: Repository<OrderAggregate, OrderEvent>;
+  let serializer: EventSerializer;
+
+  beforeEach(() => {
+    const memoryStore = new MemoryEventStoreClient();
+    serializer = new EventSerializer();
+    serializer.registerEvent(OrderPlaced);
+    serializer.registerEvent(OrderShipped);
+    
+    const factory = new RepositoryFactory(memoryStore);
+    repository = factory.create(OrderAggregate, 'Order', serializer);
+  });
+
+  it('should place an order', async () => {
+    const order = new OrderAggregate();
+    order.place('order-123', 'customer-1');
+    
+    expect(order.status).toBe('placed');
+    expect(order.hasUncommittedEvents()).toBe(true);
+    
+    await repository.save(order);
+    
+    const loaded = await repository.load('order-123');
+    expect(loaded?.status).toBe('placed');
+  });
+});
+
+--- CODE ---
+
+=== 🔐 Advanced Features ===
+
+=== Message Context ===
+
+Track correlation and causation IDs for distributed tracing.
+
+--- CODE ---
+import { MessageContext } from '@neurale/event-sourcing-ts';
+
+// Set context before processing commands
+MessageContext.set({
+  correlationId: 'request-123',
+  causationId: 'command-456'
+});
+
+// Context is automatically propagated to events
+await repository.save(aggregate);
+
+--- CODE ---
+
+=== Event Metadata Enrichment ===
+
+Automatically enrich events with metadata:
+
+--- CODE ---
+const envelope: EventEnvelope<OrderPlaced> = {
+  event: new OrderPlaced('order-123', 'customer-1'),
+  metadata: {
+    eventId: uuid(),
+    eventType: 'OrderPlaced',
+    aggregateId: 'order-123',
+    aggregateType: 'Order',
+    aggregateVersion: 1,
+    timestamp: new Date(),
+    correlationId: MessageContext.getCorrelationId(),
+    causationId: MessageContext.getCausationId()
+  }
+};
+
+--- CODE ---
+
+=== 📚 Additional Resources ===
+
+- TypeScript SDK Guide - Complete TypeScript implementation guide
+- SDK Overview - Architecture and workflow
+
+=== 🚀 Future SDK Support ===
+
+=== Python SDK (Planned) ===
+
+--- CODE ---
+from neurale.eventsourcing import BaseAggregate, Repository
+
+class OrderAggregate(BaseAggregate):
+    def place(self, orderid: str, customerid: str):
+        self.initialize(orderid)
+        self.raiseevent(OrderPlaced(orderid, customerid))
+
+--- CODE ---
+
+=== Rust SDK (Planned) ===
+
+--- CODE ---
+use neuraleeventsourcing::{BaseAggregate, Repository};
+
+impl OrderAggregate {
+    fn place(&mut self, orderid: String, customerid: String) {
+        self.initialize(orderid.clone());
+        self.raiseevent(OrderPlaced { orderid, customer_id });
+    }
+}
+
+--- CODE ---
+
+=== Go SDK (Planned) ===
+
+--- CODE ---
+import "github.com/neurale/event-sourcing-go"
+
+func (o *OrderAggregate) Place(orderID, customerID string) {
+    o.Initialize(orderID)
+    o.RaiseEvent(OrderPlaced{OrderID: orderID, CustomerID: customerID})
+}
+
+--- CODE ---
+
+--- Document: event-sourcing/sdks/typescript/typescript-sdk.md ---
+
+=== TypeScript SDK Guide ===
+
+Complete guide to building event-sourced applications with the TypeScript SDK.
+
+=== 📦 Installation ===
+
+--- CODE ---
+npm install @neurale/event-sourcing-ts
+
+=== or ===
+
+pnpm add @neurale/event-sourcing-ts
+
+--- CODE ---
+
+=== 🚀 Quick Start ===
+
+=== 1. Setup Event Store Client ===
+
+--- CODE ---
+import { EventStoreClientFactory } from '@neurale/event-sourcing-ts';
+
+// Production: gRPC client
+const client = EventStoreClientFactory.createGrpcClient({
+  endpoint: 'localhost:50051',
+  credentials: {
+    username: 'user',
+    password: 'pass'
+  }
+});
+
+// Development/Testing: In-memory client
+const memoryClient = EventStoreClientFactory.createMemoryClient();
+
+--- CODE ---
+
+=== 2. Define Events ===
+
+--- CODE ---
+import { BaseDomainEvent } from '@neurale/event-sourcing-ts';
+
+class OrderPlaced extends BaseDomainEvent {
+  constructor(
+    public readonly orderId: string,
+    public readonly customerId: string,
+    public readonly items: Array<{ productId: string; quantity: number; price: number }>
+  ) {
+    super();
+  }
+}
+
+class OrderShipped extends BaseDomainEvent {
+  constructor(
+    public readonly orderId: string,
+    public readonly trackingNumber: string
+  ) {
+    super();
+  }
+}
+
+class OrderCancelled extends BaseDomainEvent {
+  constructor(
+    public readonly orderId: string,
+    public readonly reason: string
+  ) {
+    super();
+  }
+}
+
+--- CODE ---
+
+=== 3. Create Aggregate ===
+
+--- CODE ---
+import { AutoDispatchAggregate, EventSourcingHandler } from '@neurale/event-sourcing-ts';
+
+type OrderEvent = OrderPlaced | OrderShipped | OrderCancelled;
+
+class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+  private status: 'new' | 'placed' | 'shipped' | 'cancelled' = 'new';
+  private customerId: string = '';
+  private items: Array<{ productId: string; quantity: number; price: number }> = [];
+  private trackingNumber?: string;
+
+  getAggregateType(): string {
+    return 'Order';
+  }
+
+  // Commands
+  place(orderId: string, customerId: string, items: typeof this.items) {
+    if (items.length === 0) {
+      throw new Error('Order must have at least one item');
+    }
+    this.initialize(orderId);
+    this.raiseEvent(new OrderPlaced(orderId, customerId, items));
+  }
+
+  ship(trackingNumber: string) {
+    if (this.status !== 'placed') {
+      throw new Error('Can only ship placed orders');
+    }
+    this.raiseEvent(new OrderShipped(this.id!, trackingNumber));
+  }
+
+  cancel(reason: string) {
+    if (this.status === 'shipped') {
+      throw new Error('Cannot cancel shipped orders');
+    }
+    if (this.status === 'cancelled') {
+      throw new Error('Order already cancelled');
+    }
+    this.raiseEvent(new OrderCancelled(this.id!, reason));
+  }
+
+  // Event Handlers
+  @EventSourcingHandler(OrderPlaced)
+  onOrderPlaced(event: OrderPlaced): void {
+    this.status = 'placed';
+    this.customerId = event.customerId;
+    this.items = event.items;
+  }
+
+  @EventSourcingHandler(OrderShipped)
+  onOrderShipped(event: OrderShipped): void {
+    this.status = 'shipped';
+    this.trackingNumber = event.trackingNumber;
+  }
+
+  @EventSourcingHandler(OrderCancelled)
+  onOrderCancelled(event: OrderCancelled): void {
+    this.status = 'cancelled';
+  }
+
+  // Getters
+  getStatus() { return this.status; }
+  getCustomerId() { return this.customerId; }
+  getItems() { return [...this.items]; }
+  getTrackingNumber() { return this.trackingNumber; }
+}
+
+--- CODE ---
+
+=== 4. Setup Repository ===
+
+--- CODE ---
+import { EventSerializer, RepositoryFactory } from '@neurale/event-sourcing-ts';
+
+// Register events
+const serializer = new EventSerializer();
+serializer.registerEvent(OrderPlaced);
+serializer.registerEvent(OrderShipped);
+serializer.registerEvent(OrderCancelled);
+
+// Create repository
+const factory = new RepositoryFactory(client);
+const orderRepository = factory.create(
+  OrderAggregate,
+  'Order',
+  serializer
+);
+
+--- CODE ---
+
+=== 5. Use the Repository ===
+
+--- CODE ---
+// Create new order
+const order = new OrderAggregate();
+order.place('order-123', 'customer-1', [
+  { productId: 'prod-1', quantity: 2, price: 29.99 },
+  { productId: 'prod-2', quantity: 1, price: 49.99 }
+]);
+await orderRepository.save(order);
+
+// Load existing order
+const loaded = await orderRepository.load('order-123');
+if (loaded) {
+  console.log('Order status:', loaded.getStatus());
+  
+  // Ship the order
+  loaded.ship('TRACK-123456');
+  await orderRepository.save(loaded);
+}
+
+--- CODE ---
+
+=== 🏗️ Aggregate Patterns ===
+
+=== Pattern 1: AutoDispatchAggregate (Recommended) ===
+
+Uses decorators to automatically route events to handlers:
+
+--- CODE ---
+class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+  @EventSourcingHandler(OrderPlaced)
+  onOrderPlaced(event: OrderPlaced): void {
+    // Update state
+  }
+}
+
+--- CODE ---
+
+Pros:
+- Clean separation of commands and event handlers
+- Type-safe event routing
+- Easy to understand and maintain
+
+Cons:
+- Requires decorator support
+- Slightly more boilerplate
+
+=== Pattern 2: BaseAggregate with Manual Dispatch ===
+
+Manually dispatch events in applyEvent:
+
+--- CODE ---
+class OrderAggregate extends BaseAggregate<OrderEvent> {
+  applyEvent(event: OrderEvent): void {
+    if (event instanceof OrderPlaced) {
+      this.onOrderPlaced(event);
+    } else if (event instanceof OrderShipped) {
+      this.onOrderShipped(event);
+    } else if (event instanceof OrderCancelled) {
+      this.onOrderCancelled(event);
+    }
+  }
+
+  private onOrderPlaced(event: OrderPlaced): void {
+    this.status = 'placed';
+    // ...
+  }
+}
+
+--- CODE ---
+
+Pros:
+- No decorators needed
+- Full control over dispatch logic
+- Can add cross-cutting concerns
+
+Cons:
+- More boilerplate
+- Easy to forget to handle events
+
+=== Pattern 3: State Machine Aggregate ===
+
+Model complex state transitions:
+
+--- CODE ---
+class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+  private state: OrderState = new NewOrderState();
+
+  place(orderId: string, customerId: string, items: LineItem[]) {
+    this.state.place(this, orderId, customerId, items);
+  }
+
+  ship(trackingNumber: string) {
+    this.state.ship(this, trackingNumber);
+  }
+
+  @EventSourcingHandler(OrderPlaced)
+  onOrderPlaced(event: OrderPlaced): void {
+    this.state = new PlacedOrderState();
+    // ...
+  }
+}
+
+interface OrderState {
+  place(aggregate: OrderAggregate, ...args: any[]): void;
+  ship(aggregate: OrderAggregate, trackingNumber: string): void;
+  cancel(aggregate: OrderAggregate, reason: string): void;
+}
+
+class NewOrderState implements OrderState {
+  place(aggregate: OrderAggregate, orderId: string, customerId: string, items: LineItem[]) {
+    aggregate.initialize(orderId);
+    aggregate.raiseEvent(new OrderPlaced(orderId, customerId, items));
+  }
+
+  ship() {
+    throw new Error('Cannot ship order that has not been placed');
+  }
+
+  cancel() {
+    throw new Error('Cannot cancel order that has not been placed');
+  }
+}
+
+--- CODE ---
+
+=== 📝 Event Design ===
+
+=== Event Naming ===
+
+Use past tense and be specific:
+
+--- CODE ---
+// ✅ Good
+class OrderPlaced extends BaseDomainEvent { }
+class PaymentProcessed extends BaseDomainEvent { }
+class InventoryReserved extends BaseDomainEvent { }
+
+// ❌ Bad
+class PlaceOrder extends BaseDomainEvent { }  // Command, not event
+class Order extends BaseDomainEvent { }        // Not specific
+class OrderEvent extends BaseDomainEvent { }   // Too generic
+
+--- CODE ---
+
+=== Event Data ===
+
+Include all necessary information:
+
+--- CODE ---
+// ✅ Good - Complete information
+class OrderPlaced extends BaseDomainEvent {
+  constructor(
+    public readonly orderId: string,
+    public readonly customerId: string,
+    public readonly items: LineItem[],
+    public readonly totalAmount: number,
+    public readonly currency: string,
+    public readonly placedAt: Date
+  ) {
+    super();
+  }
+}
+
+// ❌ Bad - Missing important data
+class OrderPlaced extends BaseDomainEvent {
+  constructor(public readonly orderId: string) {
+    super();
+  }
+}
+
+--- CODE ---
+
+=== Event Versioning ===
+
+Plan for schema evolution:
+
+--- CODE ---
+// Version 1
+class OrderPlacedV1 extends BaseDomainEvent {
+  constructor(
+    public readonly orderId: string,
+    public readonly customerId: string
+  ) {
+    super();
+  }
+}
+
+// Version 2 - Added items
+class OrderPlacedV2 extends BaseDomainEvent {
+  constructor(
+    public readonly orderId: string,
+    public readonly customerId: string,
+    public readonly items: LineItem[]
+  ) {
+    super();
+  }
+}
+
+// Upcaster to migrate old events
+class OrderPlacedUpcaster {
+  upcast(v1: OrderPlacedV1): OrderPlacedV2 {
+    return new OrderPlacedV2(
+      v1.orderId,
+      v1.customerId,
+      [] // Default empty items for old events
+    );
+  }
+}
+
+--- CODE ---
+
+=== 🗄️ Repository Usage ===
+
+=== Basic Operations ===
+
+--- CODE ---
+// Create new aggregate
+const order = new OrderAggregate();
+order.place('order-123', 'customer-1', items);
+await repository.save(order);
+
+// Load existing aggregate
+const loaded = await repository.load('order-123');
+if (!loaded) {
+  throw new Error('Order not found');
+}
+
+// Modify and save
+loaded.ship('TRACK-123');
+await repository.save(loaded);
+
+--- CODE ---
+
+=== Concurrency Handling ===
+
+--- CODE ---
+async function shipOrderWithRetry(orderId: string, trackingNumber: string, maxRetries = 3) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const order = await repository.load(orderId);
+      if (!order) {
+        throw new Error('Order not found');
+      }
+
+      order.ship(trackingNumber);
+      await repository.save(order);
+      return; // Success
+    } catch (error) {
+      if (error instanceof ConcurrencyError && attempt < maxRetries - 1) {
+        // Retry with exponential backoff
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt)  100));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+--- CODE ---
+
+=== Transaction Pattern ===
+
+--- CODE ---
+async function processOrder(orderId: string, customerId: string, items: LineItem[]) {
+  const order = new OrderAggregate();
+  
+  try {
+    // Execute business logic
+    order.place(orderId, customerId, items);
+    
+    // Validate
+    if (order.hasUncommittedEvents()) {
+      // Save atomically
+      await repository.save(order);
+      console.log('Order placed successfully');
+    }
+  } catch (error) {
+    console.error('Failed to place order:', error);
+    throw error;
+  }
+}
+
+--- CODE ---
+
+=== 📊 Building Projections ===
+
+=== Simple Projection ===
+
+--- CODE ---
+import { Projection, DomainEvent, EventMetadata } from '@neurale/event-sourcing-ts';
+
+interface OrderSummary {
+  totalOrders: number;
+  totalRevenue: number;
+  averageOrderValue: number;
+}
+
+class OrderSummaryProjection implements Projection<OrderSummary> {
+  private summary: OrderSummary = {
+    totalOrders: 0,
+    totalRevenue: 0,
+    averageOrderValue: 0
+  };
+
+  async handleEvent(event: DomainEvent, metadata: EventMetadata): Promise<void> {
+    if (event instanceof OrderPlaced) {
+      this.summary.totalOrders++;
+      const orderTotal = event.items.reduce((sum, item) => 
+        sum + item.price  item.quantity, 0
+      );
+      this.summary.totalRevenue += orderTotal;
+      this.summary.averageOrderValue = 
+        this.summary.totalRevenue / this.summary.totalOrders;
+    }
+  }
+
+  getState(): OrderSummary {
+    return { ...this.summary };
+  }
+
+  async reset(): Promise<void> {
+    this.summary = {
+      totalOrders: 0,
+      totalRevenue: 0,
+      averageOrderValue: 0
+    };
+  }
+}
+
+--- CODE ---
+
+=== Projection with Persistence ===
+
+--- CODE ---
+class OrderListProjection implements Projection<Order[]> {
+  private orders: Map<string, Order> = new Map();
+
+  async handleEvent(event: DomainEvent, metadata: EventMetadata): Promise<void> {
+    if (event instanceof OrderPlaced) {
+      this.orders.set(event.orderId, {
+        id: event.orderId,
+        customerId: event.customerId,
+        status: 'placed',
+        items: event.items,
+        createdAt: metadata.timestamp
+      });
+    } else if (event instanceof OrderShipped) {
+      const order = this.orders.get(event.orderId);
+      if (order) {
+        order.status = 'shipped';
+        order.shippedAt = metadata.timestamp;
+      }
+    } else if (event instanceof OrderCancelled) {
+      const order = this.orders.get(event.orderId);
+      if (order) {
+        order.status = 'cancelled';
+        order.cancelledAt = metadata.timestamp;
+      }
+    }
+  }
+
+  getState(): Order[] {
+    return Array.from(this.orders.values());
+  }
+
+  async reset(): Promise<void> {
+    this.orders.clear();
+  }
+
+  // Query methods
+  getOrderById(orderId: string): Order | undefined {
+    return this.orders.get(orderId);
+  }
+
+  getOrdersByCustomer(customerId: string): Order[] {
+    return Array.from(this.orders.values())
+      .filter(order => order.customerId === customerId);
+  }
+
+  getOrdersByStatus(status: string): Order[] {
+    return Array.from(this.orders.values())
+      .filter(order => order.status === status);
+  }
+}
+
+--- CODE ---
+
+=== 🧪 Testing ===
+
+=== Unit Testing Aggregates ===
+
+--- CODE ---
+import { describe, it, expect, beforeEach } from 'vitest';
+
+describe('OrderAggregate', () => {
+  let order: OrderAggregate;
+
+  beforeEach(() => {
+    order = new OrderAggregate();
+  });
+
+  describe('place', () => {
+    it('should place a new order', () => {
+      const items = [{ productId: 'prod-1', quantity: 2, price: 29.99 }];
+      
+      order.place('order-123', 'customer-1', items);
+      
+      expect(order.id).toBe('order-123');
+      expect(order.getStatus()).toBe('placed');
+      expect(order.getCustomerId()).toBe('customer-1');
+      expect(order.hasUncommittedEvents()).toBe(true);
+      
+      const events = order.getUncommittedEvents();
+      expect(events).toHaveLength(1);
+      expect(events[0].event).toBeInstanceOf(OrderPlaced);
+    });
+
+    it('should reject orders with no items', () => {
+      expect(() => {
+        order.place('order-123', 'customer-1', []);
+      }).toThrow('Order must have at least one item');
+    });
+  });
+
+  describe('ship', () => {
+    beforeEach(() => {
+      order.place('order-123', 'customer-1', [
+        { productId: 'prod-1', quantity: 1, price: 29.99 }
+      ]);
+      order.markEventsAsCommitted();
+    });
+
+    it('should ship a placed order', () => {
+      order.ship('TRACK-123');
+      
+      expect(order.getStatus()).toBe('shipped');
+      expect(order.getTrackingNumber()).toBe('TRACK-123');
+    });
+
+    it('should reject shipping non-placed orders', () => {
+      const newOrder = new OrderAggregate();
+      
+      expect(() => {
+        newOrder.ship('TRACK-123');
+      }).toThrow('Can only ship placed orders');
+    });
+  });
+});
+
+--- CODE ---
+
+=== Integration Testing with Repository ===
+
+--- CODE ---
+describe('OrderAggregate Integration', () => {
+  let repository: Repository<OrderAggregate, OrderEvent>;
+  let serializer: EventSerializer;
+
+  beforeEach(() => {
+    const memoryStore = new MemoryEventStoreClient();
+    serializer = new EventSerializer();
+    serializer.registerEvent(OrderPlaced);
+    serializer.registerEvent(OrderShipped);
+    serializer.registerEvent(OrderCancelled);
+    
+    const factory = new RepositoryFactory(memoryStore);
+    repository = factory.create(OrderAggregate, 'Order', serializer);
+  });
+
+  it('should persist and load orders', async () => {
+    // Create and save
+    const order = new OrderAggregate();
+    order.place('order-123', 'customer-1', [
+      { productId: 'prod-1', quantity: 2, price: 29.99 }
+    ]);
+    await repository.save(order);
+
+    // Load and verify
+    const loaded = await repository.load('order-123');
+    expect(loaded).not.toBeNull();
+    expect(loaded?.getStatus()).toBe('placed');
+    expect(loaded?.getCustomerId()).toBe('customer-1');
+  });
+
+  it('should handle full order lifecycle', async () => {
+    // Place order
+    const order = new OrderAggregate();
+    order.place('order-123', 'customer-1', [
+      { productId: 'prod-1', quantity: 1, price: 29.99 }
+    ]);
+    await repository.save(order);
+
+    // Ship order
+    const loaded1 = await repository.load('order-123');
+    loaded1!.ship('TRACK-123');
+    await repository.save(loaded1!);
+
+    // Verify final state
+    const loaded2 = await repository.load('order-123');
+    expect(loaded2?.getStatus()).toBe('shipped');
+    expect(loaded2?.getTrackingNumber()).toBe('TRACK-123');
+  });
+});
+
+--- CODE ---
+
+=== Testing Projections ===
+
+--- CODE ---
+describe('OrderSummaryProjection', () => {
+  let projection: OrderSummaryProjection;
+
+  beforeEach(() => {
+    projection = new OrderSummaryProjection();
+  });
+
+  it('should calculate order summary', async () => {
+    const event1 = new OrderPlaced('order-1', 'customer-1', [
+      { productId: 'prod-1', quantity: 2, price: 29.99 }
+    ]);
+    const event2 = new OrderPlaced('order-2', 'customer-2', [
+      { productId: 'prod-2', quantity: 1, price: 49.99 }
+    ]);
+
+    await projection.handleEvent(event1, createMockMetadata());
+    await projection.handleEvent(event2, createMockMetadata());
+
+    const summary = projection.getState();
+    expect(summary.totalOrders).toBe(2);
+    expect(summary.totalRevenue).toBe(109.97);
+    expect(summary.averageOrderValue).toBeCloseTo(54.985);
+  });
+});
+
+--- CODE ---
+
+=== 🔐 Advanced Features ===
+
+=== Message Context ===
+
+--- CODE ---
+import { MessageContext } from '@neurale/event-sourcing-ts';
+
+// Set context for request tracking
+MessageContext.set({
+  correlationId: 'request-123',
+  causationId: 'command-456'
+});
+
+// Context is automatically propagated to events
+await repository.save(order);
+
+// Events will have correlationId and causationId in metadata
+
+--- CODE ---
+
+=== Custom Event Metadata ===
+
+--- CODE ---
+class OrderPlaced extends BaseDomainEvent {
+  constructor(
+    public readonly orderId: string,
+    public readonly customerId: string,
+    public readonly items: LineItem[],
+    public readonly metadata?: {
+      ipAddress?: string;
+      userAgent?: string;
+      sessionId?: string;
+    }
+  ) {
+    super();
+  }
+}
+
+--- CODE ---
+
+=== 📚 Next Steps ===
+
+- API Reference - Complete API documentation
+- SDK Overview - Architecture and patterns
+
+--- Document: event-sourcing/sdks/typescript/cqrs-guide.md ---
+
+=== Complete CQRS Guide ===
+
+A comprehensive guide to implementing Command Query Responsibility Segregation (CQRS) with the Event Sourcing SDK.
+
+=== 🎯 What is CQRS? ===
+
+Command Query Responsibility Segregation (CQRS) is a pattern that separates read and write operations into different models:
+
+- Commands - Change state (writes)
+- Queries - Read state (reads)
+- Events - Record what happened
+- Projections - Build optimized read models
+
+=== Why Use CQRS? ===
+
+Benefits:
+- Scalability - Scale reads and writes independently
+- Performance - Optimize read models for specific queries
+- Flexibility - Multiple views of the same data
+- Clarity - Clear separation of concerns
+- Audit Trail - Complete history through events
+
+When to Use:
+- Complex business logic with many read patterns
+- High read-to-write ratios
+- Need for multiple denormalized views
+- Audit and compliance requirements
+- Event-driven architectures
+
+When NOT to Use:
+- Simple CRUD applications
+- Small datasets with simple queries
+- Teams unfamiliar with the pattern
+- No performance or scalability concerns
+
+=== 🏗️ CQRS Architecture ===
+
+--- CODE ---
+┌─────────────────────────────────────────────────────────────┐
+│                        Application                           │
+└─────────────────────────────────────────────────────────────┘
+                          │
+          ┌───────────────┴───────────────┐
+          │                               │
+          ▼                               ▼
+┌──────────────────┐            ┌──────────────────┐
+│  WRITE SIDE      │            │   READ SIDE      │
+│  (Commands)      │            │   (Queries)      │
+│                  │            │                  │
+│  CommandBus      │            │   QueryBus       │
+│      │           │            │      │           │
+│      ▼           │            │      ▼           │
+│  CommandHandler  │            │  QueryHandler    │
+│      │           │            │      │           │
+│      ▼           │            │      ▼           │
+│  Aggregate       │            │  Projection      │
+│      │           │            │      ▲           │
+│      ▼           │            │      │           │
+│  Events ─────────┼────────────┼──────┘           │
+│      │           │            │                  │
+│      ▼           │            │                  │
+│  Event Store     │            │                  │
+└──────────────────┘            └──────────────────┘
+
+--- CODE ---
+
+=== 📝 Command Side: Writing Data ===
+
+Commands represent intentions to change state. They are processed by command handlers which update aggregates and produce events.
+
+=== Step 1: Define Commands ===
+
+Commands should be named with imperative verbs (PlaceOrder, CancelOrder, UpdateAddress).
+
+--- CODE ---
+import { Command } from '@neurale/event-sourcing-ts';
+
+// Command interface
+interface PlaceOrderCommand extends Command {
+  aggregateId: string;  // Order ID
+  customerId: string;
+  items: Array<{
+    productId: string;
+    quantity: number;
+    price: number;
+  }>;
+}
+
+interface CancelOrderCommand extends Command {
+  aggregateId: string;  // Order ID
+  reason: string;
+}
+
+interface ShipOrderCommand extends Command {
+  aggregateId: string;  // Order ID
+  trackingNumber: string;
+  carrier: string;
+}
+
+--- CODE ---
+
+=== Step 2: Create Command Handlers ===
+
+Command handlers contain the business logic for processing commands.
+
+--- CODE ---
+import { CommandHandler, CommandResult } from '@neurale/event-sourcing-ts';
+
+class PlaceOrderCommandHandler implements CommandHandler<PlaceOrderCommand, OrderEvent> {
+  constructor(
+    private repository: Repository<OrderAggregate, OrderEvent>
+  ) {}
+
+  async handle(command: PlaceOrderCommand): Promise<CommandResult<OrderEvent>> {
+    try {
+      // Validate command
+      if (command.items.length === 0) {
+        return {
+          events: [],
+          success: false,
+          error: 'Order must have at least one item'
+        };
+      }
+
+      // Create new aggregate
+      const order = new OrderAggregate();
+      order.place(command.aggregateId, command.customerId, command.items);
+
+      // Save to repository
+      await this.repository.save(order);
+
+      // Return success with events
+      return {
+        events: order.getUncommittedEvents().map(e => e.event),
+        success: true
+      };
+    } catch (error) {
+      return {
+        events: [],
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+}
+
+class CancelOrderCommandHandler implements CommandHandler<CancelOrderCommand, OrderEvent> {
+  constructor(
+    private repository: Repository<OrderAggregate, OrderEvent>
+  ) {}
+
+  async handle(command: CancelOrderCommand): Promise<CommandResult<OrderEvent>> {
+    try {
+      // Load existing aggregate
+      const order = await this.repository.load(command.aggregateId);
+      
+      if (!order) {
+        return {
+          events: [],
+          success: false,
+          error: Order ${command.aggregateId} not found
+        };
+      }
+
+      // Execute business logic
+      order.cancel(command.reason);
+
+      // Save changes
+      await this.repository.save(order);
+
+      return {
+        events: order.getUncommittedEvents().map(e => e.event),
+        success: true
+      };
+    } catch (error) {
+      return {
+        events: [],
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+}
+
+--- CODE ---
+
+=== Step 3: Setup CommandBus ===
+
+The CommandBus routes commands to their handlers.
+
+--- CODE ---
+import { InMemoryCommandBus } from '@neurale/event-sourcing-ts';
+
+// Create command bus
+const commandBus = new InMemoryCommandBus();
+
+// Register handlers
+commandBus.registerHandler(
+  'PlaceOrderCommand',
+  new PlaceOrderCommandHandler(orderRepository)
+);
+
+commandBus.registerHandler(
+  'CancelOrderCommand',
+  new CancelOrderCommandHandler(orderRepository)
+);
+
+commandBus.registerHandler(
+  'ShipOrderCommand',
+  new ShipOrderCommandHandler(orderRepository)
+);
+
+--- CODE ---
+
+=== Step 4: Send Commands ===
+
+--- CODE ---
+// Place an order
+const placeOrderCommand: PlaceOrderCommand = {
+  aggregateId: 'order-123',
+  customerId: 'customer-1',
+  items: [
+    { productId: 'prod-1', quantity: 2, price: 29.99 },
+    { productId: 'prod-2', quantity: 1, price: 49.99 }
+  ]
+};
+
+const result = await commandBus.send(placeOrderCommand);
+
+if (result.success) {
+  console.log('Order placed successfully');
+  console.log('Events produced:', result.events.length);
+} else {
+  console.error('Failed to place order:', result.error);
+}
+
+// Cancel the order
+const cancelCommand: CancelOrderCommand = {
+  aggregateId: 'order-123',
+  reason: 'Customer requested cancellation'
+};
+
+const cancelResult = await commandBus.send(cancelCommand);
+
+--- CODE ---
+
+=== Command Validation ===
+
+Add validation before processing:
+
+--- CODE ---
+class PlaceOrderCommandHandler implements CommandHandler<PlaceOrderCommand, OrderEvent> {
+  async handle(command: PlaceOrderCommand): Promise<CommandResult<OrderEvent>> {
+    // Validate command
+    const errors = this.validate(command);
+    if (errors.length > 0) {
+      return {
+        events: [],
+        success: false,
+        error: errors.join(', ')
+      };
+    }
+
+    // Process command...
+  }
+
+  private validate(command: PlaceOrderCommand): string[] {
+    const errors: string[] = [];
+
+    if (!command.aggregateId) {
+      errors.push('Order ID is required');
+    }
+
+    if (!command.customerId) {
+      errors.push('Customer ID is required');
+    }
+
+    if (command.items.length === 0) {
+      errors.push('Order must have at least one item');
+    }
+
+    for (const item of command.items) {
+      if (item.quantity <= 0) {
+        errors.push(Invalid quantity for product ${item.productId});
+      }
+      if (item.price < 0) {
+        errors.push(Invalid price for product ${item.productId});
+      }
+    }
+
+    return errors;
+  }
+}
+
+--- CODE ---
+
+=== 🔍 Query Side: Reading Data ===
+
+Queries request information from read models (projections). They don't change state.
+
+=== Step 1: Define Queries ===
+
+Queries should be named with question words (GetOrder, ListOrders, FindCustomer).
+
+--- CODE ---
+import { Query } from '@neurale/event-sourcing-ts';
+
+interface GetOrderQuery extends Query {
+  orderId: string;
+}
+
+interface ListOrdersQuery extends Query {
+  customerId?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}
+
+interface GetOrderSummaryQuery extends Query {
+  // No parameters - returns overall summary
+}
+
+--- CODE ---
+
+=== Step 2: Create Query Handlers ===
+
+Query handlers retrieve data from projections.
+
+--- CODE ---
+import { QueryHandler, QueryResult } from '@neurale/event-sourcing-ts';
+
+class GetOrderQueryHandler implements QueryHandler<GetOrderQuery, Order> {
+  constructor(private projection: OrderListProjection) {}
+
+  async handle(query: GetOrderQuery): Promise<QueryResult<Order>> {
+    try {
+      const order = this.projection.getOrder(query.orderId);
+
+      if (!order) {
+        return {
+          data: null as any,
+          success: false,
+          error: Order ${query.orderId} not found
+        };
+      }
+
+      return {
+        data: order,
+        success: true
+      };
+    } catch (error) {
+      return {
+        data: null as any,
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  canHandle(queryType: string): boolean {
+    return queryType === 'GetOrderQuery';
+  }
+}
+
+class ListOrdersQueryHandler implements QueryHandler<ListOrdersQuery, Order[]> {
+  constructor(private projection: OrderListProjection) {}
+
+  async handle(query: ListOrdersQuery): Promise<QueryResult<Order[]>> {
+    try {
+      let orders = this.projection.getAllOrders();
+
+      // Apply filters
+      if (query.customerId) {
+        orders = orders.filter(o => o.customerId === query.customerId);
+      }
+
+      if (query.status) {
+        orders = orders.filter(o => o.status === query.status);
+      }
+
+      // Apply pagination
+      const offset = query.offset || 0;
+      const limit = query.limit || 100;
+      orders = orders.slice(offset, offset + limit);
+
+      return {
+        data: orders,
+        success: true
+      };
+    } catch (error) {
+      return {
+        data: [],
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  canHandle(queryType: string): boolean {
+    return queryType === 'ListOrdersQuery';
+  }
+}
+
+--- CODE ---
+
+=== Step 3: Setup QueryBus ===
+
+--- CODE ---
+import { InMemoryQueryBus } from '@neurale/event-sourcing-ts';
+
+// Create query bus
+const queryBus = new InMemoryQueryBus();
+
+// Register handlers
+queryBus.registerHandler(
+  'GetOrderQuery',
+  new GetOrderQueryHandler(orderListProjection)
+);
+
+queryBus.registerHandler(
+  'ListOrdersQuery',
+  new ListOrdersQueryHandler(orderListProjection)
+);
+
+queryBus.registerHandler(
+  'GetOrderSummaryQuery',
+  new GetOrderSummaryQueryHandler(orderSummaryProjection)
+);
+
+--- CODE ---
+
+=== Step 4: Execute Queries ===
+
+--- CODE ---
+// Get a single order
+const getQuery: GetOrderQuery = {
+  orderId: 'order-123'
+};
+
+const result = await queryBus.send<GetOrderQuery, Order>(getQuery);
+
+if (result.success) {
+  console.log('Order:', result.data);
+  console.log('Status:', result.data.status);
+} else {
+  console.error('Query failed:', result.error);
+}
+
+// List orders for a customer
+const listQuery: ListOrdersQuery = {
+  customerId: 'customer-1',
+  status: 'placed',
+  limit: 10
+};
+
+const listResult = await queryBus.send<ListOrdersQuery, Order[]>(listQuery);
+
+if (listResult.success) {
+  console.log(Found ${listResult.data.length} orders);
+  listResult.data.forEach(order => {
+    console.log(- ${order.id}: ${order.status});
+  });
+}
+
+--- CODE ---
+
+=== 📊 Projection Side: Building Read Models ===
+
+Projections listen to events and build optimized read models for queries.
+
+=== Step 1: Create Projections ===
+
+Use AutoDispatchProjection for automatic event routing:
+
+--- CODE ---
+import { AutoDispatchProjection, ProjectionHandler, EventEnvelope } from '@neurale/event-sourcing-ts';
+
+class OrderListProjection extends AutoDispatchProjection<OrderEvent> {
+  private orders: Map<string, Order> = new Map();
+
+  getName(): string {
+    return 'OrderListProjection';
+  }
+
+  getVersion(): number {
+    return 1;
+  }
+
+  // Event handlers - automatically called by event type
+  @ProjectionHandler('OrderPlaced')
+  async onOrderPlaced(envelope: EventEnvelope<OrderPlaced>): Promise<void> {
+    const event = envelope.event;
+    this.orders.set(event.orderId, {
+      id: event.orderId,
+      customerId: event.customerId,
+      items: event.items,
+      status: 'placed',
+      totalAmount: this.calculateTotal(event.items),
+      createdAt: envelope.metadata.timestamp,
+      updatedAt: envelope.metadata.timestamp
+    });
+  }
+
+  @ProjectionHandler('OrderShipped')
+  async onOrderShipped(envelope: EventEnvelope<OrderShipped>): Promise<void> {
+    const order = this.orders.get(envelope.event.orderId);
+    if (order) {
+      order.status = 'shipped';
+      order.trackingNumber = envelope.event.trackingNumber;
+      order.shippedAt = envelope.metadata.timestamp;
+      order.updatedAt = envelope.metadata.timestamp;
+    }
+  }
+
+  @ProjectionHandler('OrderCancelled')
+  async onOrderCancelled(envelope: EventEnvelope<OrderCancelled>): Promise<void> {
+    const order = this.orders.get(envelope.event.orderId);
+    if (order) {
+      order.status = 'cancelled';
+      order.cancellationReason = envelope.event.reason;
+      order.cancelledAt = envelope.metadata.timestamp;
+      order.updatedAt = envelope.metadata.timestamp;
+    }
+  }
+
+  // Query methods
+  getOrder(orderId: string): Order | undefined {
+    return this.orders.get(orderId);
+  }
+
+  getAllOrders(): Order[] {
+    return Array.from(this.orders.values());
+  }
+
+  getOrdersByCustomer(customerId: string): Order[] {
+    return Array.from(this.orders.values())
+      .filter(order => order.customerId === customerId);
+  }
+
+  getOrdersByStatus(status: string): Order[] {
+    return Array.from(this.orders.values())
+      .filter(order => order.status === status);
+  }
+
+  private calculateTotal(items: Array<{ price: number; quantity: number }>): number {
+    return items.reduce((sum, item) => sum + item.price  item.quantity, 0);
+  }
+}
+
+class OrderSummaryProjection extends AutoDispatchProjection<OrderEvent> {
+  private summary = {
+    totalOrders: 0,
+    totalRevenue: 0,
+    ordersByStatus: {} as Record<string, number>
+  };
+
+  getName(): string {
+    return 'OrderSummaryProjection';
+  }
+
+  getVersion(): number {
+    return 1;
+  }
+
+  @ProjectionHandler('OrderPlaced')
+  async onOrderPlaced(envelope: EventEnvelope<OrderPlaced>): Promise<void> {
+    this.summary.totalOrders++;
+    const total = envelope.event.items.reduce(
+      (sum, item) => sum + item.price  item.quantity,
+      0
+    );
+    this.summary.totalRevenue += total;
+    this.incrementStatus('placed');
+  }
+
+  @ProjectionHandler('OrderShipped')
+  async onOrderShipped(envelope: EventEnvelope<OrderShipped>): Promise<void> {
+    this.decrementStatus('placed');
+    this.incrementStatus('shipped');
+  }
+
+  @ProjectionHandler('OrderCancelled')
+  async onOrderCancelled(envelope: EventEnvelope<OrderCancelled>): Promise<void> {
+    this.decrementStatus('placed');
+    this.incrementStatus('cancelled');
+  }
+
+  getSummary() {
+    return { ...this.summary };
+  }
+
+  private incrementStatus(status: string): void {
+    this.summary.ordersByStatus[status] = 
+      (this.summary.ordersByStatus[status] || 0) + 1;
+  }
+
+  private decrementStatus(status: string): void {
+    this.summary.ordersByStatus[status] = 
+      Math.max(0, (this.summary.ordersByStatus[status] || 0) - 1);
+  }
+}
+
+--- CODE ---
+
+=== Step 2: Setup ProjectionManager ===
+
+--- CODE ---
+import { InMemoryProjectionManager } from '@neurale/event-sourcing-ts';
+
+// Create projection manager
+const projectionManager = new InMemoryProjectionManager();
+
+// Create and register projections
+const orderListProjection = new OrderListProjection();
+const orderSummaryProjection = new OrderSummaryProjection();
+
+projectionManager.register(orderListProjection);
+projectionManager.register(orderSummaryProjection);
+
+// Start processing
+await projectionManager.start();
+
+--- CODE ---
+
+=== Step 3: Process Events ===
+
+Events from aggregates are automatically processed by projections:
+
+--- CODE ---
+// After saving an aggregate, process its events through projections
+const order = new OrderAggregate();
+order.place('order-123', 'customer-1', items);
+
+await orderRepository.save(order);
+
+// Process events through projections
+const events = order.getUncommittedEvents();
+for (const envelope of events) {
+  await projectionManager.processEvent(envelope);
+}
+
+--- CODE ---
+
+=== 🔄 Complete Integration Example ===
+
+Here's how all the pieces work together:
+
+--- CODE ---
+import {
+  InMemoryCommandBus,
+  InMemoryQueryBus,
+  InMemoryProjectionManager,
+  EventStoreClientFactory,
+  RepositoryFactory,
+  EventSerializer
+} from '@neurale/event-sourcing-ts';
+
+// 1. Setup Event Store and Repository
+const eventStoreClient = EventStoreClientFactory.createMemoryClient();
+await eventStoreClient.connect();
+
+const serializer = new EventSerializer();
+serializer.registerEvent(OrderPlaced);
+serializer.registerEvent(OrderShipped);
+serializer.registerEvent(OrderCancelled);
+
+const repositoryFactory = new RepositoryFactory(eventStoreClient);
+const orderRepository = repositoryFactory.create(
+  OrderAggregate,
+  'Order',
+  serializer
+);
+
+// 2. Setup Projections
+const projectionManager = new InMemoryProjectionManager();
+const orderListProjection = new OrderListProjection();
+const orderSummaryProjection = new OrderSummaryProjection();
+
+projectionManager.register(orderListProjection);
+projectionManager.register(orderSummaryProjection);
+await projectionManager.start();
+
+// 3. Setup Command Bus
+const commandBus = new InMemoryCommandBus();
+commandBus.registerHandler(
+  'PlaceOrderCommand',
+  new PlaceOrderCommandHandler(orderRepository, projectionManager)
+);
+commandBus.registerHandler(
+  'CancelOrderCommand',
+  new CancelOrderCommandHandler(orderRepository, projectionManager)
+);
+
+// 4. Setup Query Bus
+const queryBus = new InMemoryQueryBus();
+queryBus.registerHandler(
+  'GetOrderQuery',
+  new GetOrderQueryHandler(orderListProjection)
+);
+queryBus.registerHandler(
+  'ListOrdersQuery',
+  new ListOrdersQueryHandler(orderListProjection)
+);
+queryBus.registerHandler(
+  'GetOrderSummaryQuery',
+  new GetOrderSummaryQueryHandler(orderSummaryProjection)
+);
+
+// 5. Use the system
+async function placeAndQueryOrder() {
+  // Send command
+  const placeResult = await commandBus.send({
+    aggregateId: 'order-123',
+    customerId: 'customer-1',
+    items: [{ productId: 'prod-1', quantity: 2, price: 29.99 }]
+  } as PlaceOrderCommand);
+
+  if (!placeResult.success) {
+    console.error('Failed to place order:', placeResult.error);
+    return;
+  }
+
+  console.log('Order placed successfully');
+
+  // Query the order
+  const queryResult = await queryBus.send({
+    orderId: 'order-123'
+  } as GetOrderQuery);
+
+  if (queryResult.success) {
+    console.log('Order details:', queryResult.data);
+  }
+
+  // Query summary
+  const summaryResult = await queryBus.send({} as GetOrderSummaryQuery);
+  if (summaryResult.success) {
+    console.log('Order summary:', summaryResult.data);
+  }
+}
+
+await placeAndQueryOrder();
+
+--- CODE ---
+
+=== 🧪 Testing CQRS Components ===
+
+=== Testing Command Handlers ===
+
+--- CODE ---
+describe('PlaceOrderCommandHandler', () => {
+  let handler: PlaceOrderCommandHandler;
+  let repository: Repository<OrderAggregate, OrderEvent>;
+
+  beforeEach(() => {
+    const memoryStore = new MemoryEventStoreClient();
+    const serializer = new EventSerializer();
+    serializer.registerEvent(OrderPlaced);
+    
+    const factory = new RepositoryFactory(memoryStore);
+    repository = factory.create(OrderAggregate, 'Order', serializer);
+    
+    handler = new PlaceOrderCommandHandler(repository);
+  });
+
+  it('should place an order successfully', async () => {
+    const command: PlaceOrderCommand = {
+      aggregateId: 'order-123',
+      customerId: 'customer-1',
+      items: [{ productId: 'prod-1', quantity: 2, price: 29.99 }]
+    };
+
+    const result = await handler.handle(command);
+
+    expect(result.success).toBe(true);
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]).toBeInstanceOf(OrderPlaced);
+  });
+
+  it('should reject orders with no items', async () => {
+    const command: PlaceOrderCommand = {
+      aggregateId: 'order-123',
+      customerId: 'customer-1',
+      items: []
+    };
+
+    const result = await handler.handle(command);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('at least one item');
+  });
+});
+
+--- CODE ---
+
+=== Testing Query Handlers ===
+
+--- CODE ---
+describe('GetOrderQueryHandler', () => {
+  let handler: GetOrderQueryHandler;
+  let projection: OrderListProjection;
+
+  beforeEach(() => {
+    projection = new OrderListProjection();
+    handler = new GetOrderQueryHandler(projection);
+  });
+
+  it('should return order when it exists', async () => {
+    // Setup projection with test data
+    await projection.onOrderPlaced({
+      event: new OrderPlaced('order-123', 'customer-1', []),
+      metadata: { timestamp: new Date(), / ... / }
+    } as EventEnvelope<OrderPlaced>);
+
+    const query: GetOrderQuery = { orderId: 'order-123' };
+    const result = await handler.handle(query);
+
+    expect(result.success).toBe(true);
+    expect(result.data.id).toBe('order-123');
+  });
+
+  it('should return error when order not found', async () => {
+    const query: GetOrderQuery = { orderId: 'nonexistent' };
+    const result = await handler.handle(query);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not found');
+  });
+});
+
+--- CODE ---
+
+=== Testing Projections ===
+
+--- CODE ---
+describe('OrderListProjection', () => {
+  let projection: OrderListProjection;
+
+  beforeEach(() => {
+    projection = new OrderListProjection();
+  });
+
+  it('should add order when OrderPlaced', async () => {
+    const event = new OrderPlaced('order-123', 'customer-1', [
+      { productId: 'prod-1', quantity: 2, price: 29.99 }
+    ]);
+
+    await projection.onOrderPlaced({
+      event,
+      metadata: { timestamp: new Date(), / ... / }
+    } as EventEnvelope<OrderPlaced>);
+
+    const order = projection.getOrder('order-123');
+    expect(order).toBeDefined();
+    expect(order?.status).toBe('placed');
+    expect(order?.totalAmount).toBe(59.98);
+  });
+
+  it('should update status when OrderShipped', async () => {
+    // Place order first
+    await projection.onOrderPlaced({
+      event: new OrderPlaced('order-123', 'customer-1', []),
+      metadata: { timestamp: new Date(), / ... / }
+    } as EventEnvelope<OrderPlaced>);
+
+    // Ship order
+    await projection.onOrderShipped({
+      event: new OrderShipped('order-123', 'TRACK-123', 'UPS'),
+      metadata: { timestamp: new Date(), / ... / }
+    } as EventEnvelope<OrderShipped>);
+
+    const order = projection.getOrder('order-123');
+    expect(order?.status).toBe('shipped');
+    expect(order?.trackingNumber).toBe('TRACK-123');
+  });
+});
+
+--- CODE ---
+
+=== 🎯 Best Practices ===
+
+=== Command Design ===
+
+1. Make commands explicit - Each command should have a clear purpose
+2. Include all necessary data - Commands should be self-contained
+3. Validate early - Validate commands before processing
+4. Use value objects - Encapsulate complex data in value objects
+5. Keep commands immutable - Commands should not change after creation
+
+=== Query Design ===
+
+1. Design for specific use cases - Each query should serve a specific need
+2. Return DTOs - Don't expose domain models directly
+3. Support pagination - Always support paging for list queries
+4. Add filtering - Allow clients to filter results
+5. Keep queries simple - Complex queries indicate missing projections
+
+=== Projection Design ===
+
+1. One projection per view - Each UI view should have its own projection
+2. Denormalize aggressively - Optimize for read performance
+3. Handle all relevant events - Don't miss events that affect the view
+4. Make projections idempotent - Handle duplicate events gracefully
+5. Version projections - Track schema versions for migrations
+
+=== Integration Patterns ===
+
+1. Process events immediately - Update projections right after commands
+2. Handle failures gracefully - Retry failed projection updates
+3. Monitor projection lag - Track how far behind projections are
+4. Use eventual consistency - Accept that reads may be slightly stale
+5. Provide feedback - Return command results to users
+
+=== Performance Tips ===
+
+1. Cache projection results - Cache frequently accessed data
+2. Batch event processing - Process multiple events together
+3. Use indexes - Index projection data for fast queries
+4. Separate hot and cold data - Archive old data
+5. Monitor query performance - Track slow queries
+
+=== 🔗 Next Steps ===
+
+- API Reference - Detailed API documentation
+- TypeScript SDK Guide - Complete SDK guide
+- SDK Overview - Architecture and patterns
+
+=== 📚 Additional Resources ===
+
+- Event Sourcing Patterns - Martin Fowler's event sourcing guide
+- CQRS Journey - Microsoft's CQRS patterns and practices
+- Domain-Driven Design - Eric Evans' DDD book
+
+
+================================================================================
+SECTION: CORE CONCEPTS
+================================================================================
+
+
+--- Document: event-sourcing/aggregates.md ---
+
+=== Aggregates ===
+
+Aggregates are the cornerstone of event sourcing - they encapsulate business logic and ensure consistency within a bounded context.
+
+=== What is an Aggregate? ===
+
+An Aggregate is a cluster of domain objects that can be treated as a single unit. In event sourcing, aggregates:
+
+- Process commands and decide whether to accept or reject them
+- Emit events when state changes occur
+- Maintain consistency within their boundary
+- Have a unique identity (aggregate ID)
+
+=== Anatomy of an Aggregate ===
+
+--- CODE ---
+@Aggregate
+class OrderAggregate extends AggregateRoot {
+  private status: OrderStatus = OrderStatus.Draft;
+  private items: LineItem[] = [];
+  private totalAmount: number = 0;
+
+  // Command handler - processes business commands
+  @CommandHandler(PlaceOrderCommand)
+  place(command: PlaceOrderCommand) {
+    // Business rule validation
+    if (command.items.length === 0) {
+      throw new Error("Order must have at least one item");
+    }
+
+    // Calculate total
+    const total = command.items.reduce((sum, item) => sum + item.price  item.quantity, 0);
+
+    // Emit event
+    this.apply(new OrderPlaced({
+      orderId: command.orderId,
+      customerId: command.customerId,
+      items: command.items,
+      totalAmount: total
+    }));
+  }
+
+  // Event sourcing handler - applies events to aggregate state
+  @EventSourcingHandler(OrderPlaced)
+  private onOrderPlaced(event: OrderPlaced) {
+    this.status = OrderStatus.Placed;
+    this.items = event.items;
+    this.totalAmount = event.totalAmount;
+  }
+
+  @CommandHandler(ShipOrderCommand)
+  ship(command: ShipOrderCommand) {
+    // Business rule validation
+    if (this.status !== OrderStatus.Placed) {
+      throw new Error("Only placed orders can be shipped");
+    }
+
+    this.apply(new OrderShipped({
+      orderId: this.aggregateId,
+      trackingNumber: command.trackingNumber,
+      shippedAt: new Date()
+    }));
+  }
+
+  @EventSourcingHandler(OrderShipped)
+  private onOrderShipped(event: OrderShipped) {
+    this.status = OrderStatus.Shipped;
+    this.trackingNumber = event.trackingNumber;
+    this.shippedAt = event.shippedAt;
+  }
+}
+
+--- CODE ---
+
+=== Handler Types & Decorators ===
+
+=== Core Decorators ===
+
+=== @Aggregate ===
+
+Marks a class as an aggregate root - the entry point for all operations on the aggregate.
+
+--- CODE ---
+@Aggregate
+class OrderAggregate extends AggregateRoot {
+  // Aggregate implementation
+}
+
+--- CODE ---
+
+=== @CommandHandler(CommandType) ===
+
+Handles business commands - the "write side" operations that can change aggregate state.
+
+--- CODE ---
+@CommandHandler(PlaceOrderCommand)
+place(command: PlaceOrderCommand) {
+  // Business logic and validation
+  // Emits events via this.apply()
+}
+
+--- CODE ---
+
+=== @EventSourcingHandler(EventType) ===
+
+Applies events to aggregate state during reconstruction from event store.
+
+--- CODE ---
+@EventSourcingHandler(OrderPlaced)
+private onOrderPlaced(event: OrderPlaced) {
+  // Update internal state only
+  // NO business logic or validation
+  // NO side effects
+}
+
+--- CODE ---
+
+=== Handler Responsibilities ===
+
+| Handler Type | Purpose | Can Do | Cannot Do |
+|--------------|---------|---------|-----------|
+| @CommandHandler | Process business commands | Validate, apply business rules, emit events | Directly modify state |
+| @EventSourcingHandler | Apply events to state | Update internal fields | Validate, emit events, side effects |
+
+=== Command vs Event Flow ===
+
+--- CODE ---
+// 1. Command comes in
+const command = new PlaceOrderCommand(orderId, customerId, items);
+
+// 2. Command handler processes it
+@CommandHandler(PlaceOrderCommand)
+place(command: PlaceOrderCommand) {
+  // Business validation
+  if (command.items.length === 0) {
+    throw new Error("Order must have at least one item");
+  }
+  
+  // Emit event (not direct state change)
+  this.apply(new OrderPlaced({...}));
+}
+
+// 3. Event sourcing handler applies the event
+@EventSourcingHandler(OrderPlaced)
+private onOrderPlaced(event: OrderPlaced) {
+  // Direct state change (no validation)
+  this.status = OrderStatus.Placed;
+  this.items = event.items;
+}
+
+--- CODE ---
+
+=== Key Principles ===
+
+=== 1. Single Responsibility ===
+
+Each aggregate should have one reason to change - it should represent one cohesive business concept.
+
+--- CODE ---
+// ✅ Good - Order aggregate handles order lifecycle
+class OrderAggregate {
+  place() { / ... / }
+  ship() { / ... / }
+  cancel() { / ... / }
+}
+
+// ❌ Bad - Mixed responsibilities
+class OrderCustomerAggregate {
+  placeOrder() { / ... / }
+  updateCustomerEmail() { / ... / } // Different bounded context
+}
+
+--- CODE ---
+
+=== 2. Consistency Boundary ===
+
+All invariants within an aggregate must be maintained consistently.
+
+--- CODE ---
+class InventoryAggregate {
+  private stockLevel: number = 0;
+  private reservedStock: number = 0;
+
+  reserve(quantity: number) {
+    // Business invariant: can't reserve more than available
+    if (this.stockLevel - this.reservedStock < quantity) {
+      throw new Error("Insufficient stock available");
+    }
+
+    this.raiseEvent(new StockReserved({ quantity }));
+  }
+}
+
+--- CODE ---
+
+=== 3. Event-Driven State Changes ===
+
+Aggregates change state only through events, never directly.
+
+--- CODE ---
+@Aggregate
+class AccountAggregate extends AggregateRoot {
+  private balance: number = 0;
+
+  @CommandHandler(DepositMoneyCommand)
+  deposit(command: DepositMoneyCommand) {
+    // ❌ Don't modify state directly
+    // this.balance += command.amount;
+
+    // ✅ Emit event instead
+    this.apply(new MoneyDeposited({ 
+      accountId: this.aggregateId,
+      amount: command.amount 
+    }));
+  }
+
+  @EventSourcingHandler(MoneyDeposited)
+  private onMoneyDeposited(event: MoneyDeposited) {
+    // State changes happen in event sourcing handlers
+    this.balance += event.amount;
+  }
+}
+
+--- CODE ---
+
+=== Commands & Events ===
+
+=== Command Structure ===
+
+Commands represent intentions to change state:
+
+--- CODE ---
+// Commands are imperative (what should happen)
+interface PlaceOrderCommand {
+  orderId: string;
+  customerId: string;
+  items: LineItem[];
+}
+
+interface ShipOrderCommand {
+  orderId: string;
+  trackingNumber: string;
+}
+
+interface DepositMoneyCommand {
+  accountId: string;
+  amount: number;
+}
+
+--- CODE ---
+
+=== Event Structure ===
+
+Events represent facts about what happened:
+
+--- CODE ---
+// Events are past tense (what did happen)
+interface OrderPlaced {
+  eventType: 'OrderPlaced';
+  orderId: string;
+  customerId: string;
+  items: LineItem[];
+  totalAmount: number;
+  placedAt: Date;
+}
+
+interface OrderShipped {
+  eventType: 'OrderShipped';
+  orderId: string;
+  trackingNumber: string;
+  shippedAt: Date;
+}
+
+--- CODE ---
+
+=== Command → Event Flow ===
+
+--- CODE ---
+@Aggregate
+class OrderAggregate extends AggregateRoot {
+  @CommandHandler(PlaceOrderCommand)
+  handle(command: PlaceOrderCommand) {
+    // 1. Validate business rules
+    if (command.items.length === 0) {
+      throw new Error("Order must have items");
+    }
+
+    // 2. Calculate derived data
+    const totalAmount = command.items.reduce((sum, item) => 
+      sum + (item.price  item.quantity), 0);
+
+    // 3. Apply event (this triggers the event sourcing handler)
+    this.apply(new OrderPlaced({
+      orderId: command.orderId,
+      customerId: command.customerId,
+      items: command.items,
+      totalAmount,
+      placedAt: new Date()
+    }));
+  }
+
+  @EventSourcingHandler(OrderPlaced)
+  private on(event: OrderPlaced) {
+    // 4. Update aggregate state (no business logic here)
+    this.orderId = event.orderId;
+    this.customerId = event.customerId;
+    this.items = event.items;
+    this.totalAmount = event.totalAmount;
+    this.status = OrderStatus.Placed;
+  }
+}
+
+--- CODE ---
+
+=== Aggregate Lifecycle ===
+
+=== 1. Creation ===
+
+--- CODE ---
+const order = new OrderAggregate();
+order.place("order-123", "customer-456", items);
+
+--- CODE ---
+
+=== 2. Loading from Events ===
+
+--- CODE ---
+const order = await orderRepository.load("order-123");
+// Aggregate is reconstructed by replaying all events
+
+--- CODE ---
+
+=== 3. Processing Commands ===
+
+--- CODE ---
+order.ship("TRACK123");
+await orderRepository.save(order);
+
+--- CODE ---
+
+=== 4. Persistence ===
+
+--- CODE ---
+// Only new events are persisted
+const newEvents = order.getUncommittedEvents();
+await eventStore.append("Order-order-123", newEvents);
+
+--- CODE ---
+
+=== Best Practices ===
+
+=== Keep Aggregates Small ===
+
+- Focus on consistency - only include what must be consistent together
+- Avoid large object graphs - prefer references to other aggregates
+- Single aggregate per transaction - don't modify multiple aggregates in one transaction
+
+=== Use Meaningful Business Language ===
+
+--- CODE ---
+// ✅ Business-focused methods
+class OrderAggregate {
+  place() { / ... / }
+  ship() { / ... / }
+  cancel() { / ... / }
+}
+
+// ❌ Technical CRUD methods
+class OrderAggregate {
+  create() { / ... / }
+  update() { / ... / }
+  delete() { / ... / }
+}
+
+--- CODE ---
+
+=== Validate Business Rules ===
+
+--- CODE ---
+class OrderAggregate {
+  ship() {
+    if (this.status !== OrderStatus.Placed) {
+      throw new Error("Only placed orders can be shipped");
+    }
+
+    if (this.items.length === 0) {
+      throw new Error("Cannot ship empty order");
+    }
+
+    this.raiseEvent(new OrderShipped({ 
+      shippedAt: new Date(),
+      trackingNumber: generateTrackingNumber()
+    }));
+  }
+}
+
+--- CODE ---
+
+=== Common Patterns ===
+
+=== State Machine Aggregates ===
+
+--- CODE ---
+class OrderAggregate {
+  private status: OrderStatus = OrderStatus.Draft;
+
+  place() {
+    this.validateTransition(OrderStatus.Placed);
+    this.raiseEvent(new OrderPlaced(/ ... /));
+  }
+
+  ship() {
+    this.validateTransition(OrderStatus.Shipped);
+    this.raiseEvent(new OrderShipped(/ ... /));
+  }
+
+  private validateTransition(newStatus: OrderStatus) {
+    const validTransitions = {
+      [OrderStatus.Draft]: [OrderStatus.Placed],
+      [OrderStatus.Placed]: [OrderStatus.Shipped, OrderStatus.Cancelled],
+      [OrderStatus.Shipped]: [OrderStatus.Delivered],
+      // ...
+    };
+
+    if (!validTransitions[this.status]?.includes(newStatus)) {
+      throw new Error(Invalid transition from ${this.status} to ${newStatus});
+    }
+  }
+}
+
+--- CODE ---
+
+=== Aggregate Factories ===
+
+--- CODE ---
+class OrderAggregateFactory {
+  static createFromCustomerCart(customerId: string, cart: ShoppingCart): OrderAggregate {
+    const order = new OrderAggregate();
+    order.place(
+      generateOrderId(),
+      customerId,
+      cart.items
+    );
+    return order;
+  }
+}
+
+--- CODE ---
+
+=== Testing Aggregates ===
+
+--- CODE ---
+describe('OrderAggregate', () => {
+  it('should place order with valid items', () => {
+    // Arrange
+    const order = new OrderAggregate();
+    const items = [{ productId: 'p1', quantity: 2, price: 10 }];
+
+    // Act
+    order.place('order-123', 'customer-456', items);
+
+    // Assert
+    const events = order.getUncommittedEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toBeInstanceOf(OrderPlaced);
+    expect(events[0].totalAmount).toBe(20);
+  });
+
+  it('should reject empty orders', () => {
+    // Arrange
+    const order = new OrderAggregate();
+
+    // Act & Assert
+    expect(() => {
+      order.place('order-123', 'customer-456', []);
+    }).toThrow('Order must have at least one item');
+  });
+});
+
+--- CODE ---
+
+=== Next Steps ===
+
+- Learn about Events and how they capture state changes
+- Explore Repositories for aggregate persistence
+- See Examples for hands-on aggregate implementations
+
+--- Document: event-sourcing/events.md ---
+
+=== Events ===
+
+Events are the heart of event sourcing - they represent immutable facts about what happened in your system.
+
+=== What is an Event? ===
+
+An Event is a record of something that happened in the past. Events are:
+
+- Immutable - Once created, they never change
+- Past tense - Named with past-tense verbs (OrderPlaced, not PlaceOrder)
+- Factual - They describe what happened, not what should happen
+- Rich - They contain all the data needed to understand what occurred
+
+=== Event Structure ===
+
+--- CODE ---
+interface DomainEvent {
+  // Identity
+  eventId: string;
+  eventType: string;
+  eventVersion: number;
+  
+  // Context
+  aggregateId: string;
+  aggregateType: string;
+  aggregateNonce: number;
+  
+  // Metadata
+  timestamp: Date;
+  correlationId?: string;
+  causationId?: string;
+  actorId?: string;
+  
+  // Business data
+  [key: string]: any;
+}
+
+--- CODE ---
+
+=== Event Examples ===
+
+=== Business Events ===
+
+--- CODE ---
+interface OrderPlaced extends DomainEvent {
+  eventType: 'OrderPlaced';
+  orderId: string;
+  customerId: string;
+  items: LineItem[];
+  totalAmount: number;
+  placedAt: Date;
+}
+
+interface PaymentProcessed extends DomainEvent {
+  eventType: 'PaymentProcessed';
+  paymentId: string;
+  orderId: string;
+  amount: number;
+  paymentMethod: string;
+  processedAt: Date;
+}
+
+interface InventoryReserved extends DomainEvent {
+  eventType: 'InventoryReserved';
+  productId: string;
+  quantity: number;
+  reservationId: string;
+  reservedAt: Date;
+}
+
+--- CODE ---
+
+=== Event Design Principles ===
+
+=== 1. Express Business Intent ===
+
+Events should reflect the business domain, not technical operations.
+
+--- CODE ---
+// ✅ Business-focused
+interface CustomerRegistered {
+  customerId: string;
+  email: string;
+  name: string;
+  registeredAt: Date;
+}
+
+// ❌ Technical-focused
+interface CustomerRecordInserted {
+  tableId: number;
+  columnValues: Record<string, any>;
+  insertedAt: Date;
+}
+
+--- CODE ---
+
+=== 2. Include Sufficient Context ===
+
+Events should contain all information needed to understand what happened.
+
+--- CODE ---
+// ✅ Rich context
+interface OrderShipped {
+  orderId: string;
+  customerId: string;
+  shippingAddress: Address;
+  trackingNumber: string;
+  carrier: string;
+  estimatedDelivery: Date;
+  shippedAt: Date;
+  shippedBy: string;
+}
+
+// ❌ Insufficient context
+interface OrderShipped {
+  orderId: string;
+  shippedAt: Date;
+}
+
+--- CODE ---
+
+=== 3. Use Past Tense ===
+
+Events describe what already happened.
+
+--- CODE ---
+// ✅ Past tense
+interface OrderPlaced { / ... / }
+interface PaymentProcessed { / ... / }
+interface InventoryReduced { / ... / }
+
+// ❌ Present/future tense
+interface PlaceOrder { / ... / }
+interface ProcessPayment { / ... / }
+interface ReduceInventory { / ... / }
+
+--- CODE ---
+
+=== Event Versioning ===
+
+As your system evolves, event schemas may need to change. Handle this with versioning:
+
+--- CODE ---
+// Version 1
+interface OrderPlacedV1 {
+  eventType: 'OrderPlaced';
+  eventVersion: 1;
+  orderId: string;
+  customerId: string;
+  totalAmount: number;
+}
+
+// Version 2 - Added items array
+interface OrderPlacedV2 {
+  eventType: 'OrderPlaced';
+  eventVersion: 2;
+  orderId: string;
+  customerId: string;
+  items: LineItem[];
+  totalAmount: number;
+}
+
+// Event upcasting
+function upcastOrderPlaced(event: any): OrderPlacedV2 {
+  if (event.eventVersion === 1) {
+    return {
+      ...event,
+      eventVersion: 2,
+      items: [] // Default for missing data
+    };
+  }
+  return event;
+}
+
+--- CODE ---
+
+=== Event Metadata ===
+
+=== Correlation and Causation ===
+
+Track how events relate to each other:
+
+--- CODE ---
+interface EventMetadata {
+  correlationId: string; // Groups related events (e.g., all events from one user request)
+  causationId: string;   // The event that directly caused this event
+}
+
+// Example flow:
+// 1. OrderPlaced (correlationId: req-123, causationId: null)
+// 2. PaymentRequested (correlationId: req-123, causationId: orderPlaced.eventId)
+// 3. PaymentProcessed (correlationId: req-123, causationId: paymentRequested.eventId)
+
+--- CODE ---
+
+=== Actor Information ===
+
+Track who or what caused the event:
+
+--- CODE ---
+interface OrderPlaced {
+  // ... other fields
+  actorId: string;      // "user:john-doe" or "system:auto-reorder"
+  actorType: 'user' | 'system' | 'api';
+}
+
+--- CODE ---
+
+=== Event Handlers ===
+
+Events are processed by event handlers to update read models, trigger side effects, or communicate with other systems.
+
+--- CODE ---
+class OrderProjectionHandler {
+  @EventHandler(OrderPlaced)
+  async handleOrderPlaced(event: OrderPlaced) {
+    await this.orderReadModel.create({
+      id: event.orderId,
+      customerId: event.customerId,
+      status: 'placed',
+      totalAmount: event.totalAmount,
+      placedAt: event.timestamp
+    });
+  }
+
+  @EventHandler(OrderShipped)
+  async handleOrderShipped(event: OrderShipped) {
+    await this.orderReadModel.update(event.orderId, {
+      status: 'shipped',
+      trackingNumber: event.trackingNumber,
+      shippedAt: event.timestamp
+    });
+  }
+}
+
+--- CODE ---
+
+=== Event Sourcing Patterns ===
+
+=== Event Enrichment ===
+
+Add contextual information to events:
+
+--- CODE ---
+class OrderAggregate {
+  place(customerId: string, items: LineItem[]) {
+    // Enrich event with calculated data
+    const totalAmount = items.reduce((sum, item) => sum + item.price  item.quantity, 0);
+    const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
+
+    this.raiseEvent(new OrderPlaced({
+      orderId: this.id,
+      customerId,
+      items,
+      totalAmount,
+      itemCount,
+      placedAt: new Date()
+    }));
+  }
+}
+
+--- CODE ---
+
+=== Event Splitting ===
+
+Break complex events into focused, single-purpose events:
+
+--- CODE ---
+// ❌ Complex event
+interface OrderProcessed {
+  orderId: string;
+  paymentProcessed: boolean;
+  inventoryReserved: boolean;
+  emailSent: boolean;
+  shippingScheduled: boolean;
+}
+
+// ✅ Focused events
+interface OrderPlaced { orderId: string; / ... / }
+interface PaymentProcessed { orderId: string; / ... / }
+interface InventoryReserved { orderId: string; / ... / }
+interface OrderConfirmationSent { orderId: string; / ... / }
+interface ShippingScheduled { orderId: string; / ... / }
+
+--- CODE ---
+
+=== Testing Events ===
+
+--- CODE ---
+describe('Order Events', () => {
+  it('should create OrderPlaced event with correct data', () => {
+    // Arrange
+    const order = new OrderAggregate();
+    const items = [{ productId: 'p1', quantity: 2, price: 10 }];
+
+    // Act
+    order.place('order-123', 'customer-456', items);
+
+    // Assert
+    const events = order.getUncommittedEvents();
+    const orderPlaced = events[0] as OrderPlaced;
+    
+    expect(orderPlaced.eventType).toBe('OrderPlaced');
+    expect(orderPlaced.orderId).toBe('order-123');
+    expect(orderPlaced.customerId).toBe('customer-456');
+    expect(orderPlaced.totalAmount).toBe(20);
+    expect(orderPlaced.items).toEqual(items);
+  });
+});
+
+--- CODE ---
+
+=== Best Practices ===
+
+=== 1. Make Events Self-Contained ===
+
+Include all necessary data in the event itself:
+
+--- CODE ---
+// ✅ Self-contained
+interface ProductPriceChanged {
+  productId: string;
+  oldPrice: number;
+  newPrice: number;
+  changedBy: string;
+  changedAt: Date;
+  reason: string;
+}
+
+// ❌ Requires external lookups
+interface ProductPriceChanged {
+  productId: string;
+  newPrice: number;
+}
+
+--- CODE ---
+
+=== 2. Use Meaningful Names ===
+
+Event names should clearly communicate what happened:
+
+--- CODE ---
+// ✅ Clear and specific
+interface CustomerEmailAddressUpdated { / ... / }
+interface OrderCancelledDueToPaymentFailure { / ... / }
+interface InventoryReplenishedFromSupplier { / ... / }
+
+// ❌ Vague or generic
+interface CustomerUpdated { / ... / }
+interface OrderChanged { / ... / }
+interface InventoryModified { / ... */ }
+
+--- CODE ---
+
+=== 3. Keep Events Immutable ===
+
+Never modify events after they're created:
+
+--- CODE ---
+// ✅ Create new events for changes
+const correctionEvent = new OrderTotalCorrected({
+  orderId: originalEvent.orderId,
+  originalAmount: originalEvent.totalAmount,
+  correctedAmount: newAmount,
+  reason: 'Tax calculation error'
+});
+
+// ❌ Don't modify existing events
+// originalEvent.totalAmount = newAmount; // Never do this!
+
+--- CODE ---
+
+=== Next Steps ===
+
+- Learn about Aggregates that emit events
+- Explore Projections that consume events
+- See Examples for event implementations in action
+
+--- Document: event-sourcing/projections.md ---
+
+=== Projections ===
+
+Projections are read models built from events - they transform your event stream into queryable data structures optimized for specific use cases.
+
+=== What is a Projection? ===
+
+A Projection is a read-only view of your data, built by processing events in sequence. Think of it as a "materialized view" that answers specific questions about your domain.
+
+--- CODE ---
+class OrderSummaryProjection {
+  private orders = new Map<string, OrderSummary>();
+
+  @EventHandler(OrderPlaced)
+  handleOrderPlaced(event: OrderPlaced) {
+    this.orders.set(event.orderId, {
+      id: event.orderId,
+      customerId: event.customerId,
+      status: 'placed',
+      totalAmount: event.totalAmount,
+      itemCount: event.items.length,
+      placedAt: event.timestamp
+    });
+  }
+
+  @EventHandler(OrderShipped)
+  handleOrderShipped(event: OrderShipped) {
+    const order = this.orders.get(event.orderId);
+    if (order) {
+      order.status = 'shipped';
+      order.shippedAt = event.timestamp;
+      order.trackingNumber = event.trackingNumber;
+    }
+  }
+
+  getOrdersByCustomer(customerId: string): OrderSummary[] {
+    return Array.from(this.orders.values())
+      .filter(order => order.customerId === customerId);
+  }
+}
+
+--- CODE ---
+
+=== Types of Projections ===
+
+=== 1. List Projections ===
+
+Simple collections of data:
+
+--- CODE ---
+class ProductCatalogProjection {
+  private products = new Map<string, Product>();
+
+  @EventHandler(ProductCreated)
+  handleProductCreated(event: ProductCreated) {
+    this.products.set(event.productId, {
+      id: event.productId,
+      name: event.name,
+      price: event.price,
+      category: event.category,
+      createdAt: event.timestamp
+    });
+  }
+
+  getAllProducts(): Product[] {
+    return Array.from(this.products.values());
+  }
+
+  getProductsByCategory(category: string): Product[] {
+    return this.getAllProducts()
+      .filter(product => product.category === category);
+  }
+}
+
+--- CODE ---
+
+=== 2. Aggregated Projections ===
+
+Statistical summaries and analytics:
+
+--- CODE ---
+class SalesAnalyticsProjection {
+  private dailySales = new Map<string, DailySales>();
+  private productSales = new Map<string, ProductSales>();
+
+  @EventHandler(OrderPlaced)
+  handleOrderPlaced(event: OrderPlaced) {
+    const date = event.timestamp.toISOString().split('T')[0];
+    
+    // Update daily sales
+    const dailySales = this.dailySales.get(date) || {
+      date,
+      totalRevenue: 0,
+      orderCount: 0,
+      averageOrderValue: 0
+    };
+    
+    dailySales.totalRevenue += event.totalAmount;
+    dailySales.orderCount += 1;
+    dailySales.averageOrderValue = dailySales.totalRevenue / dailySales.orderCount;
+    
+    this.dailySales.set(date, dailySales);
+
+    // Update product sales
+    event.items.forEach(item => {
+      const productSales = this.productSales.get(item.productId) || {
+        productId: item.productId,
+        totalQuantitySold: 0,
+        totalRevenue: 0
+      };
+      
+      productSales.totalQuantitySold += item.quantity;
+      productSales.totalRevenue += item.price  item.quantity;
+      
+      this.productSales.set(item.productId, productSales);
+    });
+  }
+
+  getDailySales(date: string): DailySales | undefined {
+    return this.dailySales.get(date);
+  }
+
+  getTopSellingProducts(limit: number = 10): ProductSales[] {
+    return Array.from(this.productSales.values())
+      .sort((a, b) => b.totalQuantitySold - a.totalQuantitySold)
+      .slice(0, limit);
+  }
+}
+
+--- CODE ---
+
+=== 3. Denormalized Projections ===
+
+Optimized for specific queries:
+
+--- CODE ---
+class CustomerOrderHistoryProjection {
+  private customerOrders = new Map<string, CustomerOrderHistory>();
+
+  @EventHandler(OrderPlaced)
+  handleOrderPlaced(event: OrderPlaced) {
+    const history = this.customerOrders.get(event.customerId) || {
+      customerId: event.customerId,
+      orders: [],
+      totalSpent: 0,
+      orderCount: 0,
+      firstOrderDate: event.timestamp,
+      lastOrderDate: event.timestamp
+    };
+
+    history.orders.push({
+      orderId: event.orderId,
+      totalAmount: event.totalAmount,
+      placedAt: event.timestamp,
+      status: 'placed'
+    });
+
+    history.totalSpent += event.totalAmount;
+    history.orderCount += 1;
+    history.lastOrderDate = event.timestamp;
+
+    this.customerOrders.set(event.customerId, history);
+  }
+
+  getCustomerHistory(customerId: string): CustomerOrderHistory | undefined {
+    return this.customerOrders.get(customerId);
+  }
+
+  getTopCustomers(limit: number = 10): CustomerOrderHistory[] {
+    return Array.from(this.customerOrders.values())
+      .sort((a, b) => b.totalSpent - a.totalSpent)
+      .slice(0, limit);
+  }
+}
+
+--- CODE ---
+
+=== Projection Patterns ===
+
+=== 1. Event Filtering ===
+
+Only process relevant events:
+
+--- CODE ---
+class InventoryProjection {
+  private inventory = new Map<string, InventoryLevel>();
+
+  @EventHandler(ProductCreated)
+  @EventHandler(StockReceived)
+  @EventHandler(StockReserved)
+  @EventHandler(StockReleased)
+  handleInventoryEvent(event: DomainEvent) {
+    switch (event.eventType) {
+      case 'ProductCreated':
+        this.handleProductCreated(event as ProductCreated);
+        break;
+      case 'StockReceived':
+        this.handleStockReceived(event as StockReceived);
+        break;
+      // ... other cases
+    }
+  }
+
+  private handleStockReceived(event: StockReceived) {
+    const current = this.inventory.get(event.productId) || {
+      productId: event.productId,
+      available: 0,
+      reserved: 0,
+      total: 0
+    };
+
+    current.available += event.quantity;
+    current.total += event.quantity;
+
+    this.inventory.set(event.productId, current);
+  }
+}
+
+--- CODE ---
+
+=== 2. Event Transformation ===
+
+Transform events into different formats:
+
+--- CODE ---
+class NotificationProjection {
+  private notifications: Notification[] = [];
+
+  @EventHandler(OrderPlaced)
+  handleOrderPlaced(event: OrderPlaced) {
+    this.notifications.push({
+      id: generateId(),
+      type: 'orderconfirmation',
+      recipientId: event.customerId,
+      title: 'Order Confirmed',
+      message: Your order #${event.orderId} for $${event.totalAmount} has been placed.,
+      createdAt: event.timestamp,
+      read: false
+    });
+  }
+
+  @EventHandler(OrderShipped)
+  handleOrderShipped(event: OrderShipped) {
+    this.notifications.push({
+      id: generateId(),
+      type: 'shippingupdate',
+      recipientId: event.customerId,
+      title: 'Order Shipped',
+      message: Your order has shipped! Tracking: ${event.trackingNumber},
+      createdAt: event.timestamp,
+      read: false
+    });
+  }
+}
+
+--- CODE ---
+
+=== 3. Multi-Stream Projections ===
+
+Combine events from multiple aggregates:
+
+--- CODE ---
+class OrderFulfillmentProjection {
+  private fulfillments = new Map<string, OrderFulfillment>();
+
+  @EventHandler(OrderPlaced)
+  handleOrderPlaced(event: OrderPlaced) {
+    this.fulfillments.set(event.orderId, {
+      orderId: event.orderId,
+      customerId: event.customerId,
+      orderStatus: 'placed',
+      paymentStatus: 'pending',
+      shippingStatus: 'pending',
+      totalAmount: event.totalAmount,
+      placedAt: event.timestamp
+    });
+  }
+
+  @EventHandler(PaymentProcessed)
+  handlePaymentProcessed(event: PaymentProcessed) {
+    const fulfillment = this.fulfillments.get(event.orderId);
+    if (fulfillment) {
+      fulfillment.paymentStatus = 'completed';
+      fulfillment.paidAt = event.timestamp;
+    }
+  }
+
+  @EventHandler(OrderShipped)
+  handleOrderShipped(event: OrderShipped) {
+    const fulfillment = this.fulfillments.get(event.orderId);
+    if (fulfillment) {
+      fulfillment.shippingStatus = 'shipped';
+      fulfillment.shippedAt = event.timestamp;
+      fulfillment.trackingNumber = event.trackingNumber;
+    }
+  }
+}
+
+--- CODE ---
+
+=== Projection Management ===
+
+=== Building Projections ===
+
+--- CODE ---
+class ProjectionManager {
+  private projections: Projection[] = [];
+
+  register(projection: Projection) {
+    this.projections.push(projection);
+  }
+
+  async rebuild(projectionName?: string) {
+    const targetProjections = projectionName 
+      ? this.projections.filter(p => p.getName() === projectionName)
+      : this.projections;
+
+    for (const projection of targetProjections) {
+      await projection.reset();
+      
+      // Replay all events
+      const events = await this.eventStore.readAllEvents();
+      for (const event of events) {
+        await projection.handleEvent(event);
+      }
+    }
+  }
+
+  async processEvent(event: DomainEvent) {
+    for (const projection of this.projections) {
+      try {
+        await projection.handleEvent(event);
+      } catch (error) {
+        console.error(Error in projection ${projection.getName()}:, error);
+        // Handle projection errors (retry, dead letter, etc.)
+      }
+    }
+  }
+}
+
+--- CODE ---
+
+=== Projection Snapshots ===
+
+For performance, save projection state periodically:
+
+--- CODE ---
+class SnapshotableProjection {
+  private lastSnapshotVersion = 0;
+  private readonly snapshotInterval = 1000; // Every 1000 events
+
+  async handleEvent(event: DomainEvent) {
+    await this.processEvent(event);
+    
+    if (event.globalNonce - this.lastSnapshotVersion >= this.snapshotInterval) {
+      await this.saveSnapshot(event.globalNonce);
+      this.lastSnapshotVersion = event.globalNonce;
+    }
+  }
+
+  async saveSnapshot(version: number) {
+    const snapshot = {
+      projectionName: this.getName(),
+      version,
+      data: this.getState(),
+      createdAt: new Date()
+    };
+    
+    await this.snapshotStore.save(snapshot);
+  }
+
+  async loadFromSnapshot(): Promise<number> {
+    const snapshot = await this.snapshotStore.getLatest(this.getName());
+    if (snapshot) {
+      this.setState(snapshot.data);
+      return snapshot.version;
+    }
+    return 0;
+  }
+}
+
+--- CODE ---
+
+=== Testing Projections ===
+
+--- CODE ---
+describe('OrderSummaryProjection', () => {
+  let projection: OrderSummaryProjection;
+
+  beforeEach(() => {
+    projection = new OrderSummaryProjection();
+  });
+
+  it('should create order summary when order is placed', async () => {
+    // Arrange
+    const event = new OrderPlaced({
+      orderId: 'order-123',
+      customerId: 'customer-456',
+      totalAmount: 100,
+      items: [{ productId: 'p1', quantity: 2, price: 50 }],
+      timestamp: new Date()
+    });
+
+    // Act
+    await projection.handleEvent(event);
+
+    // Assert
+    const orders = projection.getOrdersByCustomer('customer-456');
+    expect(orders).toHaveLength(1);
+    expect(orders[0].id).toBe('order-123');
+    expect(orders[0].status).toBe('placed');
+    expect(orders[0].totalAmount).toBe(100);
+  });
+
+  it('should update order status when shipped', async () => {
+    // Arrange
+    const placedEvent = new OrderPlaced({ / ... / });
+    const shippedEvent = new OrderShipped({
+      orderId: 'order-123',
+      trackingNumber: 'TRACK123',
+      timestamp: new Date()
+    });
+
+    // Act
+    await projection.handleEvent(placedEvent);
+    await projection.handleEvent(shippedEvent);
+
+    // Assert
+    const orders = projection.getOrdersByCustomer('customer-456');
+    expect(orders[0].status).toBe('shipped');
+    expect(orders[0].trackingNumber).toBe('TRACK123');
+  });
+});
+
+--- CODE ---
+
+=== Best Practices ===
+
+=== 1. Single Responsibility ===
+
+Each projection should answer specific questions:
+
+--- CODE ---
+// ✅ Focused projection
+class CustomerLifetimeValueProjection {
+  // Only handles customer value calculations
+}
+
+// ❌ Mixed responsibilities
+class CustomerEverythingProjection {
+  // Handles orders, payments, preferences, analytics, etc.
+}
+
+--- CODE ---
+
+=== 2. Idempotent Processing ===
+
+Handle duplicate events gracefully:
+
+--- CODE ---
+class OrderProjection {
+  private processedEvents = new Set<string>();
+
+  async handleEvent(event: DomainEvent) {
+    if (this.processedEvents.has(event.eventId)) {
+      return; // Already processed
+    }
+
+    await this.processEvent(event);
+    this.processedEvents.add(event.eventId);
+  }
+}
+
+--- CODE ---
+
+=== 3. Error Handling ===
+
+Implement robust error handling:
+
+--- CODE ---
+class ResilientProjection {
+  async handleEvent(event: DomainEvent) {
+    try {
+      await this.processEvent(event);
+    } catch (error) {
+      if (this.isRetryableError(error)) {
+        await this.scheduleRetry(event, error);
+      } else {
+        await this.sendToDeadLetter(event, error);
+      }
+    }
+  }
+}
+
+--- CODE ---
+
+=== Performance Considerations ===
+
+=== 1. Batch Processing ===
+
+Process multiple events together:
+
+--- CODE ---
+class BatchProjection {
+  private eventBatch: DomainEvent[] = [];
+  private readonly batchSize = 100;
+
+  async handleEvent(event: DomainEvent) {
+    this.eventBatch.push(event);
+    
+    if (this.eventBatch.length >= this.batchSize) {
+      await this.processBatch();
+    }
+  }
+
+  private async processBatch() {
+    // Process all events in batch
+    for (const event of this.eventBatch) {
+      await this.processEvent(event);
+    }
+    
+    // Commit changes
+    await this.commit();
+    this.eventBatch = [];
+  }
+}
+
+--- CODE ---
+
+=== 2. Indexing ===
+
+Create appropriate indexes for queries:
+
+--- CODE ---
+class IndexedProjection {
+  private orders = new Map<string, Order>();
+  private customerIndex = new Map<string, string[]>(); // customerId -> orderIds
+  private dateIndex = new Map<string, string[]>(); // date -> orderIds
+
+  @EventHandler(OrderPlaced)
+  handleOrderPlaced(event: OrderPlaced) {
+    // Store order
+    this.orders.set(event.orderId, { / ... */ });
+    
+    // Update indexes
+    this.addToIndex(this.customerIndex, event.customerId, event.orderId);
+    this.addToIndex(this.dateIndex, event.timestamp.toDateString(), event.orderId);
+  }
+}
+
+--- CODE ---
+
+=== Next Steps ===
+
+- Learn about Event Bus for cross-aggregate communication
+- Explore CQRS patterns that leverage projections
+- See Examples for projection implementations in action
+
+
+================================================================================
+END OF API REFERENCE
+================================================================================
+
+For the latest documentation, visit: https://docs.event-sourcing-platform.dev
+For issues and contributions: https://github.com/neurale/event-sourcing-platform

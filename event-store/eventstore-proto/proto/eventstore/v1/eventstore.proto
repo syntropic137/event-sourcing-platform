@@ -1,82 +1,98 @@
 syntax = "proto3";
 package eventstore.v1;
 
-// Optimistic Concurrency Model:
-// - Client proposes aggregate_nonce in EventMetadata
-// - Store validates proposed_nonce == current_max + 1
-// - If validation fails, store returns ConcurrencyError
-// - This enables true optimistic concurrency (client controls sequencing)
-
 option go_package   = "github.com/you/eventstore/gen;eventstore";
 option java_package = "dev.you.eventstore.v1";
 
+// MODEL:
+// - Per-aggregate sequence is client-proposed: EventMetadata.aggregate_nonce (gap-free, 1-based).
+// - Global ordering is store-assigned: EventMetadata.global_nonce (monotonic in the global log).
+// - Store treats payload as opaque bytes. SDKs handle (de)serialization & upcasting.
+
 message EventMetadata {
-  // TODO: Update index, id in database incremental
-  uint64  global_nonce        = 13;  // assigned by store; monotonic
-  string  event_id            = 1;   // UUID v7 recommended
-  string  aggregate_id        = 2;   // e.g. "UUID"
-  string  aggregate_type      = 3;   // e.g. "Order"
-  uint64  aggregate_nonce     = 4;   // 1-based, client-provided, store-validated
-  string  event_type          = 5;   // e.g. "OrderSubmitted"
-  // TODO: Updated name from schema_version to event_version and updating index
-  uint32  event_version      = 14;
-  string  content_type        = 6;   // e.g. "application/protobuf"
-  // TODO: Define which of these are essential
-  string  correlation_id      = 7;
-  string  causation_id        = 8;
-  string  actor_id            = 9;
-  string  tenant_id           = 10;
-  uint64  timestamp_unix_ms   = 11;
-  // TODO: Are we missing event data and serialization?
-  map<string,string> headers  = 12;
+  // Identifiers & routing
+  string event_id                 = 1;  // UUIDv7/ULID; unique per event
+  string aggregate_id             = 2;  // stream id
+  string aggregate_type           = 3;  // e.g., "Order"
+  uint64 aggregate_nonce          = 4;  // client-proposed, consecutive (1..N)
+
+  // Event typing & schema
+  string event_type               = 5;  // e.g., "OrderSubmitted"
+  uint32 event_version            = 6;  // schema major for event_type
+  string content_type             = 7;  // e.g., "application/x-protobuf" or "application/json"
+  string content_schema           = 8;  // schema URI/ID/fingerprint (optional)
+
+  // Correlation & actor
+  string correlation_id           = 9;
+  string causation_id             = 10;
+  string actor_id                 = 11;
+
+  // Tenancy (required in practice)
+  string tenant_id                = 12;
+
+  // Time
+  uint64 timestamp_unix_ms        = 13; // event_time (client clock; optional)
+  uint64 recorded_time_unix_ms    = 14; // commit time (server clock; required)
+
+  // Integrity & ext
+  bytes  payload_sha256           = 15; // optional integrity hash of payload
+  map<string,string> headers      = 16; // tracing/compression/encryption/etc.
+
+  // Global ordering (store-assigned)
+  uint64 global_nonce             = 17; // monotonically increasing in global log
 }
 
 message EventData {
-  EventMetadata meta = 1;
-  bytes         payload = 2; // opaque to the store
-}
-
-enum Expected {
-  ANY               = 0;
-  NO_AGGREGATE      = 1;
-  AGGREGATE_EXISTS  = 2;
+  EventMetadata meta              = 1;
+  bytes         payload           = 2;  // opaque to the store
 }
 
 message AppendRequest {
-  string aggregate_id   = 1; // client provides: identifies target aggregate
-  string aggregate_type = 2; // client provides: aggregate type for routing/filtering
-  oneof expected {
-    uint64  exact        = 3; // expected exact aggregate nonce (e.g., 7)
-    Expected expected_any = 4; // ANY | NO_AGGREGATE | AGGREGATE_EXISTS
-  }
-  repeated EventData events = 5; // payload.meta.aggregate_nonce used for optimistic concurrency
+  string tenant_id                = 1;  // auth/routing scope; must match each event.meta.tenant_id
+  string aggregate_id             = 2;
+  string aggregate_type           = 3;
+
+  uint64 expected_aggregate_nonce = 4;  // optimistic concurrency check; 0 => expect stream does not yet exist
+
+  string idempotency_key          = 5;  // whole-batch idempotency
+  repeated EventData events       = 6;  // client provides strictly consecutive aggregate_nonces
 }
 
 message AppendResponse {
-  uint64 next_aggregate_nonce  = 1; // store assigns: next aggregate nonce (atomic assignment prevents conflicts)
-  uint64 last_global_nonce     = 2; // store assigns: last global nonce in batch
+  uint64 last_global_nonce        = 1; // global_nonce of final event in this batch
+  uint64 last_aggregate_nonce     = 2; // committed per-aggregate head after this batch
 }
 
 message ReadStreamRequest {
-  string aggregate_id         = 1;
-  uint64 from_aggregate_nonce = 2;  // inclusive
-  uint32 max_count            = 3;  // page size
-  bool   forward              = 4;  // true=ascending
+  string tenant_id                = 1;
+  string aggregate_id             = 2;
+  uint64 from_aggregate_nonce     = 3;  // inclusive; 0 or 1 => from beginning
+  uint32 max_count                = 4;  // page size
+  bool   forward                  = 5;  // true=ascending
 }
 
 message ReadStreamResponse {
-  repeated EventData events           = 1;
-  bool is_end                         = 2;
-  uint64 next_from_aggregate_nonce    = 3;
+  repeated EventData events       = 1;
+  bool is_end                     = 2;
+  uint64 next_from_aggregate_nonce= 3;
 }
 
 message SubscribeRequest {
-  string aggregate_prefix      = 1; // e.g. "Order-" or "" for all
-  uint64 from_global_nonce     = 2; // 0 to start at beginning
+  string tenant_id                = 1;  // filter + auth scope
+  string aggregate_id_prefix      = 2;  // optional additional filter within tenant ("" => all)
+  uint64 from_global_nonce        = 3;  // 0 => from beginning
 }
 
 message SubscribeResponse {
-  EventData event = 1;
+  EventData event                 = 1;
+}
+
+// Attach as google.rpc.Status details on concurrency failures.
+message ConcurrencyErrorDetail {
+  string tenant_id                = 1;
+  string aggregate_id             = 2;
+  uint64 actual_last_aggregate_nonce = 3;  // store's current last aggregate nonce for the stream
+  uint64 actual_last_global_nonce    = 4;  // optional: last committed in global log
 }
 
 service EventStore {

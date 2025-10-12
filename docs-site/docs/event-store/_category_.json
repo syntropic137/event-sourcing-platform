@@ -1,0 +1,8 @@
+{
+  "label": "Event Store",
+  "position": 2,
+  "link": {
+    "type": "doc",
+    "id": "event-store/index"
+  }
+}

@@ -37,11 +37,14 @@ export class AggregateNotFoundError extends BaseEventSourcingError {
 export class ConcurrencyConflictError extends BaseEventSourcingError {
   readonly code = 'CONCURRENCY_CONFLICT';
 
-  constructor(expectedVersion: number, actualVersion: number) {
-    super(`Concurrency conflict: expected version ${expectedVersion}, got ${actualVersion}`, {
-      expectedVersion,
-      actualVersion,
-    });
+  constructor(expectedAggregateNonce: number, actualAggregateNonce: number) {
+    super(
+      `Concurrency conflict: expected aggregate nonce ${expectedAggregateNonce}, got ${actualAggregateNonce}`,
+      {
+        expectedAggregateNonce,
+        actualAggregateNonce,
+      }
+    );
   }
 }
 

@@ -1,0 +1,11 @@
+---
+# Main task file for event-store role
+# Deploys Event Store using Docker Compose
+
+- name: Include base system setup tasks
+  ansible.builtin.include_tasks: base-system.yml
+  tags: [base, system]
+
+- name: Include Docker Compose deployment tasks
+  ansible.builtin.include_tasks: docker-compose.yml
+  tags: [docker, compose, deploy]

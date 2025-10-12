@@ -1,6 +1,6 @@
 [package]
 name = "eventstore-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -11,3 +11,6 @@ tokio-stream = "0.1"
 tonic = { version = "0.12", features = ["prost", "codegen"] }
 eventstore-proto = { path = "../eventstore-proto" }
 anyhow = "1"
+bytes = "1"
+prost = "0.13"
+prost-types = "0.13"

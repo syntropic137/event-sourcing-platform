@@ -14,6 +14,8 @@ use tokio_stream::{Stream, StreamExt};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
+const TENANT: &str = "tenant-service";
+
 struct Service {
     store: Arc<dyn EventStoreTrait>,
 }
@@ -38,6 +40,7 @@ async fn next_event_within(
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn service_append_and_read_with_postgres_backend() {
     // Start Postgres via testcontainers
     use testcontainers::runners::AsyncRunner;
@@ -61,20 +64,21 @@ async fn service_append_and_read_with_postgres_backend() {
 
     // Append and read
     let req = AppendRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-100".to_string(),
         aggregate_type: "Order".to_string(),
-        expected: Some(proto::append_request::Expected::ExpectedAny(
-            proto::Expected::NoAggregate as i32,
-        )),
+        expected_aggregate_nonce: 0,
+        idempotency_key: String::new(),
         events: vec![
             make_event("Order-100", "Order", 1, b"pg1"),
             make_event("Order-100", "Order", 2, b"pg2"),
         ],
     };
     let resp = client.append(req).await.unwrap().into_inner();
-    assert_eq!(resp.next_aggregate_nonce, 2);
+    assert_eq!(resp.last_aggregate_nonce, 2);
 
     let read = ReadStreamRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-100".into(),
         from_aggregate_nonce: 1,
         max_count: 10,
@@ -169,6 +173,9 @@ fn make_event(
             aggregate_type: aggregate_type.to_string(),
             aggregate_nonce,
             event_type: "Test".to_string(),
+            event_version: 1,
+            content_type: "application/octet-stream".to_string(),
+            tenant_id: TENANT.to_string(),
             ..Default::default()
         }),
         payload: payload.to_vec(),
@@ -183,21 +190,22 @@ async fn service_append_and_read_stream_forward() {
 
     // Append two events
     let req = AppendRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-1".to_string(),
         aggregate_type: "Order".to_string(),
-        expected: Some(proto::append_request::Expected::ExpectedAny(
-            proto::Expected::Any as i32,
-        )),
+        expected_aggregate_nonce: 0,
+        idempotency_key: String::new(),
         events: vec![
             make_event("Order-1", "Order", 1, b"a"),
             make_event("Order-1", "Order", 2, b"b"),
         ],
     };
     let resp = client.append(req).await.unwrap().into_inner();
-    assert_eq!(resp.next_aggregate_nonce, 2);
+    assert_eq!(resp.last_aggregate_nonce, 2);
 
     // Read forward from 1
     let read = ReadStreamRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-1".into(),
         from_aggregate_nonce: 1,
         max_count: 10,
@@ -217,11 +225,11 @@ async fn service_subscribe_replay_and_live() {
 
     // Seed some events
     let req = AppendRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-2".to_string(),
         aggregate_type: "Order".to_string(),
-        expected: Some(proto::append_request::Expected::ExpectedAny(
-            proto::Expected::Any as i32,
-        )),
+        expected_aggregate_nonce: 0,
+        idempotency_key: String::new(),
         events: vec![
             make_event("Order-2", "Order", 1, b"x"),
             make_event("Order-2", "Order", 2, b"y"),
@@ -232,7 +240,8 @@ async fn service_subscribe_replay_and_live() {
     // Subscribe from start and then append one more live event
     let mut sub = EventStoreClient::connect(endpoint.clone()).await.unwrap();
     let request = SubscribeRequest {
-        aggregate_prefix: "Order-".into(),
+        tenant_id: TENANT.into(),
+        aggregate_id_prefix: "Order-".into(),
         from_global_nonce: 0,
     };
     let mut stream = sub.subscribe(request).await.unwrap().into_inner();
@@ -247,11 +256,11 @@ async fn service_subscribe_replay_and_live() {
 
     // Append a live event and expect it to appear
     let live_append = AppendRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-2".to_string(),
         aggregate_type: "Order".to_string(),
-        expected: Some(proto::append_request::Expected::ExpectedAny(
-            proto::Expected::Any as i32,
-        )),
+        expected_aggregate_nonce: 2,
+        idempotency_key: String::new(),
         events: vec![make_event("Order-2", "Order", 3, b"z")],
     };
     client.append(live_append).await.unwrap();
@@ -279,32 +288,36 @@ async fn service_append_concurrency_conflict_exact() {
 
     // First append creates the stream (ANY)
     let first = AppendRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-3".to_string(),
         aggregate_type: "Order".to_string(),
-        expected: Some(proto::append_request::Expected::ExpectedAny(
-            proto::Expected::Any as i32,
-        )),
+        expected_aggregate_nonce: 0,
+        idempotency_key: String::new(),
         events: vec![make_event("Order-3", "Order", 1, b"1")],
     };
     let resp = client.append(first).await.unwrap().into_inner();
-    assert_eq!(resp.next_aggregate_nonce, 1);
+    assert_eq!(resp.last_aggregate_nonce, 1);
 
     // Exact(1) should succeed (appending second event)
     let ok_again = AppendRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-3".to_string(),
         aggregate_type: "Order".to_string(),
-        expected: Some(proto::append_request::Expected::Exact(1)),
-        events: vec![make_event("Order-77", "Order", 2, b"2")],
+        expected_aggregate_nonce: 1,
+        idempotency_key: String::new(),
+        events: vec![make_event("Order-3", "Order", 2, b"2")],
     };
     let resp2 = client.append(ok_again).await.unwrap().into_inner();
-    assert_eq!(resp2.next_aggregate_nonce, 2);
+    assert_eq!(resp2.last_aggregate_nonce, 2);
 
     // Reusing Exact(1) should now fail with Aborted (concurrency)
     let should_conflict = AppendRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-3".to_string(),
         aggregate_type: "Order".to_string(),
-        expected: Some(proto::append_request::Expected::Exact(1)),
-        events: vec![make_event("Order-77", "Order", 3, b"3")],
+        expected_aggregate_nonce: 1,
+        idempotency_key: String::new(),
+        events: vec![make_event("Order-3", "Order", 3, b"3")],
     };
     let err = client
         .append(should_conflict)
@@ -315,7 +328,7 @@ async fn service_append_concurrency_conflict_exact() {
 
 #[tokio::test]
 async fn service_pg_concurrency_conflict_exact() {
-    // Start Postgres via testcontainers
+    // Start Postgres via testcontainers (simplified, matching working test)
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres as PgImage;
 
@@ -326,41 +339,47 @@ async fn service_pg_concurrency_conflict_exact() {
         .expect("get mapped port");
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
 
-    // Connect Postgres store and spawn server
+    // Connect store and run migrations
     let store = eventstore_backend_postgres::PostgresStore::connect(&url)
         .await
         .expect("connect+init");
+
+    // Spawn gRPC server with Postgres backend
     let (endpoint, _jh) = spawn_server_with_store(store).await;
 
     let mut client = EventStoreClient::connect(endpoint.clone()).await.unwrap();
 
     // First append creates the stream (ANY)
     let first = AppendRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-77".to_string(),
         aggregate_type: "Order".to_string(),
-        expected: Some(proto::append_request::Expected::ExpectedAny(
-            proto::Expected::Any as i32,
-        )),
+        expected_aggregate_nonce: 0,
+        idempotency_key: String::new(),
         events: vec![make_event("Order-77", "Order", 1, b"1")],
     };
     let resp = client.append(first).await.unwrap().into_inner();
-    assert_eq!(resp.next_aggregate_nonce, 1);
+    assert_eq!(resp.last_aggregate_nonce, 1);
 
     // Exact(1) should succeed (appending second event)
     let ok_again = AppendRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-77".to_string(),
         aggregate_type: "Order".to_string(),
-        expected: Some(proto::append_request::Expected::Exact(1)),
+        expected_aggregate_nonce: 1,
+        idempotency_key: String::new(),
         events: vec![make_event("Order-77", "Order", 2, b"2")],
     };
     let resp2 = client.append(ok_again).await.unwrap().into_inner();
-    assert_eq!(resp2.next_aggregate_nonce, 2);
+    assert_eq!(resp2.last_aggregate_nonce, 2);
 
     // Reusing Exact(1) should now fail with Aborted (concurrency)
     let should_conflict = AppendRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-77".to_string(),
         aggregate_type: "Order".to_string(),
-        expected: Some(proto::append_request::Expected::Exact(1)),
+        expected_aggregate_nonce: 1,
+        idempotency_key: String::new(),
         events: vec![make_event("Order-77", "Order", 3, b"3")],
     };
     let err = client
@@ -377,11 +396,11 @@ async fn service_subscribe_filters_by_stream_prefix() {
 
     // Seed two categories
     let seed_order = AppendRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-9".to_string(),
         aggregate_type: "Order".to_string(),
-        expected: Some(proto::append_request::Expected::ExpectedAny(
-            proto::Expected::Any as i32,
-        )),
+        expected_aggregate_nonce: 0,
+        idempotency_key: String::new(),
         events: vec![
             make_event("Order-9", "Order", 1, b"o1"),
             make_event("Order-9", "Order", 2, b"o2"),
@@ -390,11 +409,11 @@ async fn service_subscribe_filters_by_stream_prefix() {
     client.append(seed_order).await.unwrap();
 
     let seed_payment = AppendRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Payment-1".to_string(),
         aggregate_type: "Payment".to_string(),
-        expected: Some(proto::append_request::Expected::ExpectedAny(
-            proto::Expected::Any as i32,
-        )),
+        expected_aggregate_nonce: 0,
+        idempotency_key: String::new(),
         events: vec![make_event("Payment-1", "Payment", 1, b"p1")],
     };
     client.append(seed_payment).await.unwrap();
@@ -402,7 +421,8 @@ async fn service_subscribe_filters_by_stream_prefix() {
     // Subscribe only to Order-*
     let mut sub = EventStoreClient::connect(endpoint.clone()).await.unwrap();
     let request = SubscribeRequest {
-        aggregate_prefix: "Order-".into(),
+        tenant_id: TENANT.into(),
+        aggregate_id_prefix: "Order-".into(),
         from_global_nonce: 0,
     };
     let mut stream = sub.subscribe(request).await.unwrap().into_inner();
@@ -425,11 +445,11 @@ async fn service_subscribe_filters_by_stream_prefix() {
     // Append live to Payment (should NOT arrive) and Order (should arrive)
     let _ = client
         .append(AppendRequest {
+            tenant_id: TENANT.into(),
             aggregate_id: "Payment-1".into(),
             aggregate_type: "Payment".into(),
-            expected: Some(proto::append_request::Expected::ExpectedAny(
-                proto::Expected::Any as i32,
-            )),
+            expected_aggregate_nonce: 1,
+            idempotency_key: String::new(),
             events: vec![make_event("Payment-1", "Payment", 2, b"p2")],
         })
         .await
@@ -437,11 +457,11 @@ async fn service_subscribe_filters_by_stream_prefix() {
 
     let _ = client
         .append(AppendRequest {
+            tenant_id: TENANT.into(),
             aggregate_id: "Order-9".into(),
             aggregate_type: "Order".into(),
-            expected: Some(proto::append_request::Expected::ExpectedAny(
-                proto::Expected::Any as i32,
-            )),
+            expected_aggregate_nonce: 2,
+            idempotency_key: String::new(),
             events: vec![make_event("Order-9", "Order", 3, b"o3")],
         })
         .await
@@ -462,11 +482,11 @@ async fn service_read_stream_backward_slice() {
 
     // Append three events
     let req = AppendRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-4".to_string(),
         aggregate_type: "Order".to_string(),
-        expected: Some(proto::append_request::Expected::ExpectedAny(
-            proto::Expected::Any as i32,
-        )),
+        expected_aggregate_nonce: 0,
+        idempotency_key: String::new(),
         events: vec![
             make_event("Order-4", "Order", 1, b"a"),
             make_event("Order-4", "Order", 2, b"b"),
@@ -477,6 +497,7 @@ async fn service_read_stream_backward_slice() {
 
     // Read last two backward starting from version 3
     let read = ReadStreamRequest {
+        tenant_id: TENANT.into(),
         aggregate_id: "Order-4".into(),
         from_aggregate_nonce: 3,
         max_count: 2,

@@ -1,0 +1,8 @@
+{
+  "label": "Infrastructure",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "description": "Infrastructure-as-Code guides for provisioning and configuring the event store."
+  }
+}

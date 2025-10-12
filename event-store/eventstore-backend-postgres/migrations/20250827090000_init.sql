@@ -1,26 +1,61 @@
--- events table: append-only event log
+-- Core aggregates table tracks stream heads for optimistic concurrency
+CREATE TABLE IF NOT EXISTS aggregates (
+    tenant_id TEXT NOT NULL,
+    aggregate_id TEXT NOT NULL,
+    aggregate_type TEXT NOT NULL,
+    last_nonce BIGINT NOT NULL DEFAULT 0,
+    last_global_nonce BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, aggregate_id)
+);
+
+-- Append-only events table. global_nonce provides the total order.
 CREATE TABLE IF NOT EXISTS events (
-    global_nonce BIGSERIAL PRIMARY KEY,
-    event_id UUID NOT NULL UNIQUE,
+    tenant_id TEXT NOT NULL,
     aggregate_id TEXT NOT NULL,
     aggregate_type TEXT NOT NULL,
     aggregate_nonce BIGINT NOT NULL,
-    event_type TEXT,
-    content_type TEXT,
+    global_nonce BIGSERIAL NOT NULL,
+    event_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_version INTEGER NOT NULL,
+    content_type TEXT NOT NULL,
+    content_schema TEXT,
+    correlation_id TEXT,
+    causation_id TEXT,
+    actor_id TEXT,
+    timestamp_unix_ms BIGINT NOT NULL DEFAULT 0,
+    recorded_time_unix_ms BIGINT NOT NULL,
+    payload_sha256 BYTEA,
+    headers JSONB NOT NULL DEFAULT '{}'::jsonb,
     payload BYTEA NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    CONSTRAINT uq_aggregate_nonce UNIQUE (aggregate_id, aggregate_nonce),
-    CONSTRAINT ck_aggregate_nonce_positive CHECK (aggregate_nonce > 0)
+    PRIMARY KEY (tenant_id, aggregate_id, aggregate_nonce),
+    UNIQUE (tenant_id, event_id),
+    UNIQUE (global_nonce),
+    CHECK (aggregate_nonce > 0)
 );
 
--- indexes to speed up queries
-CREATE INDEX IF NOT EXISTS idx_events_aggregate_id ON events(aggregate_id);
-CREATE INDEX IF NOT EXISTS idx_events_aggregate_id_nonce ON events(aggregate_id, aggregate_nonce);
--- global_position is PK hence indexed
+CREATE INDEX IF NOT EXISTS idx_events_global_nonce ON events (global_nonce);
+CREATE INDEX IF NOT EXISTS idx_events_tenant_aggregate ON events (tenant_id, aggregate_id);
+CREATE INDEX IF NOT EXISTS idx_events_tenant_recorded_time ON events (tenant_id, recorded_time_unix_ms);
 
--- immutability: forbid updates and deletes at the DB level
-CREATE OR REPLACE FUNCTION forbid_events_update_delete()
+-- Per-aggregate idempotency ledger
+CREATE TABLE IF NOT EXISTS idempotency (
+    tenant_id TEXT NOT NULL,
+    aggregate_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_fingerprint BYTEA NOT NULL,
+    first_committed_nonce BIGINT NOT NULL,
+    last_committed_nonce BIGINT NOT NULL,
+    last_global_nonce BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, aggregate_id, idempotency_key)
+);
+
+-- Append-only guarantee: forbid UPDATE/DELETE on events.
+CREATE OR REPLACE FUNCTION forbid_events_mutation()
 RETURNS trigger AS $$
 BEGIN
     RAISE EXCEPTION 'events are append-only and immutable';
@@ -32,29 +67,36 @@ DROP TRIGGER IF EXISTS trg_events_immutable_delete ON events;
 
 CREATE TRIGGER trg_events_immutable_update
 BEFORE UPDATE ON events
-FOR EACH ROW EXECUTE FUNCTION forbid_events_update_delete();
+FOR EACH ROW EXECUTE FUNCTION forbid_events_mutation();
 
 CREATE TRIGGER trg_events_immutable_delete
 BEFORE DELETE ON events
-FOR EACH ROW EXECUTE FUNCTION forbid_events_update_delete();
+FOR EACH ROW EXECUTE FUNCTION forbid_events_mutation();
 
--- per-aggregate sequencing: client proposes aggregate_nonce, store validates
+-- Enforce aggregate nonce contiguity at insertion time.
 CREATE OR REPLACE FUNCTION validate_aggregate_nonce()
 RETURNS trigger AS $$
 DECLARE
-    last_nonce BIGINT;
-    expected BIGINT;
+    current_last BIGINT;
 BEGIN
-    SELECT MAX(aggregate_nonce) INTO last_nonce FROM events WHERE aggregate_id = NEW.aggregate_id;
-    IF last_nonce IS NULL THEN
-        expected := 1;
-    ELSE
-        expected := last_nonce + 1;
+    SELECT e.aggregate_nonce
+      INTO current_last
+      FROM events AS e
+     WHERE e.tenant_id = NEW.tenant_id
+       AND e.aggregate_id = NEW.aggregate_id
+     ORDER BY e.aggregate_nonce DESC
+     LIMIT 1
+     FOR UPDATE;
+
+    IF current_last IS NULL THEN
+        current_last := 0;
     END IF;
 
-    IF NEW.aggregate_nonce <> expected THEN
-        RAISE EXCEPTION 'invalid aggregate_nonce %, expected % for aggregate %', NEW.aggregate_nonce, expected, NEW.aggregate_id;
+    IF NEW.aggregate_nonce <> current_last + 1 THEN
+        RAISE EXCEPTION 'invalid aggregate_nonce %, expected % for aggregate % (tenant %)',
+            NEW.aggregate_nonce, current_last + 1, NEW.aggregate_id, NEW.tenant_id;
     END IF;
+
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

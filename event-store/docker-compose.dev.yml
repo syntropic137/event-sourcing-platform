@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: "event-store_a5897729_postgres"
+    environment:
+      POSTGRES_DB: dev
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+    ports:
+      - "15648:5432"
+    volumes:
+      - "event-store_a5897729_postgres:/var/lib/postgresql/data"
+    command: >
+      postgres 
+      -c fsync=off 
+      -c synchronous_commit=off
+      -c shared_buffers=128MB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    labels:
+      - "dev-tools.project=event-store"
+      - "dev-tools.hash=a5897729"
+      - "dev-tools.auto-cleanup=true"
+
+  redis:
+    image: redis:7-alpine
+    container_name: "event-store_a5897729_redis"
+    ports:
+      - "16648:6379"
+    volumes:
+      - "event-store_a5897729_redis:/data"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    labels:
+      - "dev-tools.project=event-store"
+      - "dev-tools.hash=a5897729"
+      - "dev-tools.auto-cleanup=true"
+
+volumes:
+  "event-store_a5897729_postgres":
+  "event-store_a5897729_redis":
