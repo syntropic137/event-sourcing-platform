@@ -52,7 +52,7 @@ This release represents a major milestone with a complete, production-ready even
 - **Missing Exports**: Added missing exports for classes used in examples:
   - `EventSerializer` and `BaseDomainEvent` from `core/event`
   - `RepositoryFactory` from `core/repository`
-  - `AutoDispatchAggregate` from `core/aggregate`
+  - `AggregateRoot` from `core/aggregate`
 - **API Consistency**: Fixed type vs class exports for better API consistency
 
 #### Examples

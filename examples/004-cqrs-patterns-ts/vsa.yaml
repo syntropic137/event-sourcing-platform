@@ -1,0 +1,91 @@
+version: 2
+architecture: "hexagonal-event-sourced-vsa"
+language: "typescript"
+root: "."
+
+domain:
+  path: "src/domain"
+  aggregates:
+    path: "."
+    pattern: "*Aggregate.ts"
+    require_suffix: true
+    extensions: [".ts"]
+  commands:
+    path: "commands"
+    pattern: "*Command.ts"
+    require_suffix: true
+    extensions: [".ts"]
+    organize_by_feature: false
+  queries:
+    path: "queries"
+    pattern: "*Query.ts"
+    require_suffix: true
+    extensions: [".ts"]
+    organize_by_feature: false
+  events:
+    path: "events"
+    pattern: "*Event.ts"
+    require_suffix: true
+    extensions: [".ts"]
+    versioning:
+      enabled: true
+      format: "simple"
+      require_decorator: true
+      require_upcasters: false # No upcasters in this example yet
+      versioned_path: "_versioned"
+      upcasters_path: "_upcasters"
+      upcaster_pattern: "*_v*_to_v*.ts"
+
+slices:
+  path: "src/slices"
+  command_slices:
+    path: "."
+    pattern: "*Cli.ts" # CLI controllers
+    require_suffix: true
+    extensions: [".ts"]
+    max_lines: 50
+    require_command_bus: true
+  query_slices:
+    path: "."
+    pattern: "*Cli.ts"
+    require_suffix: true
+    extensions: [".ts"]
+    max_lines: 100
+    require_projection: true # Query slices should have projections
+  saga_slices:
+    path: "."
+    pattern: "*Saga.ts"
+    require_suffix: true
+    extensions: [".ts"]
+
+infrastructure:
+  path: "src/infrastructure"
+  command_bus:
+    path: "CommandBus.ts"
+  query_bus:
+    path: "QueryBus.ts"
+  event_bus:
+    path: "EventBus.ts"
+
+validation:
+  architecture:
+    enforce_hexagonal: true
+    enforce_dependency_rules: true
+    allow_adapters_to_domain: false
+  cqrs:
+    enforce_separation: true
+    commands_must_use_command_bus: true
+    queries_must_use_query_bus: true
+  event_sourcing:
+    aggregates_must_use_decorators: true
+    events_must_be_immutable: true
+    events_must_extend_base: true
+  domain:
+    aggregates_in_domain_only: true
+    no_external_dependencies: true
+    max_aggregate_lines: 500
+  slices:
+    max_slice_lines: 100
+    no_cross_slice_imports: true
+    slices_must_use_buses: true
+

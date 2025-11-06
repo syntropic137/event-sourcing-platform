@@ -1,15 +1,15 @@
 services:
   postgres:
     image: postgres:15
-    container_name: "event-store_a5897729_postgres"
+    container_name: "event-store_df55b58d_postgres"
     environment:
       POSTGRES_DB: dev
       POSTGRES_USER: dev
       POSTGRES_PASSWORD: dev
     ports:
-      - "15648:5432"
+      - "15573:5432"
     volumes:
-      - "event-store_a5897729_postgres:/var/lib/postgresql/data"
+      - "event-store_df55b58d_postgres:/var/lib/postgresql/data"
     command: >
       postgres 
       -c fsync=off 
@@ -22,16 +22,16 @@ services:
       retries: 5
     labels:
       - "dev-tools.project=event-store"
-      - "dev-tools.hash=a5897729"
+      - "dev-tools.hash=df55b58d"
       - "dev-tools.auto-cleanup=true"
 
   redis:
     image: redis:7-alpine
-    container_name: "event-store_a5897729_redis"
+    container_name: "event-store_df55b58d_redis"
     ports:
-      - "16648:6379"
+      - "16573:6379"
     volumes:
-      - "event-store_a5897729_redis:/data"
+      - "event-store_df55b58d_redis:/data"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -39,9 +39,9 @@ services:
       retries: 5
     labels:
       - "dev-tools.project=event-store"
-      - "dev-tools.hash=a5897729"
+      - "dev-tools.hash=df55b58d"
       - "dev-tools.auto-cleanup=true"
 
 volumes:
-  "event-store_a5897729_postgres":
-  "event-store_a5897729_redis":
+  "event-store_df55b58d_postgres":
+  "event-store_df55b58d_redis":

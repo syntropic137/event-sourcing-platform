@@ -1,0 +1,36 @@
+name: multi-aggregate-fixture
+description: Test fixture demonstrating multiple aggregates in one bounded context
+language: typescript
+version: 1.0.0
+
+patterns:
+  architecture: hexagonal-event-sourced
+  vertical_slices: true
+  event_versioning: true
+  multiple_aggregates: true
+
+structure:
+  domain:
+    path: src/domain
+    aggregates:
+      path: .
+    commands:
+      path: commands
+    events:
+      path: events
+  
+  infrastructure:
+    path: src/infrastructure
+  
+  slices:
+    path: src/slices
+
+validation:
+  rules:
+    - require_domain_folder
+    - require_event_decorators
+    - require_event_versions
+    - no_domain_dependencies
+    - thin_slices_only
+    - multiple_aggregates_allowed
+

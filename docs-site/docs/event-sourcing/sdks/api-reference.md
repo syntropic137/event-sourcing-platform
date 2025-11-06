@@ -123,14 +123,14 @@ getAggregateType(): string {
 }
 ```
 
-### `AutoDispatchAggregate<TEvent>`
+### `AggregateRoot<TEvent>`
 
 Enhanced aggregate that automatically dispatches events to handler methods based on event type.
 
 ```typescript
-import { AutoDispatchAggregate, EventSourcingHandler } from '@neurale/event-sourcing-ts';
+import { AggregateRoot, EventSourcingHandler } from '@neurale/event-sourcing-ts';
 
-class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+class OrderAggregate extends AggregateRoot<OrderEvent> {
   private status: string = 'new';
   private customerId: string = '';
 

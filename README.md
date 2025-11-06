@@ -2,6 +2,10 @@
 
 A comprehensive event sourcing platform that packages a robust event store with higher-level event sourcing abstractions. This platform provides reliable, robust, and flexible packages for implementing event sourcing in different applications, with progressive examples serving as living documentation.
 
+[![CI](https://github.com/NeuralEmpowerment/event-sourcing-platform/actions/workflows/test.yml/badge.svg)](https://github.com/NeuralEmpowerment/event-sourcing-platform/actions/workflows/test.yml)
+[![CodeQL](https://github.com/NeuralEmpowerment/event-sourcing-platform/actions/workflows/codeql.yml/badge.svg)](https://github.com/NeuralEmpowerment/event-sourcing-platform/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 ## 📋 Table of Contents
 
 - [Architecture Overview](#architecture-overview)
@@ -26,7 +30,11 @@ event-sourcing-platform/
 │   ├── rust/                  # Rust SDK (alpha)
 │   ├── typescript/            # TypeScript SDK (primary focus)
 │   └── python/                # Placeholder for future Python SDK
-├── examples/              # TypeScript “living documentation” examples
+├── vsa/                   # Vertical Slice Architecture Manager (in planning)
+│   ├── vsa-core/             # Core Rust library
+│   ├── vsa-cli/              # CLI tool
+│   └── vsa-wasm/             # WASM bindings for Node.js
+├── examples/              # TypeScript "living documentation" examples
 │   ├── 001-basic-store-ts/    # Direct event store usage
 │   ├── 002-simple-aggregate-ts/
 │   ├── …
@@ -298,9 +306,17 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - ✅ **TypeScript SDK** – Drives all current examples; adding richer patterns iteratively.
 - 🔄 **Rust SDK** – Early alpha; core abstractions present, feature parity in progress.
 - 📋 **Python SDK** – Placeholder directory waiting for implementation.
+- 🔄 **VSA Tool** – Vertical Slice Architecture Manager in planning phase. See [vsa/README.md](vsa/README.md) for details.
 - ✅ **Examples** – TypeScript examples 001–006, 007 inventory, 008 observability, and 009 dashboard are runnable today.
 - 🚧 **Examples (future)** – 007 e-commerce and 008 banking are scaffolds awaiting domain logic.
 - 🚧 **Infra-as-code & docs-site** – Module scaffolding exists; provider-specific stacks and walkthroughs are being built.
+
+## 📚 Inspiration & References
+
+This platform draws inspiration from and builds upon the work of leading event sourcing practitioners:
+
+- **[Understanding Event Sourcing](https://leanpub.com/eventsourcing)** by Martin Dilger - A comprehensive book combining Event Modeling and Event Sourcing to plan and build software systems of any size and complexity. [Sample code on GitHub](https://github.com/dilgerma/eventsourcing-book).
+- **Event Modeling** - [The original Event Modeling article](https://eventmodeling.org/) provides foundational concepts for our approach.
 
 ---
 

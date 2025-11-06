@@ -1,0 +1,17 @@
+name: no-domain-folder-invalid
+description: Invalid fixture - missing domain folder (should fail validation)
+language: typescript
+version: 1.0.0
+
+patterns:
+  architecture: hexagonal-event-sourced
+  vertical_slices: true
+
+validation:
+  rules:
+    - require_domain_folder
+
+expected_failures:
+  - "Missing required domain folder at src/domain"
+  - "No aggregates found"
+

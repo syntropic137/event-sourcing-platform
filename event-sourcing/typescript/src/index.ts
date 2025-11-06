@@ -41,8 +41,8 @@ export type {
   EventMetadata,
   Repository,
   Projection,
-  Query,
-  QueryHandler,
+  Query as IQuery, // Aliased to avoid conflict with Query decorator
+  QueryHandler as IQueryHandler, // Aliased to avoid conflict with QueryHandler decorator
   QueryResult,
 } from './core';
 
@@ -51,10 +51,11 @@ export {
   AggregateDecorator as Aggregate,
   EventSourcingHandler,
   AggregateRoot,
-  AutoDispatchAggregate,
 } from './core/aggregate';
 
-export { CommandHandler } from './core/command';
+export { CommandHandler, Command } from './core/command';
+export { Event } from './core/event';
+export { QueryHandler, Query } from './core/query';
 
 // Re-export commonly used classes
 export { EventSerializer, BaseDomainEvent } from './core/event';

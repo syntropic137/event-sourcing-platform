@@ -156,7 +156,21 @@ generate_compose_file() {
 }
 
 load_env_file() {
-    source .env.dev 2>/dev/null || error "Run 'dev init' first"
+    if [ ! -f .env.dev ]; then
+        echo "" >&2
+        echo "❌ Development environment not initialized!" >&2
+        echo "" >&2
+        echo "   Please run the following command first:" >&2
+        echo "   📋 make dev-init" >&2
+        echo "" >&2
+        echo "   This will:" >&2
+        echo "   • Generate .env.dev configuration" >&2
+        echo "   • Create docker-compose.dev.yml" >&2
+        echo "   • Calculate unique ports for your project" >&2
+        echo "" >&2
+        exit 1
+    fi
+    source .env.dev
 }
 
 show_connection_info() {

@@ -1,0 +1,87 @@
+version: 2
+architecture: "hexagonal-event-sourced-vsa"
+language: "typescript"
+root: "."
+
+domain:
+  path: "src/domain"
+  aggregates:
+    path: "."
+    pattern: "*Aggregate.ts"
+    require_suffix: true
+    extensions: [".ts"]
+  commands:
+    path: "commands"
+    pattern: "*Command.ts"
+    require_suffix: true
+    extensions: [".ts"]
+    organize_by_feature: false # Simple example, no feature subfolders
+  events:
+    path: "events"
+    pattern: "*Event.ts"
+    require_suffix: true
+    extensions: [".ts"]
+    versioning:
+      enabled: true
+      format: "simple"
+      require_decorator: true
+      require_upcasters: false # No upcasters for this example
+      versioned_path: "_versioned"
+      upcasters_path: "_upcasters"
+      upcaster_pattern: "*_v*_to_v*.ts"
+  queries:
+    path: "queries"
+    pattern: "*Query.ts"
+    require_suffix: true
+    extensions: [".ts"]
+    organize_by_feature: false
+
+slices:
+  path: "src/slices"
+  command_slices:
+    path: "."
+    pattern: "*Cli.ts"
+    require_suffix: true
+    extensions: [".ts"]
+    max_lines: 50
+    require_command_bus: true
+  query_slices:
+    path: "."
+    pattern: "*Cli.ts"
+    require_suffix: true
+    extensions: [".ts"]
+    max_lines: 50
+    require_projection: false
+
+infrastructure:
+  command_bus:
+    enabled: true
+    path: "src/infrastructure/CommandBus.ts"
+  query_bus:
+    enabled: false # No queries in this example
+  event_bus:
+    enabled: false
+
+validation:
+  enforce_architecture: true
+  cqrs:
+    enabled: true
+    enforce_command_query_separation: false # This is a write-side-only example
+  event_sourcing:
+    enabled: true
+    require_event_decorators: true
+    require_event_versioning: true
+  decorators:
+    enabled: true
+    require_aggregate_decorator: true
+    require_command_handler_decorator: true
+    require_event_sourcing_handler_decorator: true
+  domain:
+    enforce_aggregate_suffix: true
+    enforce_command_suffix: true
+    enforce_event_suffix: true
+    forbid_business_logic_in_slices: true
+  slices:
+    enforce_thin_adapters: true
+    forbid_cross_slice_dependencies: true
+

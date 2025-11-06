@@ -96,12 +96,14 @@ class OrderAggregate extends Aggregate {
 }
 ```
 
-**Command** - An intention to change state
+**Command** - An intention to change state (use classes with `aggregateId`)
 ```typescript
-interface PlaceOrderCommand {
-  orderId: string;
-  customerId: string;
-  items: LineItem[];
+class PlaceOrderCommand {
+  constructor(
+    public readonly aggregateId: string,
+    public readonly customerId: string,
+    public readonly items: LineItem[]
+  ) {}
 }
 ```
 
@@ -137,5 +139,14 @@ class OrderSummaryProjection {
 - **Event Store** - Deep dive into persistence layer
 - **Development** - Setup and workflow guides
 - **Concepts** - Detailed architectural concepts
+
+## 📚 Resources & Inspiration
+
+This platform draws inspiration from leading event sourcing practitioners and resources:
+
+- **[Understanding Event Sourcing](https://leanpub.com/eventsourcing)** by Martin Dilger - A comprehensive book combining Event Modeling and Event Sourcing to plan and build software systems. Features Kotlin/Spring/Axon sample code. [GitHub repository](https://github.com/dilgerma/eventsourcing-book).
+- **[Event Modeling](https://eventmodeling.org/)** - The original Event Modeling methodology article
+- **[Event Sourcing Basics](https://martinfowler.com/eaaDev/EventSourcing.html)** by Martin Fowler - Foundational concepts
+- **[CQRS](https://martinfowler.com/bliki/CQRS.html)** - Command Query Responsibility Segregation pattern
 
 Ready to start your event sourcing journey? Begin with our Examples section!

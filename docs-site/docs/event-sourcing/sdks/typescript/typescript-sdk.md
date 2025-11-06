@@ -67,11 +67,11 @@ class OrderCancelled extends BaseDomainEvent {
 ### 3. Create Aggregate
 
 ```typescript
-import { AutoDispatchAggregate, EventSourcingHandler } from '@neurale/event-sourcing-ts';
+import { AggregateRoot, EventSourcingHandler } from '@neurale/event-sourcing-ts';
 
 type OrderEvent = OrderPlaced | OrderShipped | OrderCancelled;
 
-class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+class OrderAggregate extends AggregateRoot<OrderEvent> {
   private status: 'new' | 'placed' | 'shipped' | 'cancelled' = 'new';
   private customerId: string = '';
   private items: Array<{ productId: string; quantity: number; price: number }> = [];
@@ -178,12 +178,12 @@ if (loaded) {
 
 ## 🏗️ Aggregate Patterns
 
-### Pattern 1: AutoDispatchAggregate (Recommended)
+### Pattern 1: AggregateRoot (Recommended)
 
 Uses decorators to automatically route events to handlers:
 
 ```typescript
-class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+class OrderAggregate extends AggregateRoot<OrderEvent> {
   @EventSourcingHandler(OrderPlaced)
   onOrderPlaced(event: OrderPlaced): void {
     // Update state
@@ -237,7 +237,7 @@ class OrderAggregate extends BaseAggregate<OrderEvent> {
 Model complex state transitions:
 
 ```typescript
-class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+class OrderAggregate extends AggregateRoot<OrderEvent> {
   private state: OrderState = new NewOrderState();
 
   place(orderId: string, customerId: string, items: LineItem[]) {

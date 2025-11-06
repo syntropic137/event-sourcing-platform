@@ -1,0 +1,8 @@
+{
+  "name": "02-missing-decorators-invalid",
+  "version": "1.0.0",
+  "description": "Invalid VSA fixture: Missing decorators",
+  "private": true,
+  "type": "module"
+}
+

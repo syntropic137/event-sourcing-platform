@@ -1,5 +1,5 @@
 === EVENT SOURCING PLATFORM API REFERENCE ===
-Generated: 2025-09-30T05:55:38.270Z
+Generated: 2025-11-05T20:01:41.783Z
 Format: Plain Text (LLM-optimized)
 
 This document contains comprehensive API documentation for the Event Sourcing Platform,
@@ -1013,7 +1013,7 @@ class OrderShipped extends BaseDomainEvent {
 === 2. Create Aggregate ===
 
 --- CODE ---
-class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+class OrderAggregate extends AggregateRoot<OrderEvent> {
   private status: string = 'new';
   private customerId: string = '';
   private items: LineItem[] = [];
@@ -1388,14 +1388,14 @@ getAggregateType(): string {
 
 --- CODE ---
 
-=== AutoDispatchAggregate<TEvent> ===
+=== AggregateRoot<TEvent> ===
 
 Enhanced aggregate that automatically dispatches events to handler methods based on event type.
 
 --- CODE ---
-import { AutoDispatchAggregate, EventSourcingHandler } from '@neurale/event-sourcing-ts';
+import { AggregateRoot, EventSourcingHandler } from '@neurale/event-sourcing-ts';
 
-class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+class OrderAggregate extends AggregateRoot<OrderEvent> {
   private status: string = 'new';
   private customerId: string = '';
 
@@ -2303,11 +2303,11 @@ class OrderCancelled extends BaseDomainEvent {
 === 3. Create Aggregate ===
 
 --- CODE ---
-import { AutoDispatchAggregate, EventSourcingHandler } from '@neurale/event-sourcing-ts';
+import { AggregateRoot, EventSourcingHandler } from '@neurale/event-sourcing-ts';
 
 type OrderEvent = OrderPlaced | OrderShipped | OrderCancelled;
 
-class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+class OrderAggregate extends AggregateRoot<OrderEvent> {
   private status: 'new' | 'placed' | 'shipped' | 'cancelled' = 'new';
   private customerId: string = '';
   private items: Array<{ productId: string; quantity: number; price: number }> = [];
@@ -2417,12 +2417,12 @@ if (loaded) {
 
 === 🏗️ Aggregate Patterns ===
 
-=== Pattern 1: AutoDispatchAggregate (Recommended) ===
+=== Pattern 1: AggregateRoot (Recommended) ===
 
 Uses decorators to automatically route events to handlers:
 
 --- CODE ---
-class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+class OrderAggregate extends AggregateRoot<OrderEvent> {
   @EventSourcingHandler(OrderPlaced)
   onOrderPlaced(event: OrderPlaced): void {
     // Update state
@@ -2478,7 +2478,7 @@ Cons:
 Model complex state transitions:
 
 --- CODE ---
-class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+class OrderAggregate extends AggregateRoot<OrderEvent> {
   private state: OrderState = new NewOrderState();
 
   place(orderId: string, customerId: string, items: LineItem[]) {
@@ -4146,27 +4146,36 @@ class AccountAggregate extends AggregateRoot {
 
 === Command Structure ===
 
-Commands represent intentions to change state:
+Commands represent intentions to change state. Commands should be classes (not interfaces) with an aggregateId property:
 
 --- CODE ---
 // Commands are imperative (what should happen)
-interface PlaceOrderCommand {
-  orderId: string;
-  customerId: string;
-  items: LineItem[];
+// Use classes with aggregateId for proper command dispatching
+class PlaceOrderCommand {
+  constructor(
+    public readonly aggregateId: string,  // Required for all commands
+    public readonly customerId: string,
+    public readonly items: LineItem[]
+  ) {}
 }
 
-interface ShipOrderCommand {
-  orderId: string;
-  trackingNumber: string;
+class ShipOrderCommand {
+  constructor(
+    public readonly aggregateId: string,  // Required for all commands
+    public readonly trackingNumber: string
+  ) {}
 }
 
-interface DepositMoneyCommand {
-  accountId: string;
-  amount: number;
+class DepositMoneyCommand {
+  constructor(
+    public readonly aggregateId: string,  // Required for all commands
+    public readonly amount: number
+  ) {}
 }
 
 --- CODE ---
+
+Why classes? The @CommandHandler decorator uses the command's constructor name for routing, and aggregateId is required for the repository to load/save the correct aggregate.
 
 === Event Structure ===
 

@@ -5,6 +5,7 @@
 import { AggregateId, Version } from '../types/common';
 import { DomainEvent, EventEnvelope, EventFactory } from './event';
 import { InvalidAggregateStateError } from './errors';
+import { COMMAND_HANDLER_MAP, CommandHandlerAwareConstructor } from './command';
 
 const EVENT_HANDLER_MAP: unique symbol = Symbol('eventHandlerMap');
 
@@ -195,11 +196,27 @@ export function EventSourcingHandler(eventType: string) {
   };
 }
 
-/** Advanced aggregate that supports automatic event dispatching */
-export abstract class AutoDispatchAggregate<
+/**
+ * AggregateRoot - Production-ready aggregate base class
+ * This is the main class that aggregates should extend
+ *
+ * Features:
+ * - Automatic event dispatching via @EventSourcingHandler decorators
+ * - Command handling via @CommandHandler decorators
+ * - Full event sourcing lifecycle support
+ */
+export abstract class AggregateRoot<
   TEvent extends DomainEvent = DomainEvent,
 > extends BaseAggregate<TEvent> {
-  /** Apply event using automatic method dispatch */
+  /** Get the aggregate identifier */
+  get aggregateId(): AggregateId | null {
+    return this.id;
+  }
+
+  /**
+   * Apply event using automatic method dispatch
+   * Automatically routes events to methods decorated with @EventSourcingHandler
+   */
   applyEvent(event: TEvent): void {
     const ctor = this.constructor as EventHandlerAwareConstructor;
     const eventHandlers = ctor[EVENT_HANDLER_MAP];
@@ -218,23 +235,12 @@ export abstract class AutoDispatchAggregate<
     this.handleUnknownEvent(event);
   }
 
-  /** Handle unknown events - can be overridden by subclasses */
+  /**
+   * Handle unknown events - can be overridden by subclasses
+   * Default behavior: log a warning and ignore the event
+   */
   protected handleUnknownEvent(event: TEvent): void {
-    // Default: ignore unknown events
     console.warn(`No handler found for event type: ${event.eventType}`);
-  }
-}
-
-/**
- * AggregateRoot - Production-ready aggregate base class
- * This is the main class that aggregates should extend
- */
-export abstract class AggregateRoot<
-  TEvent extends DomainEvent = DomainEvent,
-> extends AutoDispatchAggregate<TEvent> {
-  /** Get the aggregate identifier */
-  get aggregateId(): AggregateId | null {
-    return this.id;
   }
 
   /**
@@ -259,6 +265,34 @@ export abstract class AggregateRoot<
     const ctor = this.constructor as AggregateAwareConstructor;
     const metadata = ctor[AGGREGATE_METADATA];
     return metadata?.aggregateType || this.constructor.name;
+  }
+
+  /**
+   * Handle a command by dispatching to the appropriate @CommandHandler method
+   * This method reads the @CommandHandler decorator metadata and invokes the decorated method
+   */
+  protected handleCommand<TCommand extends object>(command: TCommand): void {
+    const commandType = (command as { constructor: { name: string } }).constructor.name;
+    const ctor = this.constructor as unknown as CommandHandlerAwareConstructor;
+    const handlers = ctor[COMMAND_HANDLER_MAP];
+
+    if (!handlers || !handlers.has(commandType)) {
+      throw new Error(
+        `No @CommandHandler found for command type: ${commandType} on aggregate ${this.getAggregateType()}`
+      );
+    }
+
+    const methodName = handlers.get(commandType)!;
+    const handler = (this as Record<string, unknown>)[methodName];
+
+    if (typeof handler !== 'function') {
+      throw new Error(
+        `Command handler method '${methodName}' is not a function on aggregate ${this.getAggregateType()}`
+      );
+    }
+
+    // Invoke the command handler method
+    (handler as (command: TCommand) => void).call(this, command);
   }
 }
 

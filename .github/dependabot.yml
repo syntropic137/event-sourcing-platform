@@ -1,0 +1,50 @@
+version: 2
+updates:
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "github-actions"
+  
+  # Event Sourcing TypeScript Package
+  - package-ecosystem: "npm"
+    directory: "/event-sourcing/typescript"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "event-sourcing"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+  
+  # Event Store SDK TypeScript
+  - package-ecosystem: "npm"
+    directory: "/event-store/sdks/sdk-ts"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "eventstore-sdk"
+  
+  # Root workspace
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "monorepo"
+  
+  # Documentation site
+  - package-ecosystem: "npm"
+    directory: "/docs-site"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "docs"
+

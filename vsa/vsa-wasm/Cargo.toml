@@ -1,0 +1,28 @@
+[package]
+name = "vsa-wasm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WASM bindings for Vertical Slice Architecture management"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["console_error_panic_hook"]
+
+[dependencies]
+vsa-core = { path = "../vsa-core" }
+
+wasm-bindgen = "0.2"
+serde.workspace = true
+serde_json.workspace = true
+serde-wasm-bindgen = "0.6"
+console_error_panic_hook = { version = "0.1", optional = true }
+wee_alloc = "0.4"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+

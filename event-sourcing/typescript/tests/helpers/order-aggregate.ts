@@ -1,4 +1,4 @@
-import { AutoDispatchAggregate, BaseDomainEvent, EventSourcingHandler } from '../../src';
+import { AggregateRoot, BaseDomainEvent, EventSourcingHandler } from '../../src';
 
 export class OrderSubmitted extends BaseDomainEvent {
   readonly eventType = 'OrderSubmitted' as const;
@@ -27,7 +27,7 @@ export enum OrderStatus {
   Cancelled = 'Cancelled',
 }
 
-export class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+export class OrderAggregate extends AggregateRoot<OrderEvent> {
   private status: OrderStatus = OrderStatus.New;
 
   getAggregateType(): string {

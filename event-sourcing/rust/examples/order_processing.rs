@@ -1,5 +1,12 @@
 //! Order processing example demonstrating command handling and event sourcing
+//!
+//! This example demonstrates ADR-004 compliance:
+//! - Command handlers integrated in aggregates via AggregateRoot trait
+//! - Business validation in handle_command()
+//! - State updates only in apply_event()
+//! - Commands processed through validation before events are applied
 
+use async_trait::async_trait;
 use event_sourcing_rust::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -130,6 +137,146 @@ impl Aggregate for Order {
     }
 }
 
+//=============================================================================
+// ADR-004: Command Handlers in Aggregates
+//=============================================================================
+
+#[async_trait]
+impl AggregateRoot for Order {
+    type Command = OrderCommand;
+
+    /// Handle commands with business logic validation
+    ///
+    /// This method implements ADR-004 pattern: commands are validated here,
+    /// and events are returned to be applied. State updates happen only in
+    /// apply_event(), ensuring a clear separation of concerns.
+    async fn handle_command(&self, command: Self::Command) -> Result<Vec<Self::Event>> {
+        match command {
+            // CREATE ORDER - Validate order doesn't exist
+            OrderCommand::CreateOrder { id, customer_id } => {
+                if self.id.is_some() {
+                    return Err(Error::invalid_command("Order already exists"));
+                }
+                if customer_id.is_empty() {
+                    return Err(Error::invalid_command("Customer ID is required"));
+                }
+                Ok(vec![OrderEvent::Created { id, customer_id }])
+            }
+
+            // ADD ITEM - Validate order exists and is in Draft status
+            OrderCommand::AddItem {
+                product_id,
+                quantity,
+                price,
+            } => {
+                if self.id.is_none() {
+                    return Err(Error::invalid_command(
+                        "Cannot add item to non-existent order",
+                    ));
+                }
+                if !matches!(self.status, OrderStatus::Draft) {
+                    return Err(Error::invalid_command(
+                        "Cannot add items to confirmed order",
+                    ));
+                }
+                if quantity == 0 {
+                    return Err(Error::invalid_command("Quantity must be greater than 0"));
+                }
+                if price < 0.0 {
+                    return Err(Error::invalid_command("Price cannot be negative"));
+                }
+                Ok(vec![OrderEvent::ItemAdded {
+                    product_id,
+                    quantity,
+                    price,
+                }])
+            }
+
+            // REMOVE ITEM - Validate order exists and is in Draft status
+            OrderCommand::RemoveItem { product_id } => {
+                if self.id.is_none() {
+                    return Err(Error::invalid_command(
+                        "Cannot remove item from non-existent order",
+                    ));
+                }
+                if !matches!(self.status, OrderStatus::Draft) {
+                    return Err(Error::invalid_command(
+                        "Cannot remove items from confirmed order",
+                    ));
+                }
+                if !self.items.iter().any(|item| item.product_id == product_id) {
+                    return Err(Error::invalid_command("Item not found in order"));
+                }
+                Ok(vec![OrderEvent::ItemRemoved { product_id }])
+            }
+
+            // CONFIRM ORDER - Validate order has items
+            OrderCommand::ConfirmOrder => {
+                if self.id.is_none() {
+                    return Err(Error::invalid_command("Cannot confirm non-existent order"));
+                }
+                if !matches!(self.status, OrderStatus::Draft) {
+                    return Err(Error::invalid_command("Order is not in Draft status"));
+                }
+                if self.items.is_empty() {
+                    return Err(Error::invalid_command("Cannot confirm order with no items"));
+                }
+                Ok(vec![OrderEvent::Confirmed])
+            }
+
+            // SHIP ORDER - Validate order is confirmed
+            OrderCommand::ShipOrder { tracking_number } => {
+                if self.id.is_none() {
+                    return Err(Error::invalid_command("Cannot ship non-existent order"));
+                }
+                if !matches!(self.status, OrderStatus::Confirmed) {
+                    return Err(Error::invalid_command(
+                        "Order must be confirmed before shipping",
+                    ));
+                }
+                if tracking_number.is_empty() {
+                    return Err(Error::invalid_command("Tracking number is required"));
+                }
+                Ok(vec![OrderEvent::Shipped { tracking_number }])
+            }
+
+            // DELIVER ORDER - Validate order is shipped
+            OrderCommand::DeliverOrder => {
+                if self.id.is_none() {
+                    return Err(Error::invalid_command("Cannot deliver non-existent order"));
+                }
+                if !matches!(self.status, OrderStatus::Shipped) {
+                    return Err(Error::invalid_command(
+                        "Order must be shipped before delivery",
+                    ));
+                }
+                Ok(vec![OrderEvent::Delivered])
+            }
+
+            // CANCEL ORDER - Validate order is not delivered
+            OrderCommand::CancelOrder { reason } => {
+                if self.id.is_none() {
+                    return Err(Error::invalid_command("Cannot cancel non-existent order"));
+                }
+                if matches!(self.status, OrderStatus::Delivered) {
+                    return Err(Error::invalid_command("Cannot cancel delivered order"));
+                }
+                if matches!(self.status, OrderStatus::Cancelled) {
+                    return Err(Error::invalid_command("Order is already cancelled"));
+                }
+                if reason.is_empty() {
+                    return Err(Error::invalid_command("Cancellation reason is required"));
+                }
+                Ok(vec![OrderEvent::Cancelled { reason }])
+            }
+        }
+    }
+}
+
+//=============================================================================
+// Helper Methods
+//=============================================================================
+
 impl Order {
     fn recalculate_total(&mut self) {
         self.total = self
@@ -168,38 +315,103 @@ enum OrderCommand {
 
 impl Command for OrderCommand {}
 
-fn main() {
-    println!("Order processing example");
+#[tokio::main]
+async fn main() {
+    println!("🛒 Order Processing Example - ADR-004 Compliant");
+    println!("================================================\n");
 
-    // Create and process an order
     let mut order = Order::default();
 
-    let events = vec![
-        OrderEvent::Created {
-            id: "order-123".to_string(),
-            customer_id: "customer-456".to_string(),
-        },
-        OrderEvent::ItemAdded {
-            product_id: "product-1".to_string(),
-            quantity: 2,
-            price: 29.99,
-        },
-        OrderEvent::ItemAdded {
-            product_id: "product-2".to_string(),
-            quantity: 1,
-            price: 49.99,
-        },
-        OrderEvent::Confirmed,
-        OrderEvent::Shipped {
-            tracking_number: "TRK123456".to_string(),
-        },
-    ];
-
+    // Step 1: Create Order
+    println!("📦 Step 1: Create Order");
+    let create_cmd = OrderCommand::CreateOrder {
+        id: "order-123".to_string(),
+        customer_id: "customer-456".to_string(),
+    };
+    let events = order.handle_command(create_cmd).await.unwrap();
     for event in &events {
         order.apply_event(event).unwrap();
     }
+    println!("   ✓ Order created: {}", order.id.as_ref().unwrap());
 
-    println!("Order after processing: {order:?}");
-    println!("Order total: ${:.2}", order.total);
-    println!("Number of items: {}", order.items.len());
+    // Step 2: Add Items
+    println!("\n📝 Step 2: Add Items");
+    let add_item1 = OrderCommand::AddItem {
+        product_id: "product-1".to_string(),
+        quantity: 2,
+        price: 29.99,
+    };
+    let events = order.handle_command(add_item1).await.unwrap();
+    for event in &events {
+        order.apply_event(event).unwrap();
+    }
+    println!("   ✓ Added 2x product-1 @ $29.99");
+
+    let add_item2 = OrderCommand::AddItem {
+        product_id: "product-2".to_string(),
+        quantity: 1,
+        price: 49.99,
+    };
+    let events = order.handle_command(add_item2).await.unwrap();
+    for event in &events {
+        order.apply_event(event).unwrap();
+    }
+    println!("   ✓ Added 1x product-2 @ $49.99");
+    println!("   Total: ${:.2}", order.total);
+
+    // Step 3: Confirm Order
+    println!("\n✅ Step 3: Confirm Order");
+    let confirm_cmd = OrderCommand::ConfirmOrder;
+    let events = order.handle_command(confirm_cmd).await.unwrap();
+    for event in &events {
+        order.apply_event(event).unwrap();
+    }
+    println!("   ✓ Order confirmed (Status: {:?})", order.status);
+
+    // Step 4: Ship Order
+    println!("\n📮 Step 4: Ship Order");
+    let ship_cmd = OrderCommand::ShipOrder {
+        tracking_number: "TRK123456789".to_string(),
+    };
+    let events = order.handle_command(ship_cmd).await.unwrap();
+    for event in &events {
+        order.apply_event(event).unwrap();
+    }
+    println!("   ✓ Order shipped (Tracking: TRK123456789)");
+
+    // Step 5: Deliver Order
+    println!("\n🎉 Step 5: Deliver Order");
+    let deliver_cmd = OrderCommand::DeliverOrder;
+    let events = order.handle_command(deliver_cmd).await.unwrap();
+    for event in &events {
+        order.apply_event(event).unwrap();
+    }
+    println!("   ✓ Order delivered!");
+
+    // Final Summary
+    println!("\n📊 Final Order Summary:");
+    println!("   Order ID: {}", order.id.as_ref().unwrap());
+    println!("   Customer: {}", order.customer_id);
+    println!("   Status: {:?}", order.status);
+    println!("   Items: {}", order.items.len());
+    println!("   Total: ${:.2}", order.total);
+
+    // Demonstrate Validation
+    println!("\n🔒 Demonstrating Business Rule Validation:");
+    println!("   Attempting to add item to delivered order...");
+    let invalid_cmd = OrderCommand::AddItem {
+        product_id: "product-3".to_string(),
+        quantity: 1,
+        price: 19.99,
+    };
+    match order.handle_command(invalid_cmd).await {
+        Ok(_) => println!("   ❌ ERROR: Should have been rejected!"),
+        Err(e) => println!("   ✓ Correctly rejected: {e:?}"),
+    }
+
+    println!("\n✅ ADR-004 Pattern Demonstrated:");
+    println!("   • Commands validated in handle_command()");
+    println!("   • Events applied in apply_event()");
+    println!("   • Business rules enforced");
+    println!("   • Invalid operations prevented");
 }

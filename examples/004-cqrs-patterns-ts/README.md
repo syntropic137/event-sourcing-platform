@@ -1,95 +1,314 @@
-# 004-cqrs-patterns-ts — Command/Query Responsibility Segregation
+# 004-cqrs-patterns-ts: CQRS Patterns Example
 
-This example demonstrates CQRS (Command/Query Responsibility Segregation) patterns in an event-sourced banking system. It shows how to separate write operations (commands) from read operations (queries) using different models optimized for each purpose.
+**Demonstrates:** Hexagonal Event-Sourced VSA Architecture with full CQRS separation
 
-## What This Example Demonstrates
+This example showcases **Command Query Responsibility Segregation (CQRS)** in a banking system, following the Hexagonal Event-Sourced VSA Architecture pattern. It demonstrates clear separation between command (write) and query (read) responsibilities with projections (read models).
 
-- **CQRS Architecture**: Clear separation between command and query sides
-- **Command Handlers**: Dedicated handlers for processing business operations
-- **Query Handlers**: Optimized handlers for reading denormalized data
-- **Read Models**: Projections built from events for efficient querying
-- **Event-Driven Projections**: Building read models by processing event streams
-- **Multiple Views**: Different read models for different query needs
+## 🏗️ Architecture
 
-## Architecture
+This example perfectly demonstrates the **Hexagonal Event-Sourced VSA** pattern with CQRS:
 
-### Command Side (Write)
-- **Commands**: Structured requests for business operations
-- **Command Handlers**: Process commands and coordinate with aggregates
-- **Aggregates**: Enforce business rules and emit events
-- **Events**: Record what happened in the system
+```
+004-cqrs-patterns-ts/
+├── vsa.yaml                    # VSA configuration (validates architecture)
+├── package.json
+├── src/
+│   ├── domain/                 # 🔵 DOMAIN LAYER (Hexagon Core)
+│   │   ├── BankAccountAggregate.ts
+│   │   ├── commands/           # Write model commands
+│   │   │   ├── OpenAccountCommand.ts
+│   │   │   ├── DepositMoneyCommand.ts
+│   │   │   ├── WithdrawMoneyCommand.ts
+│   │   │   └── CloseAccountCommand.ts
+│   │   ├── queries/            # Read model queries
+│   │   │   ├── GetAccountSummaryQuery.ts
+│   │   │   ├── GetTransactionHistoryQuery.ts
+│   │   │   └── GetAccountsByCustomerQuery.ts
+│   │   └── events/             # Domain events
+│   │       ├── AccountOpenedEvent.ts
+│   │       ├── MoneyDepositedEvent.ts
+│   │       ├── MoneyWithdrawnEvent.ts
+│   │       └── AccountClosedEvent.ts
+│   │
+│   ├── infrastructure/         # 🟢 INFRASTRUCTURE (Application Services)
+│   │   ├── CommandBus.ts       # Routes commands to aggregates
+│   │   └── QueryBus.ts         # Routes queries to projections
+│   │
+│   ├── slices/                 # 🟡 ADAPTERS (Vertical Slices)
+│   │   │
+│   │   # COMMAND SLICES (Write Side)
+│   │   ├── open-account/
+│   │   │   └── OpenAccountCli.ts
+│   │   ├── deposit-money/
+│   │   │   └── DepositMoneyCli.ts
+│   │   ├── withdraw-money/
+│   │   │   └── WithdrawMoneyCli.ts
+│   │   ├── close-account/
+│   │   │   └── CloseAccountCli.ts
+│   │   │
+│   │   # QUERY SLICES (Read Side with Projections)
+│   │   ├── get-account-summary/
+│   │   │   ├── GetAccountSummaryCli.ts          # Query adapter
+│   │   │   └── AccountSummaryProjection.ts      # Read model builder
+│   │   ├── get-transaction-history/
+│   │   │   ├── GetTransactionHistoryCli.ts      # Query adapter
+│   │   │   └── TransactionHistoryProjection.ts  # Read model builder
+│   │   └── get-accounts-by-customer/
+│   │       └── GetAccountsByCustomerCli.ts      # Query adapter (uses shared projection)
+│   │
+│   └── main.ts                 # Entry point, wires everything together
+```
 
-### Query Side (Read)
-- **Read Models**: Denormalized views optimized for specific queries
-- **Query Handlers**: Process queries against read models
-- **Projections**: Event processors that build and maintain read models
+### Key Architecture Principles
 
-## Domain Model: Banking System
+#### 🔵 Domain Layer (Hexagon Core)
+- **`BankAccountAggregate`**: Contains ALL business logic for bank accounts
+- **Commands**: Intent to change state (write model)
+- **Queries**: Intent to read state (read model)
+- **Events**: Immutable facts representing state changes
+- **Zero external dependencies** (pure business logic)
 
-### Commands
-- `OpenAccountCommand`: Open a new bank account
-- `DepositMoneyCommand`: Deposit money to an account
-- `WithdrawMoneyCommand`: Withdraw money from an account
-- `CloseAccountCommand`: Close an account
+#### 🟢 Infrastructure Layer (Application Services)
+- **`CommandBus`**: Routes commands to the aggregate via repository
+- **`QueryBus`**: Routes queries to projections (read models)
+- **Shared infrastructure** used by all slices
 
-### Events
-- `AccountOpened`: Account was created
-- `MoneyDeposited`: Money was added to account
-- `MoneyWithdrawn`: Money was removed from account
-- `AccountClosed`: Account was closed
+#### 🟡 Adapter Layer (Vertical Slices)
+- **Command Slices**: Thin CLI adapters that dispatch commands
+- **Query Slices**: Thin CLI adapters + Projections (read model builders)
+- **Each slice is isolated** and can be developed independently
+- **No business logic** in slices (only translation)
 
-### Read Models
-- `AccountSummary`: Account overview with balance and transaction count
-- `TransactionHistory`: Detailed transaction log with running balances
+## 🎯 CQRS Demonstration
 
-## Example Flow
+### Write Side (Commands)
+Commands modify state by going through:
+1. **CLI Adapter** (e.g., `OpenAccountCli`) → Creates command object
+2. **CommandBus** → Routes command to aggregate
+3. **Aggregate** → Validates business rules and emits events
+4. **Event Store** → Persists events
 
-1. **Command Processing**: Open accounts and perform transactions
-2. **Event Storage**: All operations are stored as events
-3. **Projection Building**: Read models are built from event streams
-4. **Query Processing**: Different views are queried efficiently
-5. **Real-time Updates**: Read models are updated as new events occur
+```typescript
+// Command slice (adapter)
+await openAccountCli.handle(accountId, customerId, "Checking", 1000);
+// ↓
+// CommandBus routes to BankAccountAggregate.openAccount()
+// ↓
+// Aggregate validates and emits AccountOpenedEvent
+// ↓
+// Event stored in event store
+```
 
-## Run
+### Read Side (Queries)
+Queries read optimized denormalized data:
+1. **CLI Adapter** (e.g., `GetAccountSummaryCli`) → Creates query object
+2. **QueryBus** → Routes query to projection
+3. **Projection** → Returns pre-built read model
+4. **CLI Adapter** → Formats and displays result
 
+```typescript
+// Query slice (adapter)
+await getAccountSummaryCli.handle(accountId);
+// ↓
+// QueryBus routes to AccountSummaryProjection
+// ↓
+// Projection returns denormalized AccountSummary
+// ↓
+// CLI adapter formats and displays
+```
+
+### Projections (Read Models)
+Projections build denormalized views from events:
+
+```typescript
+// AccountSummaryProjection processes events
+accountSummaryProjection.processEvents(events);
+
+// Events are transformed into optimized read models:
+// AccountOpenedEvent → Creates AccountSummary
+// MoneyDepositedEvent → Updates balance, increments transaction count
+// MoneyWithdrawnEvent → Updates balance, increments transaction count
+// AccountClosedEvent → Updates status
+```
+
+## 🚀 Running the Example
+
+### Prerequisites
 ```bash
-# Start dev infrastructure
+# From the workspace root
+npm install
+```
+
+### Run with In-Memory Event Store (Easiest)
+```bash
+cd examples/004-cqrs-patterns-ts
+npm run dev -- --memory
+```
+
+### Run with gRPC Event Store
+```bash
+# Start the event sourcing platform
 make dev-start
 
-# Start event store server (in separate terminal)
-cd event-store
-BACKEND=postgres DATABASE_URL=postgres://dev:dev@localhost:15648/dev cargo run -p eventstore-bin
-
 # Run the example
-pnpm --filter ./examples/004-cqrs-patterns-ts run start
+cd examples/004-cqrs-patterns-ts
+npm run dev
 ```
 
-Add `-- --memory` to run without the gRPC backend:
+### Build and Run
+```bash
+npm run build
+npm start
+```
+
+### Validate Architecture
+```bash
+# Validate that the architecture follows ADRs
+npm run validate
+
+# Or from the workspace root
+vsa validate examples/004-cqrs-patterns-ts
+```
+
+## 📊 Expected Output
+
+```
+🏦 CQRS Patterns Example: Banking System
+=========================================
+
+📝 COMMAND SIDE - Processing Business Operations:
+---------------------------------------------------
+✅ Opened Checking account account-xxx with $1000
+✅ Opened Savings account account-yyy with $5000
+💰 Deposited $500 to account account-xxx
+💸 Withdrew $200 from account account-xxx
+💰 Deposited $1000 to account account-yyy
+
+🔄 BUILDING READ MODELS - Processing Events into Projections:
+-------------------------------------------------------------
+📊 Built read models from 5 events
+
+📖 QUERY SIDE - Reading Optimized Views:
+-----------------------------------------
+
+💳 Account Summary:
+   Account ID: account-xxx
+   Customer ID: customer-123
+   Type: Checking
+   Balance: $1300
+   Status: Open
+   Transactions: 2
+   Last Activity: 2025-11-06T...
+
+📋 Transaction History for account-xxx:
+   1. +$500 - Salary deposit (Balance: $1500)
+   2. -$200 - ATM withdrawal (Balance: $1300)
+
+👤 Customer customer-123 has 2 accounts:
+   Checking: $1300 (Open)
+   Savings: $6000 (Open)
+
+📝 ADDITIONAL COMMAND:
+---------------------
+🔒 Closed account account-yyy
+
+💳 Account Summary:
+   Account ID: account-yyy
+   ...
+   Status: Closed
+
+🎉 CQRS Example completed successfully!
+```
+
+## 🧪 VSA Validation
+
+This example is **ADR-compliant** and validated by the VSA CLI:
 
 ```bash
-pnpm --filter ./examples/004-cqrs-patterns-ts run start -- --memory
+vsa validate
 ```
 
-## Key Learning Points
+The VSA tool will check:
+- ✅ Domain layer isolation (aggregates in `domain/`)
+- ✅ Command organization (`domain/commands/`)
+- ✅ Query organization (`domain/queries/`)
+- ✅ Event organization with versioning (`domain/events/`)
+- ✅ Vertical slice structure (`slices/` with CLI adapters)
+- ✅ Infrastructure separation (`infrastructure/`)
+- ✅ CQRS separation (command vs query slices)
+- ✅ Dependency rules (adapters → infrastructure → domain)
+- ✅ No cross-slice imports
+- ✅ Event decorators present (`@Event`)
 
-1. **Separation of Concerns**: Commands and queries have different optimization needs
-2. **Write Optimization**: Command side optimized for consistency and business rules
-3. **Read Optimization**: Query side optimized for fast, flexible data access
-4. **Event-Driven Projections**: Read models are built and maintained from events
-5. **Multiple Views**: Same data can be projected into different read models
-6. **Eventual Consistency**: Read models are eventually consistent with write side
+## 📚 What This Example Teaches
 
-## CQRS Benefits Demonstrated
+### 1. CQRS Pattern
+- **Separate models** for reading and writing
+- **Commands** change state (write model)
+- **Queries** read state (read model)
+- **Projections** build optimized views from events
 
-- **Scalability**: Read and write sides can be scaled independently
-- **Performance**: Queries run against optimized, denormalized data
-- **Flexibility**: Multiple read models for different use cases
-- **Maintainability**: Clear separation of read and write concerns
-- **Evolution**: Read models can be rebuilt from events as requirements change
+### 2. Hexagonal Architecture
+- **Domain** is isolated and pure
+- **Infrastructure** provides shared services
+- **Adapters** translate external protocols to domain operations
 
-## Next Steps
+### 3. Event Sourcing
+- **Events** are the source of truth
+- **Aggregates** validate and emit events
+- **Projections** derive read models from events
+- **Event versioning** with `@Event` decorator
 
-This example sets the foundation for:
-- **005-projections**: Advanced projection patterns and techniques
-- **006-event-bus**: Cross-aggregate communication through events
-- **007-ecommerce-complete**: Full system with multiple bounded contexts
+### 4. Vertical Slice Architecture
+- **Slices are isolated** by feature
+- **Each slice** is a thin adapter
+- **No business logic** in slices
+- **Parallel development** is possible
+
+## 🔗 Related ADRs
+
+- **ADR-004**: Command Handlers in Aggregates
+- **ADR-005**: Hexagonal Architecture for Event Sourcing
+- **ADR-006**: Domain Organization Pattern
+- **ADR-007**: Event Versioning and Upcasters
+- **ADR-008**: Vertical Slices as Hexagonal Adapters
+- **ADR-009**: CQRS Pattern Implementation
+- **ADR-010**: Decorator Patterns for Framework Integration
+
+## 🔄 Comparison with Old Structure
+
+### Before (Monolithic)
+```
+src/
+└── index.ts  (600+ lines, everything mixed together)
+```
+
+### After (Hexagonal VSA)
+```
+src/
+├── domain/           # Pure business logic
+├── infrastructure/   # Shared services
+├── slices/           # Isolated features
+└── main.ts           # Wiring
+```
+
+**Benefits:**
+- ✅ Clear separation of concerns
+- ✅ Easy to test (pure domain logic)
+- ✅ Easy to understand (each file has one responsibility)
+- ✅ Easy to extend (add new slices without affecting others)
+- ✅ VSA validated (architecture is enforced)
+- ✅ ADR compliant (follows best practices)
+
+## 📝 Next Steps
+
+1. **Run the example** to see CQRS in action
+2. **Explore the code** to understand the separation
+3. **Run `vsa validate`** to see architecture validation
+4. **Modify a slice** and see that others are unaffected
+5. **Add a new command** (e.g., `TransferMoneyCommand`)
+6. **Add a new query** (e.g., `GetAccountsByTypeQuery`)
+
+---
+
+**Need help?** Check the [Architecture Quick Start Guide](../../docs/HEXAGONAL-VSA-QUICK-START.md) or review the [ADRs](../../docs/adrs/).

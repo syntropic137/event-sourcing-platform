@@ -1,0 +1,11 @@
+{
+  "name": "02-simple-aggregate-fixture",
+  "version": "1.0.0",
+  "description": "VSA test fixture: Simple aggregate with hexagonal architecture",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@event-sourcing-platform/core": "workspace:*"
+  }
+}
+

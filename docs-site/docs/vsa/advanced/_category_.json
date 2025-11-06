@@ -1,0 +1,9 @@
+{
+  "label": "Advanced Topics",
+  "position": 6,
+  "link": {
+    "type": "generated-index",
+    "description": "Advanced patterns and techniques for VSA development."
+  }
+}
+

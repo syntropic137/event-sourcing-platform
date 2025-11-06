@@ -1,17 +1,23 @@
 {
   "name": "007-ecommerce-complete-ts",
-  "version": "0.1.0",
-  "description": "E-commerce Complete Example (TypeScript)",
-  "main": "dist/index.js",
+  "version": "2.0.0",
+  "description": "Complete E-commerce Platform demonstrating Hexagonal Event-Sourced VSA Architecture (TypeScript)",
+  "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
+    "start": "node dist/main.js",
+    "dev": "ts-node src/main.ts",
     "clean": "rimraf dist",
-    "setup": "npm run build"
+    "setup": "npm install && npm run build",
+    "run": "npm run dev",
+    "validate": "vsa validate"
   },
   "keywords": [
     "event-sourcing",
+    "hexagonal-architecture",
+    "vsa",
+    "cqrs",
+    "ecommerce",
     "example",
     "typescript"
   ],

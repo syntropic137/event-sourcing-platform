@@ -1,0 +1,9 @@
+{
+  "label": "Guides",
+  "position": 8,
+  "link": {
+    "type": "generated-index",
+    "description": "Practical guides for adopting and using VSA effectively."
+  }
+}
+

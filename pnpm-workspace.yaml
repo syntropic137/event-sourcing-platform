@@ -3,3 +3,5 @@ packages:
   - event-sourcing/typescript
   - examples/*-ts
   - docs-site
+  - vsa/examples/*-ts
+  - vsa/vscode-extension

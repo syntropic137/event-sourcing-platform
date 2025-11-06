@@ -276,3 +276,110 @@ function normalizeCustomMetadata(value: unknown): CustomMetadata {
   }
   return metadata;
 }
+
+// ============================================================================
+// EVENT DECORATOR (ADR-010)
+// ============================================================================
+
+/** Event metadata storage symbol */
+export const EVENT_METADATA: unique symbol = Symbol('eventMetadata');
+
+/** Event metadata */
+export interface EventDecoratorMetadata {
+  eventType: EventType;
+  version: string;
+}
+
+/** Type-aware constructor with event metadata */
+export type EventAwareConstructor = {
+  [EVENT_METADATA]?: EventDecoratorMetadata;
+};
+
+/**
+ * Validate event version format.
+ * Supports two formats:
+ * - Simple: "v1", "v2", "v3", etc. (v followed by integer)
+ * - Semantic: "1.0.0", "2.1.3", etc. (major.minor.patch)
+ *
+ * @param version - The version string to validate
+ * @returns True if valid, false otherwise
+ */
+function isValidEventVersion(version: string): boolean {
+  // Simple version format: v1, v2, v3, etc.
+  const simpleVersionRegex = /^v\d+$/;
+  if (simpleVersionRegex.test(version)) {
+    return true;
+  }
+
+  // Semantic version format: 1.0.0, 2.1.3, etc.
+  const semanticVersionRegex = /^\d+\.\d+\.\d+$/;
+  if (semanticVersionRegex.test(version)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Decorator for event classes to store metadata about event type and version.
+ * This enables the VSA CLI to discover and validate events automatically.
+ *
+ * @param eventType - The event type identifier (e.g., "TaskCreated")
+ * @param version - The event version. Must be either:
+ *                  - Simple format: "v1", "v2", "v3", etc. (recommended)
+ *                  - Semantic format: "1.0.0", "2.1.3", etc. (advanced)
+ *
+ * @throws {Error} If version format is invalid
+ *
+ * @example Simple versioning (recommended):
+ * ```typescript
+ * @Event("TaskCreated", "v1")
+ * export class TaskCreatedEvent extends BaseDomainEvent {
+ *   readonly eventType = "TaskCreated" as const;
+ *   readonly schemaVersion = 1 as const;
+ *   // ...
+ * }
+ * ```
+ *
+ * @example Semantic versioning (advanced):
+ * ```typescript
+ * @Event("TaskCreated", "2.0.0")
+ * export class TaskCreatedEventV2 extends BaseDomainEvent {
+ *   readonly eventType = "TaskCreated" as const;
+ *   readonly schemaVersion = 2 as const;
+ *   // ...
+ * }
+ * ```
+ *
+ * @see ADR-007: Event Versioning and Upcasters
+ * @see ADR-010: Decorator Patterns for Framework Integration
+ */
+export function Event(eventType: EventType, version: string) {
+  return function <T extends new (...args: any[]) => any>(constructor: T): T {
+    // Validate version format
+    if (!isValidEventVersion(version)) {
+      throw new Error(
+        `Invalid event version format: "${version}" for event "${eventType}". ` +
+          `Version must be either simple format (e.g., "v1", "v2") or semantic format (e.g., "1.0.0", "2.1.3"). ` +
+          `See ADR-007 for event versioning guidelines.`
+      );
+    }
+
+    // Store metadata on the constructor
+    (constructor as EventAwareConstructor)[EVENT_METADATA] = {
+      eventType,
+      version,
+    };
+
+    return constructor;
+  };
+}
+
+/**
+ * Get event metadata from an event class
+ */
+export function getEventMetadata(
+  eventClass: EventAwareConstructor
+): EventDecoratorMetadata | undefined {
+  return eventClass[EVENT_METADATA];
+}

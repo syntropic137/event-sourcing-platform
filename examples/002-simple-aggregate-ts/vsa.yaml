@@ -1,0 +1,126 @@
+# VSA Configuration for 002-simple-aggregate-ts
+# Version 2 - Hexagonal Event-Sourced VSA Architecture
+#
+# This configuration enables VSA CLI validation of:
+# - Domain organization (ADR-006)
+# - Event versioning (ADR-007)
+# - Thin slice adapters (ADR-008)
+
+version: 2
+
+# Architecture type determines validation rules
+architecture: "hexagonal-event-sourced-vsa"
+
+# Primary language
+language: "typescript"
+
+# Project root (relative to vsa.yaml)
+root: "./src"
+
+# ============================================================================
+# DOMAIN LAYER CONFIGURATION
+# ============================================================================
+# The domain/ folder contains core business logic (hexagon center)
+
+domain:
+  # Path to domain folder
+  path: "domain"
+  
+  # Aggregates configuration
+  aggregates:
+    path: "."                    # Aggregates at domain root
+    pattern: "*Aggregate.ts"      # Naming pattern
+    require_suffix: true          # Must end with "Aggregate"
+    extensions: [".ts"]
+  
+  # Commands configuration
+  commands:
+    path: "commands"              # Commands in domain/commands/
+    pattern: "*Command.ts"        # Naming pattern
+    require_suffix: true          # Must end with "Command"
+    require_aggregate_id: true    # Must have aggregateId property
+    extensions: [".ts"]
+    organize_by_feature: false    # Simple example: flat structure
+  
+  # Events configuration
+  events:
+    path: "events"                # Events in domain/events/
+    pattern: "*Event.ts"          # Naming pattern
+    require_suffix: true          # Must end with "Event"
+    extensions: [".ts"]
+    
+    # Event versioning (ADR-007)
+    versioning:
+      enabled: true               # Enforce event versioning
+      format: "simple"            # Use 'v1', 'v2' format
+      require_decorator: false    # TypeScript uses schemaVersion property
+      require_upcasters: true     # Require upcasters for version changes
+      versioned_path: "_versioned"     # Old versions go here
+      upcasters_path: "_upcasters"     # Upcasters go here
+      upcaster_pattern: "*_Upcaster_*.ts"
+
+# ============================================================================
+# SLICES CONFIGURATION (Hexagonal Adapters)
+# ============================================================================
+# Slices are thin adapters on the hexagon outside
+
+slices:
+  path: "slices"
+  
+  # Command slices (write side)
+  command_slices:
+    pattern: "**/*Cli.ts"         # CLI adapters
+    max_lines: 50                 # Thin adapter enforcement
+    require_command_bus: true     # Must use CommandBus
+    
+  # Query slices (read side)
+  query_slices:
+    pattern: "**/*Query.ts"
+    require_projection: false     # Simple example: no projections yet
+
+# ============================================================================
+# INFRASTRUCTURE CONFIGURATION
+# ============================================================================
+# Application services (CommandBus, EventStore, etc.)
+
+infrastructure:
+  path: "infrastructure"
+  components:
+    - "CommandBus.ts"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation:
+  # Architecture validation
+  architecture:
+    enforce_hexagonal: true             # Domain must not import from infrastructure/slices
+    enforce_dependency_direction: true  # Dependencies point inward
+  
+  # CQRS validation
+  cqrs:
+    enforce_separation: true            # Separate command and query models
+    commands_use_bus: true              # Commands must use CommandBus
+  
+  # Event sourcing validation
+  event_sourcing:
+    require_event_versioning: true      # Events must have versions
+    require_event_sourcing_handlers: true
+  
+  # Slice validation
+  slices:
+    enforce_isolation: true             # No cross-slice dependencies
+    enforce_thin_adapters: true         # Slices must be < max_lines
+    max_adapter_lines: 50
+
+# ============================================================================
+# PATTERNS CONFIGURATION
+# ============================================================================
+
+patterns:
+  aggregate: "*Aggregate.ts"
+  command: "*Command.ts"
+  event: "*Event.ts"
+  handler: "*Handler.ts"
+

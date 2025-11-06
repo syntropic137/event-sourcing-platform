@@ -1,0 +1,214 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "VSA Configuration",
+  "description": "Configuration file for Vertical Slice Architecture Manager",
+  "type": "object",
+  "required": [
+    "version",
+    "language",
+    "root"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "description": "Configuration version",
+      "default": 1,
+      "enum": [
+        1
+      ]
+    },
+    "language": {
+      "type": "string",
+      "description": "Primary programming language",
+      "enum": [
+        "typescript",
+        "python",
+        "rust"
+      ],
+      "default": "typescript"
+    },
+    "root": {
+      "type": "string",
+      "description": "Root directory for vertical slices (relative to config file)",
+      "default": "src/contexts"
+    },
+    "framework": {
+      "type": "object",
+      "description": "Framework integration configuration",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Framework name",
+          "examples": [
+            "event-sourcing-platform"
+          ]
+        },
+        "aggregate_class": {
+          "type": "string",
+          "description": "Base aggregate class name",
+          "examples": [
+            "AggregateRoot",
+            "Aggregate"
+          ]
+        },
+        "aggregate_import": {
+          "type": "string",
+          "description": "Import path for base aggregate class",
+          "examples": [
+            "@event-sourcing-platform/typescript"
+          ]
+        },
+        "event_class": {
+          "type": "string",
+          "description": "Base event class name",
+          "examples": [
+            "DomainEvent",
+            "Event"
+          ]
+        },
+        "event_import": {
+          "type": "string",
+          "description": "Import path for base event class",
+          "examples": [
+            "@event-sourcing-platform/typescript"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "bounded_contexts": {
+      "type": "array",
+      "description": "List of bounded contexts in the system",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Context name (kebab-case)",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "description": {
+            "type": "string",
+            "description": "Context description"
+          },
+          "publishes": {
+            "type": "array",
+            "description": "Integration events published by this context",
+            "items": {
+              "type": "string",
+              "description": "Integration event name (PascalCase)",
+              "pattern": "^[A-Z][a-zA-Z0-9]*$"
+            }
+          },
+          "subscribes": {
+            "type": "array",
+            "description": "Integration events subscribed to by this context",
+            "items": {
+              "type": "string",
+              "description": "Integration event name (PascalCase)",
+              "pattern": "^[A-Z][a-zA-Z0-9]*$"
+            }
+          }
+        }
+      }
+    },
+    "integration_events": {
+      "type": "object",
+      "description": "Integration events configuration",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Path to integration events directory (relative to root)",
+          "default": "../_shared/integration-events"
+        },
+        "events": {
+          "type": "object",
+          "description": "Integration event definitions",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "publisher": {
+                "type": "string",
+                "description": "Context that publishes this event"
+              },
+              "subscribers": {
+                "type": "array",
+                "description": "Contexts that subscribe to this event",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "schema": {
+                "type": "object",
+                "description": "Event schema definition",
+                "additionalProperties": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "naming": {
+      "type": "object",
+      "description": "Naming conventions",
+      "properties": {
+        "command_suffix": {
+          "type": "string",
+          "description": "Suffix for command files",
+          "default": "Command"
+        },
+        "event_suffix": {
+          "type": "string",
+          "description": "Suffix for event files",
+          "default": "Event"
+        },
+        "handler_suffix": {
+          "type": "string",
+          "description": "Suffix for handler files",
+          "default": "Handler"
+        },
+        "aggregate_suffix": {
+          "type": "string",
+          "description": "Suffix for aggregate files",
+          "default": "Aggregate"
+        },
+        "test_suffix": {
+          "type": "string",
+          "description": "Suffix for test files",
+          "default": ".test"
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "description": "Validation rules",
+      "properties": {
+        "require_tests": {
+          "type": "boolean",
+          "description": "Require test files for all operations",
+          "default": true
+        },
+        "require_handler": {
+          "type": "boolean",
+          "description": "Require handler files for all operations",
+          "default": true
+        },
+        "allow_unknown_files": {
+          "type": "boolean",
+          "description": "Allow unknown files in operation directories",
+          "default": false
+        },
+        "enforce_boundaries": {
+          "type": "boolean",
+          "description": "Enforce bounded context boundaries",
+          "default": true
+        }
+      }
+    }
+  }
+}

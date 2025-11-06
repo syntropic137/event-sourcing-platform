@@ -1,0 +1,8 @@
+{
+  "name": "03-business-logic-in-slice-invalid",
+  "version": "1.0.0",
+  "description": "Invalid VSA fixture: Business logic in slice",
+  "private": true,
+  "type": "module"
+}
+

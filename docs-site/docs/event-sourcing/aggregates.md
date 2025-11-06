@@ -212,26 +212,35 @@ class AccountAggregate extends AggregateRoot {
 ## Commands & Events
 
 ### Command Structure
-Commands represent intentions to change state:
+Commands represent intentions to change state. Commands should be **classes** (not interfaces) with an `aggregateId` property:
 
 ```typescript
 // Commands are imperative (what should happen)
-interface PlaceOrderCommand {
-  orderId: string;
-  customerId: string;
-  items: LineItem[];
+// Use classes with aggregateId for proper command dispatching
+class PlaceOrderCommand {
+  constructor(
+    public readonly aggregateId: string,  // Required for all commands
+    public readonly customerId: string,
+    public readonly items: LineItem[]
+  ) {}
 }
 
-interface ShipOrderCommand {
-  orderId: string;
-  trackingNumber: string;
+class ShipOrderCommand {
+  constructor(
+    public readonly aggregateId: string,  // Required for all commands
+    public readonly trackingNumber: string
+  ) {}
 }
 
-interface DepositMoneyCommand {
-  accountId: string;
-  amount: number;
+class DepositMoneyCommand {
+  constructor(
+    public readonly aggregateId: string,  // Required for all commands
+    public readonly amount: number
+  ) {}
 }
 ```
+
+**Why classes?** The `@CommandHandler` decorator uses the command's constructor name for routing, and `aggregateId` is required for the repository to load/save the correct aggregate.
 
 ### Event Structure
 Events represent facts about what happened:

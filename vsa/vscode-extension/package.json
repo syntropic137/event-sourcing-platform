@@ -1,0 +1,118 @@
+{
+  "name": "vsa-vscode",
+  "displayName": "Vertical Slice Architecture",
+  "description": "VS Code extension for Vertical Slice Architecture validation and code generation",
+  "version": "0.1.0",
+  "publisher": "neuralempowerment",
+  "icon": "icon.svg",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/neuralempowerment/event-sourcing-platform"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Linters",
+    "Snippets",
+    "Other"
+  ],
+  "keywords": [
+    "vertical-slice",
+    "architecture",
+    "event-sourcing",
+    "ddd",
+    "cqrs"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/vsa.yaml",
+    "workspaceContains:**/vsa.yml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vsa.validate",
+        "title": "VSA: Validate Architecture"
+      },
+      {
+        "command": "vsa.generateFeature",
+        "title": "VSA: Generate Feature"
+      },
+      {
+        "command": "vsa.listFeatures",
+        "title": "VSA: List Features"
+      },
+      {
+        "command": "vsa.generateManifest",
+        "title": "VSA: Generate Manifest"
+      }
+    ],
+    "configuration": {
+      "title": "Vertical Slice Architecture",
+      "properties": {
+        "vsa.validateOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run validation on file save"
+        },
+        "vsa.validateOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run validation when opening a workspace"
+        },
+        "vsa.configPath": {
+          "type": "string",
+          "default": "vsa.yaml",
+          "description": "Path to vsa.yaml config file (relative to workspace root)"
+        },
+        "vsa.showWarnings": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show validation warnings in addition to errors"
+        }
+      }
+    },
+    "jsonValidation": [
+      {
+        "fileMatch": "vsa.yaml",
+        "url": "./schemas/vsa-schema.json"
+      },
+      {
+        "fileMatch": "vsa.yml",
+        "url": "./schemas/vsa-schema.json"
+      }
+    ],
+    "yamlValidation": [
+      {
+        "fileMatch": "vsa.yaml",
+        "url": "./schemas/vsa-schema.json"
+      },
+      {
+        "fileMatch": "vsa.yml",
+        "url": "./schemas/vsa-schema.json"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "@vscode/test-electron": "^2.3.0",
+    "eslint": "^8.45.0",
+    "typescript": "^5.1.0",
+    "vsce": "^2.15.0"
+  },
+  "dependencies": {}
+}
+

@@ -141,7 +141,7 @@ class OrderShipped extends BaseDomainEvent {
 ### 2. Create Aggregate
 
 ```typescript
-class OrderAggregate extends AutoDispatchAggregate<OrderEvent> {
+class OrderAggregate extends AggregateRoot<OrderEvent> {
   private status: string = 'new';
   private customerId: string = '';
   private items: LineItem[] = [];

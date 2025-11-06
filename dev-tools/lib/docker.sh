@@ -2,10 +2,29 @@
 # Docker container lifecycle management
 
 check_docker() {
-    docker info >/dev/null 2>&1 || error "Docker is not running"
+    if ! docker info >/dev/null 2>&1; then
+        echo "" >&2
+        echo "❌ Docker is not running!" >&2
+        echo "" >&2
+        echo "   Please start Docker Desktop or the Docker daemon:" >&2
+        echo "   • macOS/Windows: Start Docker Desktop app" >&2
+        echo "   • Linux: sudo systemctl start docker" >&2
+        echo "" >&2
+        exit 1
+    fi
 }
 
 start_or_restart_containers() {
+    if [ ! -f docker-compose.dev.yml ]; then
+        echo "" >&2
+        echo "❌ docker-compose.dev.yml not found!" >&2
+        echo "" >&2
+        echo "   Please run initialization first:" >&2
+        echo "   📋 make dev-init" >&2
+        echo "" >&2
+        exit 1
+    fi
+    
     if containers_exist; then
         log "Found existing containers, restarting..."
         docker start "$POSTGRES_CONTAINER" "$REDIS_CONTAINER" 2>/dev/null || {

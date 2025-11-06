@@ -1,0 +1,11 @@
+{
+  "name": "03-cqrs-complete-fixture",
+  "version": "1.0.0",
+  "description": "VSA test fixture: CQRS with read models and projections",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@event-sourcing-platform/core": "workspace:*"
+  }
+}
+

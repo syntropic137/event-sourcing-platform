@@ -194,6 +194,12 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: "event-sourcing/python/uv.lock"
+
       - name: Python SDK QA
         run: make -C event-sourcing/python qa
 

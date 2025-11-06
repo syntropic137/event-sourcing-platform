@@ -1,3 +1,6 @@
+# Use docs-site/docs/ instead
+./docs/
+
 # Dependencies
 /node_modules
 

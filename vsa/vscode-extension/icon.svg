@@ -1,0 +1,19 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="128" height="128" rx="16" fill="#2D3748"/>
+  
+  <!-- Vertical slices represented as columns -->
+  <rect x="16" y="24" width="18" height="80" rx="2" fill="#4299E1" opacity="0.9"/>
+  <rect x="40" y="32" width="18" height="72" rx="2" fill="#48BB78" opacity="0.9"/>
+  <rect x="64" y="28" width="18" height="76" rx="2" fill="#ED8936" opacity="0.9"/>
+  <rect x="88" y="20" width="18" height="84" rx="2" fill="#9F7AEA" opacity="0.9"/>
+  
+  <!-- Connecting lines to show integration -->
+  <line x1="34" y1="64" x2="40" y2="64" stroke="#E2E8F0" stroke-width="2" opacity="0.5"/>
+  <line x1="58" y1="64" x2="64" y2="64" stroke="#E2E8F0" stroke-width="2" opacity="0.5"/>
+  <line x1="82" y1="64" x2="88" y2="64" stroke="#E2E8F0" stroke-width="2" opacity="0.5"/>
+  
+  <!-- VSA text -->
+  <text x="64" y="120" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#E2E8F0" text-anchor="middle">VSA</text>
+</svg>
+

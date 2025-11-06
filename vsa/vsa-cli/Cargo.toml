@@ -1,0 +1,39 @@
+[package]
+name = "vsa-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI tool for Vertical Slice Architecture management"
+
+[[bin]]
+name = "vsa"
+path = "src/main.rs"
+
+[dependencies]
+vsa-core = { path = "../vsa-core" }
+
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+handlebars.workspace = true
+notify.workspace = true
+chrono.workspace = true
+
+# Terminal UI
+console = "0.15"
+indicatif = "0.17"
+dialoguer = "0.11"
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+assert_cmd = "2.0"
+predicates = "3.0"
+tempfile = "3.8"
+

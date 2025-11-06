@@ -8,13 +8,14 @@ import { Aggregate } from './aggregate';
 
 type AnyCommandHandler = CommandHandler<Command, DomainEvent>;
 
-const COMMAND_HANDLER_MAP: unique symbol = Symbol('commandHandlerMap');
+// Export command handler map symbol for use in AggregateRoot
+export const COMMAND_HANDLER_MAP: unique symbol = Symbol('commandHandlerMap');
 
-type CommandHandlerAwareConstructor = {
+export type CommandHandlerAwareConstructor = {
   [COMMAND_HANDLER_MAP]?: Map<string, string>;
 };
 
-function ensureCommandHandlerMap(ctor: CommandHandlerAwareConstructor): Map<string, string> {
+export function ensureCommandHandlerMap(ctor: CommandHandlerAwareConstructor): Map<string, string> {
   if (!ctor[COMMAND_HANDLER_MAP]) {
     ctor[COMMAND_HANDLER_MAP] = new Map<string, string>();
   }
@@ -153,4 +154,65 @@ export interface ValidationResult {
 export interface CommandValidator<TCommand extends Command> {
   /** Validate a command */
   validate(command: TCommand): Promise<ValidationResult>;
+}
+
+// ============================================================================
+// COMMAND DECORATOR (ADR-010)
+// ============================================================================
+
+/** Command metadata storage symbol */
+export const COMMAND_METADATA: unique symbol = Symbol('commandMetadata');
+
+/** Command metadata */
+export interface CommandDecoratorMetadata {
+  commandType: string;
+  description?: string;
+}
+
+/** Type-aware constructor with command metadata */
+export type CommandAwareConstructor = {
+  [COMMAND_METADATA]?: CommandDecoratorMetadata;
+};
+
+/**
+ * Decorator for command classes to store metadata about command type.
+ * This enables the VSA CLI to discover and validate commands automatically.
+ *
+ * @param commandType - The command type identifier (e.g., "CreateTask")
+ * @param description - Optional description of what the command does
+ *
+ * @example
+ * ```typescript
+ * @Command("CreateTask", "Creates a new task")
+ * export class CreateTaskCommand implements Command {
+ *   constructor(
+ *     public readonly aggregateId: string,
+ *     public readonly title: string,
+ *   ) {}
+ * }
+ * ```
+ *
+ * @see ADR-006: Domain Organization Pattern
+ * @see ADR-010: Decorator Patterns for Framework Integration
+ */
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export function Command(commandType: string, description?: string) {
+  return function <T extends new (...args: any[]) => any>(constructor: T): T {
+    // Store metadata on the constructor
+    (constructor as CommandAwareConstructor)[COMMAND_METADATA] = {
+      commandType,
+      description,
+    };
+
+    return constructor;
+  };
+}
+
+/**
+ * Get command metadata from a command class
+ */
+export function getCommandMetadata(
+  commandClass: CommandAwareConstructor
+): CommandDecoratorMetadata | undefined {
+  return commandClass[COMMAND_METADATA];
 }

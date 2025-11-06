@@ -33,7 +33,6 @@ terraform.tfvars.json
 
 # Project Plans (working documents - not for commit)
 PROJECT-PLAN_*.md
-AGENTS.md
 EVENT-SOURCING_BETA_PLAN.md
 EXAMPLES_PLAN.md
 COMMIT-STRATEGY.md

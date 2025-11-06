@@ -1,0 +1,3 @@
+[submodule "referene/eventsourcing-book"]
+	path = referene/eventsourcing-book
+	url = https://github.com/dilgerma/eventsourcing-book.git

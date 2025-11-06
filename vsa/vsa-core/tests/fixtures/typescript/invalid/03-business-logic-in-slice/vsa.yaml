@@ -1,0 +1,33 @@
+name: business-logic-in-slice-invalid
+description: Invalid fixture - slice contains business logic (should be thin adapter only)
+language: typescript
+version: 1.0.0
+
+patterns:
+  architecture: hexagonal-event-sourced
+  vertical_slices: true
+
+structure:
+  domain:
+    path: src/domain
+    aggregates:
+      path: .
+    commands:
+      path: commands
+    events:
+      path: events
+  
+  slices:
+    path: src/slices
+
+validation:
+  rules:
+    - require_domain_folder
+    - thin_slices_only
+    - no_business_logic_in_slices
+
+expected_failures:
+  - "Slice 'CreateOrderCli' contains business logic (validation, calculations, state management)"
+  - "Slice exceeds complexity threshold"
+  - "Slice has outward dependencies to domain (should only depend on infrastructure)"
+

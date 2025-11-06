@@ -1,0 +1,25 @@
+[package]
+name = "vsa-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core library for Vertical Slice Architecture validation and management"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+walkdir.workspace = true
+glob.workspace = true
+regex.workspace = true
+handlebars.workspace = true
+tracing.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+tempfile = "3.8"

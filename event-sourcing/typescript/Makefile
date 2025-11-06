@@ -43,19 +43,19 @@ qa-full: qa build
 	@echo "✅ Full QA passed for TypeScript SDK"
 
 # Format code
-fmt: install
-	@pnpm exec prettier --check "src/**/*.ts" "tests/**/*.ts"
+fmt:
+	@pnpm --filter @event-sourcing-platform/typescript exec prettier --check "src/**/*.ts" "tests/**/*.ts"
 
 # Lint code
-lint: install
-	@pnpm exec eslint "src" "tests" --ext .ts
+lint:
+	@pnpm --filter @event-sourcing-platform/typescript exec eslint "src" "tests" --ext .ts
 
 # Type check (src and tests separately to catch all issues)
-type-check: install
+type-check:
 	@echo "Type checking src/..."
-	@pnpm exec tsc --noEmit
+	@pnpm --filter @event-sourcing-platform/typescript exec tsc --noEmit
 	@echo "Type checking tests/..."
-	@pnpm exec tsc --noEmit --project tsconfig.jest.json
+	@pnpm --filter @event-sourcing-platform/typescript exec tsc --noEmit --project tsconfig.jest.json
 
 # Run tests
 test: install

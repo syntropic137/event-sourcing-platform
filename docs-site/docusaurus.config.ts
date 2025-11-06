@@ -1,5 +1,5 @@
-import {themes as prismThemes} from 'prism-react-renderer';
-import type {Config} from '@docusaurus/types';
+import { themes as prismThemes } from 'prism-react-renderer';
+import type { Config } from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
@@ -12,9 +12,26 @@ const config: Config = {
   projectName: 'event-sourcing-platform',
   onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'warn',
-  i18n: {defaultLocale: 'en', locales: ['en']},
-  markdown: {mermaid: true},
-  themes: ['@docusaurus/theme-mermaid'],
+  i18n: { defaultLocale: 'en', locales: ['en'] },
+  markdown: { mermaid: true },
+  themes: [
+    '@docusaurus/theme-mermaid',
+    [
+      require.resolve('@easyops-cn/docusaurus-search-local'),
+      {
+        hashed: true,
+        language: ['en'],
+        highlightSearchTermsOnTargetPage: true,
+        explicitSearchResultPath: true,
+        indexDocs: true,
+        indexBlog: false,
+        indexPages: false,
+        docsRouteBasePath: '/',
+        searchResultLimits: 10,
+        searchResultContextMaxLength: 50,
+      },
+    ],
+  ],
   presets: [
     [
       'classic',
@@ -28,7 +45,7 @@ const config: Config = {
           showLastUpdateTime: true,
         },
         blog: false,
-        theme: {customCss: require.resolve('./src/css/custom.css')},
+        theme: { customCss: require.resolve('./src/css/custom.css') },
       } satisfies Preset.Options,
     ],
   ],
@@ -41,11 +58,12 @@ const config: Config = {
     },
     navbar: {
       title: '📚 Docs',
-      logo: {alt: 'Docs Logo', src: 'img/logo.svg'},
+      logo: { alt: 'Docs Logo', src: 'img/logo.svg' },
       items: [
-        {to: '/', label: 'Overview', position: 'left'},
-        {to: '/event-store/index', label: 'Event Store', position: 'left'},
-        {to: '/development/fast-testing', label: 'Development', position: 'left'},
+        { to: '/overview/intro', label: 'Overview', position: 'left' },
+        { to: '/event-store/index', label: 'Event Store', position: 'left' },
+        { to: '/vsa/index', label: 'VSA Manager', position: 'left' },
+        { to: '/development/fast-testing', label: 'Development', position: 'left' },
         {
           href: 'https://github.com/NeuralEmpowerment/event-sourcing-platform',
           label: 'GitHub',
@@ -59,9 +77,10 @@ const config: Config = {
         {
           title: 'Documentation',
           items: [
-            {label: 'Overview', to: '/'},
-            {label: 'Event Store', to: '/event-store/index'},
-            {label: 'Development', to: '/development/fast-testing'},
+            { label: 'Overview', to: '/overview/intro' },
+            { label: 'Event Store', to: '/event-store/index' },
+            { label: 'VSA Manager', to: '/vsa/index' },
+            { label: 'Development', to: '/development/fast-testing' },
           ],
         },
       ],

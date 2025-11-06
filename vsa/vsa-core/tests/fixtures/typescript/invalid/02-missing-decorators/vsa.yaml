@@ -1,0 +1,31 @@
+name: missing-decorators-invalid
+description: Invalid fixture - events and commands without decorators (should fail validation)
+language: typescript
+version: 1.0.0
+
+patterns:
+  architecture: hexagonal-event-sourced
+  vertical_slices: true
+  event_versioning: true
+
+structure:
+  domain:
+    path: src/domain
+    aggregates:
+      path: .
+    commands:
+      path: commands
+    events:
+      path: events
+
+validation:
+  rules:
+    - require_domain_folder
+    - require_event_decorators
+    - require_command_decorators
+
+expected_failures:
+  - "Event class 'OrderCreatedEvent' missing @Event decorator"
+  - "Command class 'CreateOrderCommand' missing @Command decorator"
+  - "Event 'OrderCreatedEvent' missing version information"
+

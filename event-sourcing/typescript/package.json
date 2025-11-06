@@ -1,5 +1,5 @@
 {
-    "name": "@event-sourcing-platform/typescript",
+    "name": "@neuralempowerment/event-sourcing-typescript",
     "version": "0.1.0",
     "description": "TypeScript SDK for Event Sourcing patterns and abstractions",
     "main": "dist/index.js",
@@ -39,8 +39,12 @@
     "license": "MIT",
     "repository": {
         "type": "git",
-        "url": "https://github.com/yourorg/event-sourcing-platform.git",
+        "url": "https://github.com/NeuralEmpowerment/event-sourcing-platform.git",
         "directory": "event-sourcing/typescript"
+    },
+    "publishConfig": {
+        "registry": "https://npm.pkg.github.com",
+        "access": "public"
     },
     "engines": {
         "node": ">=18.0.0"
@@ -54,6 +58,7 @@
         "zod": "^3.22.0"
     },
     "devDependencies": {
+        "@eslint/js": "^9.0.0",
         "@types/jest": "^29.5.0",
         "@types/node": "^20.0.0",
         "@types/uuid": "^9.0.0",

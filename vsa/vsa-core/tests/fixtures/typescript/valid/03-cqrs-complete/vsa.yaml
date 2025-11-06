@@ -1,0 +1,43 @@
+name: cqrs-complete-fixture
+description: Test fixture for CQRS with read models and projections
+language: typescript
+version: 1.0.0
+
+patterns:
+  architecture: hexagonal-event-sourced
+  vertical_slices: true
+  event_versioning: true
+  cqrs: true
+
+structure:
+  domain:
+    path: src/domain
+    aggregates:
+      path: .
+    commands:
+      path: commands
+    events:
+      path: events
+    queries:
+      path: queries
+  
+  infrastructure:
+    path: src/infrastructure
+  
+  slices:
+    path: src/slices
+    command_slices:
+      path: commands
+    query_slices:
+      path: queries
+
+validation:
+  rules:
+    - require_domain_folder
+    - require_event_decorators
+    - require_event_versions
+    - require_query_decorators
+    - no_domain_dependencies
+    - thin_slices_only
+    - separate_read_write
+

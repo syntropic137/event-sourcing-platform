@@ -1,0 +1,8 @@
+{
+  "name": "01-no-domain-folder-invalid",
+  "version": "1.0.0",
+  "description": "Invalid VSA fixture: Missing domain folder",
+  "private": true,
+  "type": "module"
+}
+

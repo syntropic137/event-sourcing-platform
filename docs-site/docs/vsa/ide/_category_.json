@@ -1,0 +1,9 @@
+{
+  "label": "IDE Integration",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "description": "IDE tools and extensions for VSA development."
+  }
+}
+

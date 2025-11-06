@@ -267,3 +267,62 @@ export interface ProjectionStateStore {
   /** Get all projection states */
   getAllStates(): Promise<ProjectionState[]>;
 }
+
+// ============================================================================
+// QUERY DECORATOR (ADR-010)
+// ============================================================================
+
+/** Query metadata storage symbol */
+export const QUERY_METADATA: unique symbol = Symbol('queryMetadata');
+
+/** Query metadata */
+export interface QueryDecoratorMetadata {
+  queryType: string;
+  description?: string;
+}
+
+/** Type-aware constructor with query metadata */
+export type QueryAwareConstructor = {
+  [QUERY_METADATA]?: QueryDecoratorMetadata;
+};
+
+/**
+ * Decorator for query classes to store metadata about query type.
+ * This enables the VSA CLI to discover and validate queries automatically.
+ *
+ * @param queryType - The query type identifier (e.g., "GetTaskById")
+ * @param description - Optional description of what the query does
+ *
+ * @example
+ * ```typescript
+ * @Query("GetTaskById", "Retrieves a task by its ID")
+ * export class GetTaskByIdQuery implements Query {
+ *   constructor(public readonly taskId: string) {}
+ * }
+ * ```
+ *
+ * @see ADR-006: Domain Organization Pattern
+ * @see ADR-009: CQRS Pattern Implementation
+ * @see ADR-010: Decorator Patterns for Framework Integration
+ */
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export function Query(queryType: string, description?: string) {
+  return function <T extends new (...args: any[]) => any>(constructor: T): T {
+    // Store metadata on the constructor
+    (constructor as QueryAwareConstructor)[QUERY_METADATA] = {
+      queryType,
+      description,
+    };
+
+    return constructor;
+  };
+}
+
+/**
+ * Get query metadata from a query class
+ */
+export function getQueryMetadata(
+  queryClass: QueryAwareConstructor
+): QueryDecoratorMetadata | undefined {
+  return queryClass[QUERY_METADATA];
+}

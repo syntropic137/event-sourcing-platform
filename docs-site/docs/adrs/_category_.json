@@ -1,0 +1,10 @@
+{
+    "label": "Architecture Decisions",
+    "position": 8,
+    "link": {
+        "type": "generated-index",
+        "title": "Architecture Decision Records",
+        "description": "Explore the architectural decisions that shape the Event Sourcing Platform. Each ADR documents the context, decision, rationale, and consequences of significant technical choices.",
+        "slug": "/adrs"
+    }
+}

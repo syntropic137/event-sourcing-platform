@@ -1,0 +1,11 @@
+{
+  "name": "04-multi-aggregate-fixture",
+  "version": "1.0.0",
+  "description": "VSA test fixture: Multiple aggregates in one bounded context",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@event-sourcing-platform/core": "workspace:*"
+  }
+}
+

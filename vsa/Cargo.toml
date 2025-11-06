@@ -1,0 +1,59 @@
+[workspace]
+resolver = "2"
+members = [
+  "vsa-core",
+  "vsa-cli",
+  "vsa-wasm",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Event Sourcing Platform Team"]
+license = "MIT"
+repository = "https://github.com/yourusername/event-sourcing-platform"
+
+[workspace.dependencies]
+# Core dependencies
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+thiserror = "1.0"
+anyhow = "1.0"
+
+# CLI dependencies
+clap = { version = "4.4", features = ["derive", "cargo", "env"] }
+
+# Template engine
+handlebars = "5.1"
+
+# File system
+walkdir = "2.4"
+glob = "0.3"
+
+# Pattern matching
+regex = "1.10"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# File watching
+notify = "6.1"
+
+# Time
+chrono = "0.4"
+
+# Testing
+pretty_assertions = "1.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.release.package.vsa-wasm]
+# Optimize for size in WASM builds
+opt-level = "s"
+
