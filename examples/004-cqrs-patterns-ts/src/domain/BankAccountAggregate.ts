@@ -4,7 +4,7 @@ import {
   AggregateRoot,
   CommandHandler,
   EventSourcingHandler,
-} from "@event-sourcing-platform/typescript";
+} from "@neuralempowerment/event-sourcing-typescript";
 import { AccountOpenedEvent } from "./events/AccountOpenedEvent";
 import { MoneyDepositedEvent } from "./events/MoneyDepositedEvent";
 import { MoneyWithdrawnEvent } from "./events/MoneyWithdrawnEvent";

@@ -3,7 +3,7 @@ import {
   AggregateRoot,
   CommandHandler,
   EventSourcingHandler,
-} from "@event-sourcing-platform/typescript";
+} from "@neuralempowerment/event-sourcing-typescript";
 import { ProductCreatedEvent } from "./events/ProductCreatedEvent";
 import { ProductPriceUpdatedEvent } from "./events/ProductPriceUpdatedEvent";
 import { StockAddedEvent } from "./events/StockAddedEvent";

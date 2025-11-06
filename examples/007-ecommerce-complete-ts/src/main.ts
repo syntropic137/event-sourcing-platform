@@ -16,7 +16,7 @@ import {
   EventStoreClient,
   EventStoreClientFactory,
   MemoryEventStoreClient,
-} from "@event-sourcing-platform/typescript";
+} from "@neuralempowerment/event-sourcing-typescript";
 import { CommandBus } from "./infrastructure/CommandBus";
 
 // Import commands

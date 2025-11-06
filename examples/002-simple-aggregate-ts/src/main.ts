@@ -5,7 +5,7 @@ import {
   EventStoreClientFactory,
   MemoryEventStoreClient,
   RepositoryFactory,
-} from "@event-sourcing-platform/typescript";
+} from "@neuralempowerment/event-sourcing-typescript";
 
 // Infrastructure
 import { CommandBus } from "./infrastructure/CommandBus";

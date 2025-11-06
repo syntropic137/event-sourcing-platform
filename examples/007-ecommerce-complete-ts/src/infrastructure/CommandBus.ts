@@ -1,7 +1,7 @@
 import {
   EventStoreClient,
   RepositoryFactory,
-} from "@event-sourcing-platform/typescript";
+} from "@neuralempowerment/event-sourcing-typescript";
 import { ProductAggregate } from "../domain/ProductAggregate";
 import { OrderAggregate } from "../domain/OrderAggregate";
 import { CustomerAggregate } from "../domain/CustomerAggregate";

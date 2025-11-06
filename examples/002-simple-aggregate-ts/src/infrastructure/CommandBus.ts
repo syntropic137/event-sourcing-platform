@@ -1,4 +1,4 @@
-import { RepositoryFactory } from "@event-sourcing-platform/typescript";
+import { RepositoryFactory } from "@neuralempowerment/event-sourcing-typescript";
 import { OrderAggregate } from "../domain/OrderAggregate";
 
 /**

@@ -23,7 +23,7 @@
   "author": "Event Sourcing Platform Team",
   "license": "MIT",
   "dependencies": {
-    "@event-sourcing-platform/typescript": "workspace:*"
+    "@neuralempowerment/event-sourcing-typescript": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -1,7 +1,7 @@
 import {
   EventStoreClient,
   RepositoryFactory,
-} from "@event-sourcing-platform/typescript";
+} from "@neuralempowerment/event-sourcing-typescript";
 import { BankAccountAggregate } from "../domain/BankAccountAggregate";
 import { OpenAccountCommand } from "../domain/commands/OpenAccountCommand";
 import { DepositMoneyCommand } from "../domain/commands/DepositMoneyCommand";

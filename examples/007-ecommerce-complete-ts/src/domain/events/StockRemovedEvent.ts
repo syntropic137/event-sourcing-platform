@@ -1,4 +1,4 @@
-import { BaseDomainEvent, Event } from "@event-sourcing-platform/typescript";
+import { BaseDomainEvent, Event } from "@neuralempowerment/event-sourcing-typescript";
 
 /**
  * Domain Event: StockRemoved
