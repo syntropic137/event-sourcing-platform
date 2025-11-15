@@ -47,14 +47,15 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            event-store/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          workspaces: "event-store -> target"
+          shared-key: "event-store"
+          cache-targets: false  # Disable target caching - using sccache instead
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: QA fast
         run: make -C event-store qa-fast
@@ -71,14 +72,15 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            event-store/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          workspaces: "event-store -> target"
+          shared-key: "event-store"
+          cache-targets: false  # Disable target caching - using sccache instead
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Coverage setup
         run: make -C event-store cov-setup
@@ -112,14 +114,15 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            event-sourcing/rust/target
-          key: cargo-sdk-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          workspaces: "event-sourcing/rust -> target"
+          shared-key: "event-sourcing-rust"
+          cache-targets: false  # Disable target caching - using sccache instead
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: QA fast
         run: make -C event-sourcing/rust qa-fast

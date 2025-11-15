@@ -26,10 +26,19 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: "20"
 
       - name: Install pnpm
         run: npm install -g pnpm@9
+
+      - name: Setup Protocol Buffers compiler
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check protoc version
+        run: protoc --version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
