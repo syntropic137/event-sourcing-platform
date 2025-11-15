@@ -31,11 +31,8 @@ lib-cov
 .terraform.lock.hcl
 terraform.tfvars.json
 
-# Project Plans (working documents - not for commit)
-PROJECT-PLAN_*.md
-EVENT-SOURCING_BETA_PLAN.md
-EXAMPLES_PLAN.md
-COMMIT-STRATEGY.md
+# Archive directory for old artifacts
+__archive__/
 
 # Infrastructure-as-Code generated files
 infra-as-code/.env

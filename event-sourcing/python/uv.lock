@@ -155,7 +155,7 @@ toml = [
 
 [[package]]
 name = "event-sourcing-python"
-version = "0.1.0"
+version = "0.6.0b0"
 source = { editable = "." }
 dependencies = [
     { name = "protobuf" },
