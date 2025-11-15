@@ -330,4 +330,3 @@ class AggregateRoot(BaseAggregate[TEvent]):
 
         # Fallback to class name
         return type(event).__name__
-

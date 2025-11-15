@@ -144,7 +144,7 @@ Coverage is integrated via `cargo-llvm-cov`.
 
 See the glossary in `docs/ubiquitous-language.md` for definitions of:
 - Event, EventData, EventMetadata
-- Stream, Stream Type, Stream Version, Global Position
+- Stream, Stream Type, Stream Version, global nonce
 - Expected Version (Any | NoStream | StreamExists | Exact)
 - Append, ReadStream, Subscribe
 - Aggregate, Projection, Snapshot (with communication warning)

@@ -45,8 +45,8 @@ export interface EventMetadata {
   /** Tenant that owns the aggregate */
   readonly tenantId?: string;
 
-  /** Global position assigned by the store */
-  readonly globalPosition?: number;
+  /** global nonce assigned by the store (matches proto: uint64 global_nonce) */
+  readonly globalNonce?: number;
 
   /** Content type associated with the payload */
   readonly contentType: string;
@@ -104,7 +104,7 @@ export abstract class BaseDomainEvent implements DomainEvent {
       aggregateId: params.aggregateId,
       aggregateType: params.aggregateType,
       tenantId: params.tenantId,
-      globalPosition: params.globalPosition,
+      globalNonce: params.globalNonce,
       contentType: params.contentType ?? 'application/json',
       correlationId: params.correlationId,
       causationId: params.causationId,
@@ -192,7 +192,7 @@ export interface EventFactoryParams {
   aggregateType: string;
   aggregateNonce: Version;
   tenantId?: string;
-  globalPosition?: number;
+  globalNonce?: number;
   contentType?: string;
   correlationId?: string;
   causationId?: string;
@@ -238,8 +238,7 @@ function metadataFromJson(json: JsonObject): EventMetadata {
     aggregateId: String(json.aggregateId ?? ''),
     aggregateType: String(json.aggregateType ?? ''),
     tenantId: json.tenantId === undefined ? undefined : String(json.tenantId),
-    globalPosition:
-      json.globalPosition === undefined ? undefined : Number(json.globalPosition as number),
+    globalNonce: json.globalNonce === undefined ? undefined : Number(json.globalNonce as number),
     contentType: String(json.contentType ?? 'application/json'),
     correlationId:
       json.correlationId === undefined ? undefined : String(json.correlationId as string),
@@ -360,8 +359,8 @@ export function Event(eventType: EventType, version: string) {
     if (!isValidEventVersion(version)) {
       throw new Error(
         `Invalid event version format: "${version}" for event "${eventType}". ` +
-          `Version must be either simple format (e.g., "v1", "v2") or semantic format (e.g., "1.0.0", "2.1.3"). ` +
-          `See ADR-007 for event versioning guidelines.`
+        `Version must be either simple format (e.g., "v1", "v2") or semantic format (e.g., "1.0.0", "2.1.3"). ` +
+        `See ADR-007 for event versioning guidelines.`
       );
     }
 

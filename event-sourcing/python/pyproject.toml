@@ -1,6 +1,6 @@
 [project]
 name = "event-sourcing-python"
-version = "0.6.0-beta"
+version = "0.7.0-beta"
 description = "Python SDK for Event Sourcing patterns and abstractions"
 readme = "README.md"
 requires-python = ">=3.11"

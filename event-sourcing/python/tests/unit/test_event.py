@@ -1,6 +1,5 @@
 """Tests for event module."""
 
-
 import pytest
 from pydantic import ValidationError
 
@@ -185,4 +184,3 @@ class TestEventFactory:
         assert envelope.metadata.tenant_id == "tenant-1"
         assert envelope.metadata.correlation_id == "corr-123"
         assert envelope.metadata.actor_id == "user-789"
-

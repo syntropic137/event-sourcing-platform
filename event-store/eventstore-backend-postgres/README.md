@@ -15,7 +15,7 @@ Status: implemented. See `src/` and `tests/` for details.
 
 ## Rationale & Guarantees
 
-- **Global sequencing**: `global_position BIGSERIAL PRIMARY KEY` provides a strictly increasing, gap-free sequence for the entire log (per-node). This is the canonical global order.
+- **Global sequencing**: `global_nonce BIGSERIAL PRIMARY KEY` provides a strictly increasing, gap-free sequence for the entire log (per-node). This is the canonical global order.
 - **Per-stream sequencing**: each stream increments `stream_version` by 1 starting at 1. Enforced by:
   - `UNIQUE(stream_id, stream_version)` for OCC + duplicates prevention
   - `CHECK (stream_version > 0)` to disallow zero/negative

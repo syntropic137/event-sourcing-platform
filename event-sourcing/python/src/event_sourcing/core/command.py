@@ -76,4 +76,3 @@ class InMemoryCommandBus(CommandBus):
         """Register a command handler."""
         type_name = command_type.__name__
         self._handlers[type_name] = handler
-

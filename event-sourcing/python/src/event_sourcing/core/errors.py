@@ -86,4 +86,3 @@ class SerializationError(EventSourcingError):
         self.operation = operation
         self.data_type = data_type
         self.original_error = original_error
-

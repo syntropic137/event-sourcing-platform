@@ -58,4 +58,3 @@ def aggregate(aggregate_type: str | None = None) -> Callable[[type[Any]], type[A
         return cls
 
     return decorator
-

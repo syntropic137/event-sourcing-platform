@@ -49,6 +49,17 @@ class BaseDomainEvent(DomainEvent):
         return cls.__name__
 
 
+class GenericDomainEvent(DomainEvent):
+    """
+    Generic domain event that allows arbitrary fields.
+
+    Used for deserializing events from the event store when the concrete
+    event type is not known at deserialization time.
+    """
+
+    model_config = {"frozen": True, "extra": "allow"}
+
+
 class EventMetadata(BaseModel):
     """
     Event metadata that accompanies every event.
@@ -63,7 +74,7 @@ class EventMetadata(BaseModel):
     aggregate_id: str
     aggregate_type: str
     tenant_id: str | None = None
-    global_position: int | None = None
+    global_nonce: int | None = None  # Matches proto: uint64 global_nonce
     content_type: str = "application/json"
     correlation_id: str | None = None
     causation_id: str | None = None
@@ -139,4 +150,3 @@ class EventFactory:
         )
 
         return EventEnvelope(event=event, metadata=metadata)
-

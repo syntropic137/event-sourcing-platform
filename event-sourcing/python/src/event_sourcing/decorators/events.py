@@ -32,4 +32,3 @@ def event_sourcing_handler(event_type: str) -> Callable[[F], F]:
         return func
 
     return decorator
-

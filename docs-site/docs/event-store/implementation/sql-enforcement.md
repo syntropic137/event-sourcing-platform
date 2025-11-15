@@ -3,7 +3,7 @@
 Suggested table `events`:
 
 - Columns
-  - global_position BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY
+  - global_nonce BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY
   - event_id UUID NOT NULL UNIQUE
   - stream_id TEXT NOT NULL
   - stream_type TEXT NOT NULL
@@ -21,7 +21,7 @@ Suggested table `events`:
 
 - Constraints/Indexes
   - UNIQUE(stream_id, stream_version)
-  - INDEX(global_position)
+  - INDEX(global_nonce)
   - INDEX(stream_type, stream_id, stream_version)
 
 - Sequencing

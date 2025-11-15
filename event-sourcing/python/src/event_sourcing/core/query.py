@@ -45,9 +45,7 @@ class QueryBus(ABC):
         ...
 
     @abstractmethod
-    def register_handler(
-        self, query_type: type[Query], handler: QueryHandler[Any]
-    ) -> None:
+    def register_handler(self, query_type: type[Query], handler: QueryHandler[Any]) -> None:
         """
         Register a query handler.
 
@@ -56,4 +54,3 @@ class QueryBus(ABC):
             handler: The handler for this query type
         """
         ...
-

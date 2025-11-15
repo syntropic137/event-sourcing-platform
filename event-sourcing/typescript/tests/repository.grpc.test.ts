@@ -216,7 +216,7 @@ function convertEnvelopeToWireEvent(envelope: EventEnvelope, fallbackTenantId: s
         ? Buffer.from(metadata.payloadHash, 'hex')
         : new Uint8Array(),
       headers: metadata.headers ?? {},
-      globalNonce: metadata.globalPosition ?? 0,
+      globalNonce: metadata.globalNonce ?? 0,
     },
     payload: Buffer.from(JSON.stringify(envelope.event.toJson())),
   };
@@ -235,7 +235,7 @@ function convertWireEventToEnvelope(event: {
     aggregateId: String(meta.aggregateId ?? ''),
     aggregateType: String(meta.aggregateType ?? ''),
     tenantId: meta.tenantId ? String(meta.tenantId) : undefined,
-    globalPosition: meta.globalNonce === undefined ? undefined : Number(meta.globalNonce),
+    globalNonce: meta.globalNonce === undefined ? undefined : Number(meta.globalNonce),
     contentType: String(meta.contentType ?? 'application/json'),
     correlationId: meta.correlationId ? String(meta.correlationId) : undefined,
     causationId: meta.causationId ? String(meta.causationId) : undefined,

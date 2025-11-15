@@ -253,4 +253,3 @@ class TestEventHandlerDecorator:
         assert len(handlers) == 2
         assert "Event1" in handlers
         assert "Event2" in handlers
-

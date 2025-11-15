@@ -37,7 +37,7 @@ Creates a real-time subscription to event streams.
 **Parameters:**
 - `tenantId` (string): Tenant/partition routing key
 - `aggregateIdPrefix` (string): Filter by aggregate id prefix (optional)
-- `fromGlobalNonce` (number): Starting global position
+- `fromGlobalNonce` (number): Starting global nonce
 
 **Returns:** AsyncIterator of events
 

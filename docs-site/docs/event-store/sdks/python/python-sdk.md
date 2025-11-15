@@ -149,7 +149,7 @@ subscription1 = await client.subscribe(
 subscription2 = await client.subscribe(
     tenant_id="tenant-123",
     aggregate_id_prefix="Order-",  # Only Order aggregates
-    from_global_nonce=1000         # Start from global position 1000
+    from_global_nonce=1000         # Start from global nonce 1000
 )
 
 # Process events

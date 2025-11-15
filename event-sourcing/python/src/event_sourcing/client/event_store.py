@@ -73,6 +73,29 @@ class EventStoreClient(Protocol):
         """Disconnect from the event store."""
         ...
 
+    async def read_all_events_from(
+        self,
+        after_global_nonce: int = 0,
+        limit: int = 100,
+    ) -> list[EventEnvelope[DomainEvent]]:
+        """
+        Read all events from a global nonce (for projections/catch-up).
+
+        This method enables projections to rebuild state by reading all events
+        in order from a checkpoint.
+
+        Args:
+            after_global_nonce: global nonce to read from (exclusive)
+            limit: Maximum number of events to return (for batching)
+
+        Returns:
+            List of event envelopes in global order
+
+        Raises:
+            EventStoreError: If reading fails
+        """
+        ...
+
 
 class EventStoreClientFactory:
     """Factory for creating event store clients."""
@@ -110,4 +133,3 @@ class EventStoreClientFactory:
 
         address = f"{host}:{port}"
         return GrpcEventStoreClient(address=address, tenant_id=tenant_id)
-

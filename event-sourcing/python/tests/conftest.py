@@ -13,4 +13,3 @@ def sample_aggregate_id() -> str:
 def sample_event_data() -> dict[str, str]:
     """Sample event data for tests."""
     return {"order_id": "order-123", "customer_id": "customer-456"}
-

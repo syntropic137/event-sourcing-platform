@@ -70,7 +70,7 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
     const all: EventEnvelope[] = [];
 
     try {
-      for (;;) {
+      for (; ;) {
         const resp = await client.readStream({
           tenantId: this.tenantId,
           aggregateId,
@@ -99,7 +99,7 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
             aggregateId: meta.aggregateId,
             aggregateType: meta.aggregateType || aggregateType,
             tenantId: meta.tenantId || '',
-            globalPosition: meta.globalNonce ?? null,
+            globalNonce: meta.globalNonce ?? null,
             contentType: meta.contentType || 'application/json',
             correlationId: meta.correlationId || '',
             causationId: meta.causationId || '',

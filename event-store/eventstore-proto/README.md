@@ -28,7 +28,7 @@ syntax = "proto3";
 package eventstore.v1;
 
 message AppendRequest { string stream_id = 1; }
-message AppendResponse { uint64 global_position = 1; }
+message AppendResponse { uint64 last_global_nonce = 1; }
 
 service EventStore {
   rpc Append(AppendRequest) returns (AppendResponse);

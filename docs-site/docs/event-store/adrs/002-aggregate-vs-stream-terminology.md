@@ -47,7 +47,7 @@ We chose **Option B: Aggregate-Centric Terminology** for DDD alignment.
 | `stream_id` | `aggregate_id` | Instance identifier (e.g., "Order-123") |
 | `stream_type` | `aggregate_type` | Aggregate class/type |
 | `stream_version` | `aggregate_nonce` | Per-aggregate sequence |
-| `global_position` | `global_nonce` | Global sequence |
+| `global_nonce` | `global_nonce` | Global sequence |
 
 ## Consequences
 
@@ -81,7 +81,7 @@ We chose **Option B: Aggregate-Centric Terminology** for DDD alignment.
 - `stream_id` → `aggregate_id`
 - `stream_type` → `aggregate_type`
 - `stream_version` → `aggregate_nonce`
-- `global_position` → `global_nonce`
+- `global_nonce` → `global_nonce`
 
 ### Code Changes
 - Updated all Rust implementations

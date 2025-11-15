@@ -10,4 +10,3 @@ __all__ = [
     "MemoryEventStoreClient",
     "GrpcEventStoreClient",
 ]
-

@@ -37,12 +37,12 @@ This document explains what the `.proto` file is, how gRPC stubs are generated f
 ## Postgres migrations (Rust-based options)
 - sqlx migrations (recommended v1): versioned SQL files, run via `sqlx migrate run`. Popular and straightforward.
 - refinery: Rust API to run SQL/embedded migrations programmatically.
-- Tables per plan: `events` (append-only) with unique constraints on `(stream_id, stream_version)` and `event_id`, index on `global_position`; optional `snapshots`.
+- Tables per plan: `events` (append-only) with unique constraints on `(stream_id, stream_version)` and `event_id`, index on `global_nonce`; optional `snapshots`.
 
 ## Subscribe implementation v1
-- Start with polling using `global_position > last_seen`:
+- Start with polling using `global_nonce > last_seen`:
   - Simple to implement, robust, and easy to reason about idempotency.
-  - Tunable poll interval; backfill guarantees ordering via `global_position`.
+  - Tunable poll interval; backfill guarantees ordering via `global_nonce`.
 - Consider LISTEN/NOTIFY in v2 for low latency (still combine with backfill by position).
 
 ## Filter semantics (Subscribe)
@@ -51,7 +51,7 @@ This document explains what the `.proto` file is, how gRPC stubs are generated f
 
 ## Backpressure and windowing defaults
 - `ReadStream.max_count` limits page size.
-- Streaming `Subscribe`: rely on gRPC flow control; keep batch sizes moderate and checkpoint by `global_position`.
+- Streaming `Subscribe`: rely on gRPC flow control; keep batch sizes moderate and checkpoint by `global_nonce`.
 - Optional keepalive/heartbeat later; gRPC keepalive settings usually suffice initially.
 
 ## IDs and timestamps
@@ -65,7 +65,7 @@ This document explains what the `.proto` file is, how gRPC stubs are generated f
   - Given: historical events loaded via `ReadStream`.
   - When: command handled by aggregate to produce new domain events.
   - Then: expect emitted events and append with optimistic concurrency (Exact(current_version)).
-- Service tests (Rust): use a tonic client to assert `Append`, `ReadStream`, `Subscribe` behaviors, including CAS failures and monotonic `global_position`.
+- Service tests (Rust): use a tonic client to assert `Append`, `ReadStream`, `Subscribe` behaviors, including CAS failures and monotonic `global_nonce`.
 
 ## Transport and tenancy posture
 - Dev: plaintext gRPC.
@@ -88,7 +88,7 @@ This document explains what the `.proto` file is, how gRPC stubs are generated f
   - `sdks/sdk-py/` → Python client SDK
 
 ## Notes against the plan
-- API surface and semantics match `PROJECT-PLAN_RUST-EVENT-STORE_20250826.md` (Append CAS, ReadStream paging, Subscribe by `global_position`).
+- API surface and semantics match `PROJECT-PLAN_RUST-EVENT-STORE_20250826.md` (Append CAS, ReadStream paging, Subscribe by `global_nonce`).
 - V1 emphasizes simplicity (polling, server-side timestamps, sqlx migrations), with clear paths to v2 (LISTEN/NOTIFY, TLS, authZ).
 
 ## Getting Started
@@ -159,12 +159,12 @@ The gRPC surface is stable; storage is pluggable behind the `EventStore` trait. 
 - Trait-first boundary: the gRPC service depends only on `EventStore` (append, read_stream, subscribe).
 - Adapters:
   - `InMemoryStore`: dev/test, already outlined in the plan.
-  - `PostgresEventStore`: append-only table with unique constraints and `global_position` index; polling subscribe for v1.
+  - `PostgresEventStore`: append-only table with unique constraints and `global_nonce` index; polling subscribe for v1.
   - `KurrentEventStore` (future): implement the same trait; map append/read/subscribe to Kurrent’s primitives.
 - Dependency Injection (DI): at startup, select the backend by config/env and pass `Arc<dyn EventStore>` into `EventStoreSvc`.
 - Semantic invariants across backends:
   - Optimistic concurrency via `expectedAggregateNonce` (CAS) remains consistent.
-  - Monotonic offsets via `global_position` (or backend equivalent) for catch-up and checkpointing.
+  - Monotonic offsets via `global_nonce` (or backend equivalent) for catch-up and checkpointing.
   - Metadata fields (`tenant_id`, `correlation_id`, etc.) preserved end-to-end.
 
 This modular design allows evolving from Memory → Postgres → Kurrent without API changes to clients.

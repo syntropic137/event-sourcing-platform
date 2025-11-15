@@ -87,9 +87,7 @@ class TestRepositoryLifecycle:
         await client.disconnect()
 
     @pytest.fixture
-    def repository(
-        self, client: MemoryEventStoreClient
-    ) -> EventStoreRepository[AccountAggregate]:
+    def repository(self, client: MemoryEventStoreClient) -> EventStoreRepository[AccountAggregate]:
         """Create repository."""
         factory = RepositoryFactory(client)
         return factory.create_repository(AccountAggregate)
@@ -198,9 +196,7 @@ class TestRepositoryLifecycle:
         assert loaded.version == 1
 
     @pytest.mark.integration
-    async def test_exists(
-        self, repository: EventStoreRepository[AccountAggregate]
-    ) -> None:
+    async def test_exists(self, repository: EventStoreRepository[AccountAggregate]) -> None:
         """Should check if aggregate exists."""
         # Should not exist
         assert not await repository.exists("acc-exists")
@@ -227,9 +223,7 @@ class TestOptimisticConcurrency:
         await client.disconnect()
 
     @pytest.fixture
-    def repository(
-        self, client: MemoryEventStoreClient
-    ) -> EventStoreRepository[AccountAggregate]:
+    def repository(self, client: MemoryEventStoreClient) -> EventStoreRepository[AccountAggregate]:
         """Create repository."""
         factory = RepositoryFactory(client)
         return factory.create_repository(AccountAggregate)
@@ -338,4 +332,3 @@ class TestRepositoryFactory:
         assert await client.stream_exists("Account-test-456")
 
         await client.disconnect()
-

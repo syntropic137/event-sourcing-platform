@@ -107,8 +107,7 @@ class EventStoreRepository(Generic[TAggregate]):
         aggregate.rehydrate(events)
 
         logger.debug(
-            f"Loaded aggregate {self._aggregate_type}:{aggregate_id} "
-            f"at version {aggregate.version}"
+            f"Loaded aggregate {self._aggregate_type}:{aggregate_id} at version {aggregate.version}"
         )
 
         return aggregate
@@ -205,4 +204,3 @@ class RepositoryFactory:
             aggregate_factory=factory,
             aggregate_type=aggregate_type,
         )
-

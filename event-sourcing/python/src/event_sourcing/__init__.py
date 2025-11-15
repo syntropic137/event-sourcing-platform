@@ -21,7 +21,18 @@ from event_sourcing.core.errors import (
     EventStoreError,
     InvalidAggregateStateError,
 )
-from event_sourcing.core.event import BaseDomainEvent, DomainEvent, EventEnvelope, EventMetadata
+from event_sourcing.core.event import (
+    BaseDomainEvent,
+    DomainEvent,
+    EventEnvelope,
+    EventMetadata,
+    GenericDomainEvent,
+)
+from event_sourcing.core.projection import (
+    AutoDispatchProjection,
+    Projection,
+    ProjectionManager,
+)
 from event_sourcing.core.query import Query, QueryBus, QueryHandler
 from event_sourcing.core.repository import (
     EventStoreRepository,
@@ -41,6 +52,7 @@ __all__ = [
     "DomainEvent",
     "EventEnvelope",
     "EventMetadata",
+    "GenericDomainEvent",
     # Commands
     "Command",
     "CommandHandler",
@@ -50,6 +62,10 @@ __all__ = [
     "Query",
     "QueryHandler",
     "QueryBus",
+    # Projections
+    "Projection",
+    "ProjectionManager",
+    "AutoDispatchProjection",
     # Repository
     "Repository",
     "EventStoreRepository",

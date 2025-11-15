@@ -142,7 +142,7 @@ const subscription1 = await client.subscribe({
 const subscription2 = await client.subscribe({
   tenantId: 'tenant-123',
   aggregateIdPrefix: 'Order-',  // Only Order aggregates
-  fromGlobalNonce: 1000         // Start from global position 1000
+  fromGlobalNonce: 1000         // Start from global nonce 1000
 });
 
 // Process events
