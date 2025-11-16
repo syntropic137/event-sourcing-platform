@@ -222,8 +222,7 @@ target
 .DS_Store
 Thumbs.db
 .idea/
-# .cursor/
-# .vscode.1/
+.vscode.1/
 .history/
 
 # Turbo repo cache
@@ -231,9 +230,6 @@ Thumbs.db
 
 # Coverage reports
 coverage/
-
-# Docusaurus build output (generated)
-event-store/docs-site/build/
 
 # Package manager lockfiles to avoid conflicts (repo uses pnpm)
 **/package-lock.json
