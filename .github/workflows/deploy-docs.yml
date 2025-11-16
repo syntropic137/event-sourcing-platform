@@ -27,10 +27,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: 20
 
-      - name: Install pnpm
-        run: npm install -g pnpm@9
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.20.0
 
       - name: Setup Protocol Buffers compiler
         uses: arduino/setup-protoc@v3
