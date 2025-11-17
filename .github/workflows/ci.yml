@@ -55,7 +55,7 @@ jobs:
           cache-targets: false  # Disable target caching - using sccache instead
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: QA fast
         run: make -C event-store qa-fast
@@ -80,7 +80,7 @@ jobs:
           cache-targets: false  # Disable target caching - using sccache instead
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Coverage setup
         run: make -C event-store cov-setup
@@ -122,7 +122,7 @@ jobs:
           cache-targets: false  # Disable target caching - using sccache instead
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.7
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: QA fast
         run: make -C event-sourcing/rust qa-fast
