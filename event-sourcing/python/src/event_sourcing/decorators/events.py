@@ -47,6 +47,10 @@ def event_sourcing_handler(event_type: str) -> Callable[[F], F]:
 # Metadata key for event decorator
 EVENT_METADATA_KEY = "_event_metadata"
 
+# Pre-compiled regex patterns for version validation (compiled once at module load)
+_SIMPLE_VERSION_PATTERN = re.compile(r"^v\d+$")
+_SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
+
 
 class EventDecoratorMetadata:
     """Metadata stored by @event decorator."""
@@ -72,14 +76,10 @@ def _is_valid_event_version(version: str) -> bool:
     Returns:
         True if valid, False otherwise
     """
-    # Simple version format: v1, v2, v3, etc.
-    simple_pattern = re.compile(r"^v\d+$")
-    if simple_pattern.match(version):
+    if _SIMPLE_VERSION_PATTERN.match(version):
         return True
 
-    # Semantic version format: 1.0.0, 2.1.3, etc.
-    semver_pattern = re.compile(r"^\d+\.\d+\.\d+$")
-    if semver_pattern.match(version):
+    if _SEMVER_PATTERN.match(version):
         return True
 
     return False
