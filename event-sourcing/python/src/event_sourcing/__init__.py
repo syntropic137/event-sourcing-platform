@@ -39,8 +39,17 @@ from event_sourcing.core.repository import (
     Repository,
     RepositoryFactory,
 )
-from event_sourcing.decorators.commands import command_handler
-from event_sourcing.decorators.events import event_sourcing_handler
+from event_sourcing.decorators.commands import (
+    aggregate,
+    command,
+    command_handler,
+    get_command_metadata,
+)
+from event_sourcing.decorators.events import (
+    event,
+    event_sourcing_handler,
+    get_event_metadata,
+)
 
 __version__ = "0.1.0"
 
@@ -75,9 +84,16 @@ __all__ = [
     "EventStoreClientFactory",
     "GrpcEventStoreClient",
     "MemoryEventStoreClient",
-    # Decorators
+    # Class Decorators (for aggregate, command, event classes)
+    "aggregate",
+    "command",
+    "event",
+    # Method Decorators (for aggregate methods)
     "event_sourcing_handler",
     "command_handler",
+    # Metadata helpers
+    "get_command_metadata",
+    "get_event_metadata",
     # Errors
     "EventSourcingError",
     "AggregateNotFoundError",
