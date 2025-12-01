@@ -135,7 +135,7 @@ def event(event_type: str, version: str) -> Callable[[T], T]:
 
         # Also set event_type as class attribute for compatibility with DomainEvent
         if not hasattr(cls, "event_type") or getattr(cls, "event_type", None) is None:
-            cls.event_type = event_type  # type: ignore[attr-defined]
+            cls.event_type = event_type
 
         return cls
 
