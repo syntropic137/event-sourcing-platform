@@ -142,7 +142,7 @@ def event(event_type: str, version: str) -> Callable[[T], T]:
                 f'class attribute "{existing_event_type}"'
             )
             raise ValueError(msg)
-        cls.event_type = event_type  # type: ignore[assignment]
+        cls.event_type = event_type
 
         return cls
 
