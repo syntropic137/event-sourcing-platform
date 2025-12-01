@@ -133,9 +133,16 @@ def event(event_type: str, version: str) -> Callable[[T], T]:
         metadata = EventDecoratorMetadata(event_type=event_type, version=version)
         setattr(cls, EVENT_METADATA_KEY, metadata)
 
-        # Also set event_type as class attribute for compatibility with DomainEvent
-        if not hasattr(cls, "event_type") or getattr(cls, "event_type", None) is None:
-            cls.event_type = event_type
+        # Validate and set event_type class attribute for DomainEvent compatibility
+        existing_event_type = getattr(cls, "event_type", None)
+        if existing_event_type is not None and existing_event_type != event_type:
+            msg = (
+                f"event_type mismatch in {cls.__name__}: "
+                f'decorator parameter "{event_type}" does not match '
+                f'class attribute "{existing_event_type}"'
+            )
+            raise ValueError(msg)
+        cls.event_type = event_type  # type: ignore[assignment]
 
         return cls
 

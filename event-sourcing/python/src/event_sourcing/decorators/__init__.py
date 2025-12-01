@@ -1,7 +1,6 @@
 """Decorators for event sourcing patterns."""
 
 from event_sourcing.decorators.commands import (
-    COMMAND_METADATA_KEY,
     CommandDecoratorMetadata,
     aggregate,
     command,
@@ -9,7 +8,6 @@ from event_sourcing.decorators.commands import (
     get_command_metadata,
 )
 from event_sourcing.decorators.events import (
-    EVENT_METADATA_KEY,
     EventDecoratorMetadata,
     event,
     event_sourcing_handler,
@@ -29,6 +27,4 @@ __all__ = [
     "EventDecoratorMetadata",
     "get_command_metadata",
     "get_event_metadata",
-    "COMMAND_METADATA_KEY",
-    "EVENT_METADATA_KEY",
 ]

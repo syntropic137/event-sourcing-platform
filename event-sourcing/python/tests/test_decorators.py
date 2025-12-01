@@ -102,6 +102,14 @@ class TestEventDecorator:
         metadata = get_event_metadata(TypedEvent)
         assert isinstance(metadata, EventDecoratorMetadata)
 
+    def test_event_decorator_mismatch_raises(self) -> None:
+        """@event should raise ValueError if class event_type doesn't match decorator."""
+        with pytest.raises(ValueError, match="event_type mismatch"):
+
+            @event("TaskCreated", "v1")
+            class MismatchedEvent(DomainEvent):
+                event_type = "DifferentName"  # Mismatch!
+
 
 # ============================================================================
 # @command decorator tests
