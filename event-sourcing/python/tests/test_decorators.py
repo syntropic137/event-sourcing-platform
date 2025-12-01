@@ -13,7 +13,6 @@ from event_sourcing import (
 from event_sourcing.decorators.commands import CommandDecoratorMetadata
 from event_sourcing.decorators.events import EventDecoratorMetadata
 
-
 # ============================================================================
 # @event decorator tests
 # ============================================================================
