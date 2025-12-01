@@ -1,9 +1,14 @@
-"""Command handler decorators."""
+"""Command decorators for event sourcing patterns."""
 
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 F = TypeVar("F", bound=Callable[..., Any])
+T = TypeVar("T", bound=type[Any])
+
+# ============================================================================
+# COMMAND HANDLER DECORATOR (for aggregate methods)
+# ============================================================================
 
 
 def command_handler(command_type: str) -> Callable[[F], F]:
@@ -34,6 +39,11 @@ def command_handler(command_type: str) -> Callable[[F], F]:
     return decorator
 
 
+# ============================================================================
+# AGGREGATE DECORATOR
+# ============================================================================
+
+
 def aggregate(aggregate_type: str | None = None) -> Callable[[type[Any]], type[Any]]:
     """
     Decorator for aggregate classes.
@@ -58,3 +68,74 @@ def aggregate(aggregate_type: str | None = None) -> Callable[[type[Any]], type[A
         return cls
 
     return decorator
+
+
+# ============================================================================
+# COMMAND CLASS DECORATOR (ADR-010)
+# ============================================================================
+
+# Metadata key for command decorator
+COMMAND_METADATA_KEY = "_command_metadata"
+
+
+class CommandDecoratorMetadata:
+    """Metadata stored by @command decorator."""
+
+    __slots__ = ("command_type", "description")
+
+    def __init__(self, command_type: str, description: str | None = None) -> None:
+        self.command_type = command_type
+        self.description = description
+
+
+def command(command_type: str, description: str | None = None) -> Callable[[T], T]:
+    """
+    Decorator for command classes to store metadata about command type.
+
+    This enables the VSA CLI to discover and validate commands automatically.
+
+    Args:
+        command_type: The command type identifier (e.g., "CreateTask")
+        description: Optional description of what the command does
+
+    Example:
+        @command("CreateTask", "Creates a new task in the system")
+        class CreateTaskCommand:
+            aggregate_id: str
+            title: str
+
+    Example (without description):
+        @command("CreateTask")
+        class CreateTaskCommand:
+            aggregate_id: str
+            title: str
+
+    See Also:
+        - ADR-006: Domain Organization Pattern
+        - ADR-010: Decorator Patterns for Framework Integration
+    """
+
+    def decorator(cls: T) -> T:
+        # Store metadata on the class
+        metadata = CommandDecoratorMetadata(
+            command_type=command_type,
+            description=description,
+        )
+        setattr(cls, COMMAND_METADATA_KEY, metadata)
+
+        return cls
+
+    return decorator
+
+
+def get_command_metadata(command_class: type[Any]) -> CommandDecoratorMetadata | None:
+    """
+    Get command metadata from a command class.
+
+    Args:
+        command_class: The command class to get metadata from
+
+    Returns:
+        CommandDecoratorMetadata if decorated with @command, None otherwise
+    """
+    return getattr(command_class, COMMAND_METADATA_KEY, None)
