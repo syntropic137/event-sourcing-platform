@@ -2,18 +2,26 @@ import { themes as prismThemes } from 'prism-react-renderer';
 import type { Config } from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
+// GitHub Pages serves project sites at /<repo-name>/, so baseUrl must match.
+// For local development, you can override these with environment variables:
+//   BASE_URL=/ pnpm --filter docs-site start
+// This allows local dev to serve at http://localhost:3000/ instead of /event-sourcing-platform/
 const config: Config = {
   title: 'Event Sourcing Platform Docs',
   tagline: 'Docs for concepts, development, SDKs, and architecture',
-  url: 'http://localhost',
-  baseUrl: '/',
+  url: process.env.SITE_URL || 'https://neuralempowerment.github.io',
+  baseUrl: process.env.BASE_URL || '/event-sourcing-platform/',
   favicon: 'img/logo.svg',
   organizationName: 'NeuralEmpowerment',
   projectName: 'event-sourcing-platform',
   onBrokenLinks: 'throw',
-  onBrokenMarkdownLinks: 'warn',
   i18n: { defaultLocale: 'en', locales: ['en'] },
-  markdown: { mermaid: true },
+  markdown: {
+    mermaid: true,
+    hooks: {
+      onBrokenMarkdownLinks: 'warn',
+    },
+  },
   themes: [
     '@docusaurus/theme-mermaid',
     [
