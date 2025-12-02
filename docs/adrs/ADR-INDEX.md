@@ -1,7 +1,7 @@
 # Architecture Decision Records - Index
 
 **Status:** 📘 Master Reference  
-**Last Updated:** 2025-11-06
+**Last Updated:** 2025-12-02
 
 This document provides a comprehensive overview of all architectural decisions for the **Hexagonal Event-Sourced Vertical Slice Architecture** pattern.
 
@@ -69,6 +69,7 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 | [ADR-008](./ADR-008-vertical-slices-hexagonal-adapters.md) | Vertical Slices | ✅ Accepted | Defines slices as thin hexagonal adapters |
 | [ADR-009](./ADR-009-cqrs-pattern-implementation.md) | CQRS Pattern | ✅ Accepted | Formalizes CQRS implementation |
 | [ADR-010](./ADR-010-decorator-patterns-framework.md) | Decorator Patterns | ✅ Accepted | Documents framework integration decorators |
+| [ADR-011](./ADR-011-ts-proto-v1-retention.md) | ts-proto v1 Retention | ✅ Accepted | Decision to retain ts-proto v1.172.0 vs v2 upgrade |
 
 ---
 
@@ -539,6 +540,7 @@ vsa validate --config vsa.yaml
 | Date | Version | Changes |
 |------|---------|---------|
 | 2025-11-06 | 1.0.0 | Initial ADR index created |
+| 2025-12-02 | 1.1.0 | Added ADR-011: ts-proto v1 retention decision |
 
 ---
 
