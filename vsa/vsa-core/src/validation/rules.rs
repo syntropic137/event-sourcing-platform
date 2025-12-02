@@ -36,7 +36,9 @@ impl ValidationRuleSet {
     pub fn default_rules() -> Self {
         use super::{
             ContextBoundariesRule, IntegrationEventNamingRule, IntegrationEventsLocationRule,
-            NoCircularDependenciesRule, NoDuplicateIntegrationEventsRule, RequireSharedFolderRule,
+            NoCircularDependenciesRule, NoCrossSliceImportsRule, NoDuplicateIntegrationEventsRule,
+            ProjectionEventSubscriptionRule, RequireHandlerForQueryRule,
+            RequireProjectionForQueryRule, RequireSharedFolderRule, ThinAdapterRule,
         };
 
         let rules: Vec<Box<dyn ValidationRule>> = vec![
@@ -55,6 +57,13 @@ impl ValidationRuleSet {
             Box::new(NoCircularDependenciesRule),
             Box::new(ContextBoundariesRule),
             Box::new(RequireSharedFolderRule),
+            // Query slice rules (CQRS)
+            Box::new(RequireProjectionForQueryRule),
+            Box::new(RequireHandlerForQueryRule),
+            Box::new(ProjectionEventSubscriptionRule),
+            // Slice isolation rules
+            Box::new(NoCrossSliceImportsRule),
+            Box::new(ThinAdapterRule),
         ];
 
         Self { rules }
