@@ -191,7 +191,7 @@ class {{projection_name}}(Projection[{{read_model_name}}]):
 
 {{#each subscribed_events}}
     @handles({{this}})
-    async def on_{{this}}(self, event: {{this}}) -> None:
+    async def on_{{strip_event_suffix this}}(self, event: {{this}}) -> None:
         """Handle {{this}} event"""
         # TODO: Update read model based on event data
         # item = self._items.get(event.aggregate_id) or self._create_default()

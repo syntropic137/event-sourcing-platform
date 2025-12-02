@@ -1,6 +1,6 @@
 # ADR-011: Query Slice Validation
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2025-12-02
 **Decision Makers:** Architecture Team
 **Related:** ADR-008 (Vertical Slices), ADR-009 (CQRS Pattern)

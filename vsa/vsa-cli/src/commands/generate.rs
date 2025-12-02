@@ -246,10 +246,18 @@ fn run_query_slice_generator(
     } else {
         // Non-interactive mode: use defaults
         ctx.add_field("id".to_string(), "string".to_string(), true);
-        ctx.add_subscribed_event(format!(
-            "{}CreatedEvent",
-            ctx.operation_name.replace("List", "").replace("Get", "")
-        ));
+
+        // Derive entity name from operation name (strip List/Get/GetAll prefix)
+        let entity_name = ctx
+            .operation_name
+            .strip_prefix("List")
+            .or_else(|| ctx.operation_name.strip_prefix("GetAll"))
+            .or_else(|| ctx.operation_name.strip_prefix("Get"))
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Item".to_string());
+
+        ctx.add_subscribed_event(format!("{entity_name}CreatedEvent"));
     }
 
     // Validate we have at least one field
@@ -261,15 +269,36 @@ fn run_query_slice_generator(
     // Create template engine
     let engine = TemplateEngine::new(config.clone())?;
 
-    // Generate feature directory (in slices/ folder for VSA v2)
-    let feature_path = root.join("slices").join(feature);
+    // Generate feature directory honoring configured slice path and context
+    // Structure: root/[context]/[slices_path]/[feature] or root/[slices_path]/[feature]
+    let slices_path = config
+        .slices
+        .as_ref()
+        .map(|s| s.path.clone())
+        .unwrap_or_else(|| std::path::PathBuf::from("slices"));
+
+    let feature_path = if context.is_empty() {
+        root.join(&slices_path).join(feature)
+    } else {
+        root.join(context).join(&slices_path).join(feature)
+    };
     fs::create_dir_all(&feature_path)?;
 
-    // Get file names from context
-    let query_name = ctx.query_name.as_ref().unwrap();
-    let projection_name = ctx.projection_name.as_ref().unwrap();
-    let handler_name = ctx.query_handler_name.as_ref().unwrap();
-    let controller_name = ctx.controller_name.as_ref().unwrap();
+    // Get file names from context (these are set by for_query_slice)
+    let query_name =
+        ctx.query_name.as_ref().expect("query_name should be set for query slice generation");
+    let projection_name = ctx
+        .projection_name
+        .as_ref()
+        .expect("projection_name should be set for query slice generation");
+    let handler_name = ctx
+        .query_handler_name
+        .as_ref()
+        .expect("query_handler_name should be set for query slice generation");
+    let controller_name = ctx
+        .controller_name
+        .as_ref()
+        .expect("controller_name should be set for query slice generation");
 
     // Generate files
     let query_file = feature_path.join(format!("{}.{}", query_name, ctx.extension));

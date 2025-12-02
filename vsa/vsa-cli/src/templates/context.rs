@@ -232,15 +232,27 @@ impl TemplateContext {
     /// Generate read model name from operation name
     fn to_read_model_name(operation: &str) -> String {
         // List* -> *Summary, Get* -> *Detail
+        // Handle edge cases where prefix stripping results in empty string
         if operation.starts_with("List") || operation.starts_with("GetAll") {
             let rest = operation
                 .strip_prefix("List")
                 .or_else(|| operation.strip_prefix("GetAll"))
-                .unwrap_or(operation);
-            format!("{rest}Summary")
+                .unwrap_or(operation)
+                .trim();
+
+            if rest.is_empty() {
+                "ItemSummary".to_string()
+            } else {
+                format!("{rest}Summary")
+            }
         } else if operation.starts_with("Get") {
-            let rest = operation.strip_prefix("Get").unwrap_or(operation);
-            format!("{rest}Detail")
+            let rest = operation.strip_prefix("Get").unwrap_or(operation).trim();
+
+            if rest.is_empty() {
+                "ItemDetail".to_string()
+            } else {
+                format!("{rest}Detail")
+            }
         } else {
             format!("{operation}ReadModel")
         }
@@ -421,6 +433,22 @@ mod tests {
     #[test]
     fn test_python_record_conversion() {
         assert_eq!(TemplateContext::to_python_type("Record<string, number>"), "dict[str, float]");
+    }
+
+    #[test]
+    fn test_to_read_model_name() {
+        // Standard cases
+        assert_eq!(TemplateContext::to_read_model_name("ListWorkflows"), "WorkflowsSummary");
+        assert_eq!(TemplateContext::to_read_model_name("GetWorkflow"), "WorkflowDetail");
+        assert_eq!(TemplateContext::to_read_model_name("GetAllItems"), "ItemsSummary");
+
+        // Edge cases - empty after prefix strip
+        assert_eq!(TemplateContext::to_read_model_name("List"), "ItemSummary");
+        assert_eq!(TemplateContext::to_read_model_name("Get"), "ItemDetail");
+        assert_eq!(TemplateContext::to_read_model_name("GetAll"), "ItemSummary");
+
+        // Fallback case
+        assert_eq!(TemplateContext::to_read_model_name("FetchOrders"), "FetchOrdersReadModel");
     }
 
     #[test]

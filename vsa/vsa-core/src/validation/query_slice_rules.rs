@@ -52,8 +52,8 @@ impl ValidationRule for RequireProjectionForQueryRule {
         for slice in slices {
             if slice.slice_type == SliceType::Query && !slice.has_projection() {
                 // Suggest creating a projection
-                let projection_name =
-                    format!("{}Projection", to_pascal_case(&slice.name.replace('-', "_")));
+                // Note: to_pascal_case already handles both '-' and '_' delimiters
+                let projection_name = format!("{}Projection", to_pascal_case(&slice.name));
                 let ext = ctx.config.file_extension();
                 let projection_path = slice.path.join(format!("{projection_name}.{ext}"));
 
@@ -106,8 +106,8 @@ impl ValidationRule for RequireHandlerForQueryRule {
         for slice in slices {
             if slice.slice_type == SliceType::Query && !slice.has_handler() {
                 // Suggest creating a handler
-                let handler_name =
-                    format!("{}Handler", to_pascal_case(&slice.name.replace('-', "_")));
+                // Note: to_pascal_case already handles both '-' and '_' delimiters
+                let handler_name = format!("{}Handler", to_pascal_case(&slice.name));
                 let ext = ctx.config.file_extension();
                 let handler_path = slice.path.join(format!("{handler_name}.{ext}"));
 

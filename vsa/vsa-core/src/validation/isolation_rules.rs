@@ -364,7 +364,15 @@ fn count_code_lines(content: &str, language: &str) -> usize {
             "python" => {
                 // Handle docstrings (simplified)
                 if trimmed.starts_with("\"\"\"") || trimmed.starts_with("'''") {
-                    if !trimmed[3..].contains("\"\"\"") && !trimmed[3..].contains("'''") {
+                    // Check if this is a single-line docstring (opens and closes on same line)
+                    // Need length check to avoid panic when slicing
+                    if trimmed.len() > 3 {
+                        let rest = &trimmed[3..];
+                        if !rest.contains("\"\"\"") && !rest.contains("'''") {
+                            in_block_comment = !in_block_comment;
+                        }
+                    } else {
+                        // Line is exactly """ or ''' - toggle block comment state
                         in_block_comment = !in_block_comment;
                     }
                     continue;

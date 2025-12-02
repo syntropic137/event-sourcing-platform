@@ -1,11 +1,27 @@
 //! Template rendering engine
 
 use anyhow::Result;
-use handlebars::Handlebars;
+use handlebars::{Context, Handlebars, Helper, HelperResult, JsonRender, Output, RenderContext};
 use vsa_core::VsaConfig;
 
 use super::context::TemplateContext;
 use super::{python, typescript};
+
+/// Helper to strip "Event" suffix from event names
+/// Usage in templates: {{strip_event_suffix this}}
+/// Example: "WorkflowCreatedEvent" -> "WorkflowCreated"
+fn strip_event_suffix_helper(
+    h: &Helper,
+    _: &Handlebars,
+    _: &Context,
+    _: &mut RenderContext,
+    out: &mut dyn Output,
+) -> HelperResult {
+    let param = h.param(0).map(|v| v.value().render()).unwrap_or_default();
+    let stripped = param.strip_suffix("Event").unwrap_or(&param);
+    out.write(stripped)?;
+    Ok(())
+}
 
 /// Template engine for code generation
 pub struct TemplateEngine {
@@ -18,6 +34,9 @@ impl TemplateEngine {
     pub fn new(config: VsaConfig) -> Result<Self> {
         let mut handlebars = Handlebars::new();
         handlebars.set_strict_mode(true);
+
+        // Register custom helpers
+        handlebars.register_helper("strip_event_suffix", Box::new(strip_event_suffix_helper));
 
         // Register TypeScript templates
         handlebars.register_template_string("ts_command", typescript::COMMAND_TEMPLATE)?;

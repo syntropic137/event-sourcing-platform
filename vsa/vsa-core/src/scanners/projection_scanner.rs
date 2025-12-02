@@ -133,10 +133,10 @@ impl<'a> ProjectionScanner<'a> {
         for cap in on_pattern.captures_iter(content) {
             if let Some(event_name) = cap.get(1).or(cap.get(2)) {
                 let name = event_name.as_str();
-                // Skip common non-event methods
-                if !["init", "error", "complete", "start", "end"]
-                    .contains(&name.to_lowercase().as_str())
-                {
+                // Skip common non-event method names (exact match only)
+                // These are lifecycle methods, not event handlers
+                const NON_EVENT_METHODS: &[&str] = &["init", "error", "complete", "start", "end"];
+                if !NON_EVENT_METHODS.contains(&name) {
                     events.push(format!("{name}Event"));
                 }
             }

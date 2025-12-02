@@ -129,7 +129,7 @@ impl<'a> SliceScanner<'a> {
 
         // Also scan for legacy structure (contexts with features)
         // This maintains backward compatibility with v1 VSA config
-        self.scan_legacy_structure(self.root, &mut slices)?;
+        self.scan_legacy_structure(self.root, slices.as_mut_slice())?;
 
         Ok(slices)
     }
@@ -156,8 +156,7 @@ impl<'a> SliceScanner<'a> {
     }
 
     /// Scan legacy structure (contexts/features)
-    #[allow(clippy::ptr_arg)]
-    fn scan_legacy_structure(&self, _dir: &Path, _slices: &mut Vec<Slice>) -> Result<()> {
+    fn scan_legacy_structure(&self, _dir: &Path, _slices: &mut [Slice]) -> Result<()> {
         // TODO: Implement legacy structure scanning if needed
         // For now, we focus on the modern slices/ structure
         Ok(())

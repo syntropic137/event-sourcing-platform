@@ -176,7 +176,7 @@ export class {{projection_name}} extends Projection<{{read_model_name}}> {
 
 {{#each subscribed_events}}
   @Handles({{this}})
-  async on{{this}}(event: {{this}}): Promise<void> {
+  async on{{strip_event_suffix this}}(event: {{this}}): Promise<void> {
     // TODO: Update read model based on event data
     // const item = this.items.get(event.aggregateId) || this.createDefault();
     // this.items.set(event.aggregateId, updatedItem);
