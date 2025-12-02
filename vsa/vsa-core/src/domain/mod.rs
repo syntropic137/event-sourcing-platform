@@ -6,16 +6,19 @@
 //! - Queries
 //! - Events
 //! - Upcasters
+//! - Projections (read models for CQRS)
 
 pub mod aggregate;
 pub mod command;
 pub mod event;
+pub mod projection;
 pub mod query;
 pub mod upcaster;
 
 pub use aggregate::{Aggregate, CommandHandler, EventHandler};
 pub use command::{Command, CommandField};
 pub use event::{Event, EventField, EventVersion};
+pub use projection::Projection;
 pub use query::{Query, QueryField};
 pub use upcaster::Upcaster;
 

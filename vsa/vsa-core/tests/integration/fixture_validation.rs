@@ -102,12 +102,12 @@ fn test_typescript_valid_01_hexagonal_complete() {
     let fixture_path = fixtures_dir().join("typescript/valid/01-hexagonal-complete");
 
     if !fixture_path.exists() {
-        eprintln!("⚠️  Fixture not yet created: {:?}", fixture_path);
+        eprintln!("⚠️  Fixture not yet created: {fixture_path:?}");
         return;
     }
 
     let model = scan_fixture(&fixture_path).unwrap_or_else(|e| {
-        panic!("Failed to scan valid fixture (should pass): {:?}\nError: {:?}", fixture_path, e)
+        panic!("Failed to scan valid fixture (should pass): {fixture_path:?}\nError: {e:?}")
     });
 
     // Valid fixture should have domain components
@@ -122,12 +122,12 @@ fn test_typescript_valid_02_multi_context() {
     let fixture_path = fixtures_dir().join("typescript/valid/02-multi-context");
 
     if !fixture_path.exists() {
-        eprintln!("⚠️  Fixture not yet created: {:?}", fixture_path);
+        eprintln!("⚠️  Fixture not yet created: {fixture_path:?}");
         return;
     }
 
     let model = scan_fixture(&fixture_path).unwrap_or_else(|e| {
-        panic!("Failed to scan valid fixture (should pass): {:?}\nError: {:?}", fixture_path, e)
+        panic!("Failed to scan valid fixture (should pass): {fixture_path:?}\nError: {e:?}")
     });
 
     // Multi-context fixture should have multiple aggregates
@@ -158,7 +158,7 @@ fn test_typescript_invalid_01_no_domain_folder() {
     let fixture_path = fixtures_dir().join("typescript/invalid/01-no-domain-folder");
 
     if !fixture_path.exists() {
-        eprintln!("⚠️  Fixture not yet created: {:?}", fixture_path);
+        eprintln!("⚠️  Fixture not yet created: {fixture_path:?}");
         return;
     }
 
@@ -177,7 +177,7 @@ fn test_typescript_invalid_01_no_domain_folder() {
         }
         Err(e) => {
             // Expected error - domain path not found
-            eprintln!("✅ Invalid fixture correctly failed: {:?}", e);
+            eprintln!("✅ Invalid fixture correctly failed: {e:?}");
         }
     }
 }
@@ -202,12 +202,12 @@ fn test_python_valid_01_todo_simple() {
     let fixture_path = fixtures_dir().join("python/valid/01-todo-simple");
 
     if !fixture_path.exists() {
-        eprintln!("⚠️  Fixture not yet created: {:?}", fixture_path);
+        eprintln!("⚠️  Fixture not yet created: {fixture_path:?}");
         return;
     }
 
     let model = scan_fixture(&fixture_path).unwrap_or_else(|e| {
-        panic!("Failed to scan valid Python fixture: {:?}\nError: {:?}", fixture_path, e)
+        panic!("Failed to scan valid Python fixture: {fixture_path:?}\nError: {e:?}")
     });
 
     assert!(!model.aggregates.is_empty(), "Python fixture should have aggregates");
@@ -221,7 +221,7 @@ fn test_python_valid_01_todo_simple() {
 fn test_fixture_directory_structure_exists() {
     let fixtures_root = fixtures_dir();
 
-    assert!(fixtures_root.exists(), "Fixtures directory should exist at {:?}", fixtures_root);
+    assert!(fixtures_root.exists(), "Fixtures directory should exist at {fixtures_root:?}");
 
     // Check language directories exist
     let ts_dir = fixtures_root.join("typescript");
@@ -243,7 +243,7 @@ fn test_fixture_directory_structure_exists() {
 #[test]
 fn test_fixture_readme_exists() {
     let readme = fixtures_dir().join("README.md");
-    assert!(readme.exists(), "Fixtures README should exist at {:?}", readme);
+    assert!(readme.exists(), "Fixtures README should exist at {readme:?}");
 }
 
 // =============================================================================
@@ -263,7 +263,7 @@ fn test_all_valid_fixtures() {
 
         for fixture_path in fixtures {
             total += 1;
-            println!("\n🧪 Testing fixture: {:?}", fixture_path);
+            println!("\n🧪 Testing fixture: {fixture_path:?}");
 
             match scan_fixture(&fixture_path) {
                 Ok(model) => {
@@ -277,22 +277,22 @@ fn test_all_valid_fixtures() {
                 }
                 Err(e) => {
                     failed += 1;
-                    println!("  ❌ FAIL: {:?}", e);
+                    println!("  ❌ FAIL: {e:?}");
                 }
             }
         }
     }
 
     let separator = "=".repeat(60);
-    println!("\n{}", separator);
+    println!("\n{separator}");
     println!("📊 Fixture Validation Summary");
-    println!("{}", separator);
-    println!("Total:  {}", total);
-    println!("Passed: {} ✅", passed);
-    println!("Failed: {} ❌", failed);
-    println!("{}", separator);
+    println!("{separator}");
+    println!("Total:  {total}");
+    println!("Passed: {passed} ✅");
+    println!("Failed: {failed} ❌");
+    println!("{separator}");
 
     if failed > 0 {
-        panic!("{} valid fixtures failed validation", failed);
+        panic!("{failed} valid fixtures failed validation");
     }
 }

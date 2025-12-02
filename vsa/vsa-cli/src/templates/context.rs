@@ -38,6 +38,33 @@ pub struct TemplateContext {
 
     /// Context name (e.g., "warehouse")
     pub context_name: String,
+
+    // =========================================================================
+    // QUERY SLICE FIELDS (CQRS Read Side)
+    // =========================================================================
+    /// Query class name (e.g., "ListProductsQuery")
+    pub query_name: Option<String>,
+
+    /// Projection class name (e.g., "ProductListProjection")
+    pub projection_name: Option<String>,
+
+    /// Query handler class name (e.g., "ListProductsHandler")
+    pub query_handler_name: Option<String>,
+
+    /// Controller class name (e.g., "ListProductsController")
+    pub controller_name: Option<String>,
+
+    /// Read model name (e.g., "ProductSummary")
+    pub read_model_name: Option<String>,
+
+    /// Slice type (command, query, saga)
+    pub slice_type: Option<String>,
+
+    /// Events that the projection subscribes to
+    pub subscribed_events: Vec<String>,
+
+    /// Whether this is a list query (returns multiple items)
+    pub is_list: bool,
 }
 
 /// Field information for templates
@@ -125,6 +152,97 @@ impl TemplateContext {
             framework,
             extension: config.file_extension().to_string(),
             context_name: context_name.to_string(),
+            // Query slice fields (default)
+            query_name: None,
+            projection_name: None,
+            query_handler_name: None,
+            controller_name: None,
+            read_model_name: None,
+            slice_type: None,
+            subscribed_events: Vec::new(),
+            is_list: false,
+        }
+    }
+
+    /// Create context for a query slice
+    pub fn for_query_slice(
+        feature_path: &str,
+        context_name: &str,
+        config: &VsaConfig,
+        is_list: bool,
+    ) -> Self {
+        let feature_name = feature_path.split('/').next_back().unwrap_or(feature_path).to_string();
+
+        let operation_name = Self::to_pascal_case(&feature_name);
+
+        // Query slice naming
+        let query_name = format!("{operation_name}Query");
+        let projection_name = format!("{operation_name}Projection");
+        let query_handler_name = format!("{operation_name}Handler");
+        let controller_name = format!("{operation_name}Controller");
+        let read_model_name = Self::to_read_model_name(&operation_name);
+
+        let framework = config.framework.as_ref().map(|fw| FrameworkContext {
+            name: fw.name.clone(),
+            domain_event_import: fw
+                .base_types
+                .get("domain_event")
+                .map(|bt| bt.import.clone())
+                .unwrap_or_default(),
+            domain_event_class: fw
+                .base_types
+                .get("domain_event")
+                .map(|bt| bt.class.clone())
+                .unwrap_or_else(|| "BaseDomainEvent".to_string()),
+            aggregate_import: fw.base_types.get("aggregate").map(|bt| bt.import.clone()),
+            aggregate_class: fw.base_types.get("aggregate").map(|bt| bt.class.clone()),
+            handler_import: fw.base_types.get("command_handler").map(|bt| bt.import.clone()),
+            handler_class: fw.base_types.get("command_handler").map(|bt| bt.class.clone()),
+        });
+
+        Self {
+            feature_name: feature_name.clone(),
+            operation_name: operation_name.clone(),
+            command_name: String::new(), // Not used for query slices
+            event_name: String::new(),   // Not used for query slices
+            handler_name: query_handler_name.clone(),
+            aggregate_name: None,
+            test_name: operation_name,
+            fields: Vec::new(),
+            framework,
+            extension: config.file_extension().to_string(),
+            context_name: context_name.to_string(),
+            // Query slice specific fields
+            query_name: Some(query_name),
+            projection_name: Some(projection_name),
+            query_handler_name: Some(query_handler_name),
+            controller_name: Some(controller_name),
+            read_model_name: Some(read_model_name),
+            slice_type: Some("query".to_string()),
+            subscribed_events: Vec::new(), // To be populated by user
+            is_list,
+        }
+    }
+
+    /// Add a subscribed event to the query slice
+    pub fn add_subscribed_event(&mut self, event_name: String) {
+        self.subscribed_events.push(event_name);
+    }
+
+    /// Generate read model name from operation name
+    fn to_read_model_name(operation: &str) -> String {
+        // List* -> *Summary, Get* -> *Detail
+        if operation.starts_with("List") || operation.starts_with("GetAll") {
+            let rest = operation
+                .strip_prefix("List")
+                .or_else(|| operation.strip_prefix("GetAll"))
+                .unwrap_or(operation);
+            format!("{rest}Summary")
+        } else if operation.starts_with("Get") {
+            let rest = operation.strip_prefix("Get").unwrap_or(operation);
+            format!("{rest}Detail")
+        } else {
+            format!("{operation}ReadModel")
         }
     }
 

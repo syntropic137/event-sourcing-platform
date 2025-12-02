@@ -13,14 +13,21 @@ pub fn run(
     config_path: &Path,
     context: String,
     feature: String,
-    _feature_type: Option<String>,
+    feature_type: Option<String>,
     interactive: bool,
 ) -> Result<()> {
     let term = Term::stdout();
 
+    // Check if this is a query slice
+    let is_query_slice =
+        feature_type.as_ref().map(|t| t.to_lowercase() == "query").unwrap_or(false);
+
+    let slice_type_display = if is_query_slice { "query slice" } else { "command slice" };
+
     term.write_line(&format!(
-        "{} Generating feature '{}' in context '{}'...",
+        "{} Generating {} '{}' in context '{}'...",
         style("🚧").bold(),
+        style(slice_type_display).yellow(),
         style(&feature).cyan(),
         style(&context).cyan()
     ))?;
@@ -31,7 +38,12 @@ pub fn run(
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
     let root = config.resolve_root(config_dir);
 
-    // Create template context
+    // Route to appropriate generator
+    if is_query_slice {
+        return run_query_slice_generator(&term, &config, &root, &context, &feature, interactive);
+    }
+
+    // Create template context for command slice
     let mut ctx = TemplateContext::from_feature_path(&feature, &context, &config);
 
     // Interactive mode: prompt for fields
@@ -150,6 +162,146 @@ pub fn run(
     term.write_line(&format!("  1. Implement business logic in {}", ctx.handler_name))?;
     term.write_line(&format!("  2. Add tests in {}.test.{}", ctx.test_name, ctx.extension))?;
     term.write_line("  3. Run: vsa validate")?;
+
+    Ok(())
+}
+
+/// Generate a query slice (CQRS read side)
+fn run_query_slice_generator(
+    term: &Term,
+    config: &VsaConfig,
+    root: &Path,
+    context: &str,
+    feature: &str,
+    interactive: bool,
+) -> Result<()> {
+    // Determine if this is a list query
+    let is_list = feature.to_lowercase().starts_with("list")
+        || feature.to_lowercase().starts_with("get-all")
+        || feature.to_lowercase().contains("-list");
+
+    // Create query slice context
+    let mut ctx = TemplateContext::for_query_slice(feature, context, config, is_list);
+
+    // Interactive mode: prompt for details
+    if interactive {
+        term.write_line(&format!("{} Let's configure your query slice", style("📋").bold()))?;
+        term.write_line("")?;
+
+        // Prompt for subscribed events
+        term.write_line(&format!(
+            "{} What events should this projection subscribe to?",
+            style("📡").bold()
+        ))?;
+        loop {
+            let event_name: String = Input::new()
+                .with_prompt("Event name (or press Enter to finish)")
+                .allow_empty(true)
+                .interact_text()?;
+
+            if event_name.is_empty() {
+                break;
+            }
+
+            ctx.add_subscribed_event(event_name.clone());
+            term.write_line(&format!(
+                "  {} Added event: {}",
+                style("✓").green(),
+                style(&event_name).cyan(),
+            ))?;
+        }
+
+        // Prompt for fields in the read model
+        term.write_line("")?;
+        term.write_line(&format!("{} Define read model fields:", style("📦").bold()))?;
+        loop {
+            let field_name: String = Input::new()
+                .with_prompt("Field name (or press Enter to finish)")
+                .allow_empty(true)
+                .interact_text()?;
+
+            if field_name.is_empty() {
+                break;
+            }
+
+            let field_type: String = Input::new()
+                .with_prompt("Field type")
+                .default("string".to_string())
+                .interact_text()?;
+
+            let is_required =
+                Confirm::new().with_prompt("Is this field required?").default(true).interact()?;
+
+            ctx.add_field(field_name.clone(), field_type.clone(), is_required);
+            term.write_line(&format!(
+                "  {} Added field: {} ({}, {})",
+                style("✓").green(),
+                style(&field_name).cyan(),
+                field_type,
+                if is_required { "required" } else { "optional" }
+            ))?;
+        }
+
+        term.write_line("")?;
+    } else {
+        // Non-interactive mode: use defaults
+        ctx.add_field("id".to_string(), "string".to_string(), true);
+        ctx.add_subscribed_event(format!(
+            "{}CreatedEvent",
+            ctx.operation_name.replace("List", "").replace("Get", "")
+        ));
+    }
+
+    // Validate we have at least one field
+    if ctx.fields.is_empty() {
+        term.write_line(&format!("{} Adding default 'id' field", style("ℹ").blue()))?;
+        ctx.add_field("id".to_string(), "string".to_string(), true);
+    }
+
+    // Create template engine
+    let engine = TemplateEngine::new(config.clone())?;
+
+    // Generate feature directory (in slices/ folder for VSA v2)
+    let feature_path = root.join("slices").join(feature);
+    fs::create_dir_all(&feature_path)?;
+
+    // Get file names from context
+    let query_name = ctx.query_name.as_ref().unwrap();
+    let projection_name = ctx.projection_name.as_ref().unwrap();
+    let handler_name = ctx.query_handler_name.as_ref().unwrap();
+    let controller_name = ctx.controller_name.as_ref().unwrap();
+
+    // Generate files
+    let query_file = feature_path.join(format!("{}.{}", query_name, ctx.extension));
+    let projection_file = feature_path.join(format!("{}.{}", projection_name, ctx.extension));
+    let handler_file = feature_path.join(format!("{}.{}", handler_name, ctx.extension));
+    let controller_file = feature_path.join(format!("{}.{}", controller_name, ctx.extension));
+    let test_file = feature_path.join(format!("{}.test.{}", ctx.test_name, ctx.extension));
+    let manifest_file = feature_path.join("slice.yaml");
+
+    // Render and write templates
+    fs::write(&query_file, engine.render_query(&ctx)?)?;
+    fs::write(&projection_file, engine.render_projection(&ctx)?)?;
+    fs::write(&handler_file, engine.render_query_handler(&ctx)?)?;
+    fs::write(&controller_file, engine.render_query_controller(&ctx)?)?;
+    fs::write(&test_file, engine.render_query_test(&ctx)?)?;
+    fs::write(&manifest_file, engine.render_slice_manifest(&ctx)?)?;
+
+    term.write_line("")?;
+    term.write_line(&format!("{}", style("✅ Created query slice files:").green().bold()))?;
+    term.write_line(&format!("  {} {}", style("├─").dim(), query_file.display()))?;
+    term.write_line(&format!("  {} {}", style("├─").dim(), projection_file.display()))?;
+    term.write_line(&format!("  {} {}", style("├─").dim(), handler_file.display()))?;
+    term.write_line(&format!("  {} {}", style("├─").dim(), controller_file.display()))?;
+    term.write_line(&format!("  {} {}", style("├─").dim(), test_file.display()))?;
+    term.write_line(&format!("  {} {}", style("└─").dim(), manifest_file.display()))?;
+
+    term.write_line("")?;
+    term.write_line(&format!("{}", style("💡 Next steps:").bold()))?;
+    term.write_line(&format!("  1. Implement event handlers in {projection_name}"))?;
+    term.write_line(&format!("  2. Add query logic in {handler_name}"))?;
+    term.write_line(&format!("  3. Add tests in {}.test.{}", ctx.test_name, ctx.extension))?;
+    term.write_line("  4. Run: vsa validate")?;
 
     Ok(())
 }

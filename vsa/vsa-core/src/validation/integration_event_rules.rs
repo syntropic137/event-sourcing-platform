@@ -145,6 +145,7 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
+    #[allow(dead_code)]
     fn create_test_config(root: PathBuf) -> VsaConfig {
         VsaConfig {
             version: 1,

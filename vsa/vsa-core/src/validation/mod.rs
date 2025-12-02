@@ -2,6 +2,8 @@
 
 mod bounded_context_rules;
 mod integration_event_rules;
+mod isolation_rules;
+mod query_slice_rules;
 mod rules;
 mod suggestions;
 
@@ -10,6 +12,10 @@ pub use bounded_context_rules::{
 };
 pub use integration_event_rules::{
     IntegrationEventNamingRule, IntegrationEventsLocationRule, NoDuplicateIntegrationEventsRule,
+};
+pub use isolation_rules::{NoCrossSliceImportsRule, ThinAdapterRule};
+pub use query_slice_rules::{
+    ProjectionEventSubscriptionRule, RequireHandlerForQueryRule, RequireProjectionForQueryRule,
 };
 pub use rules::{ValidationRule, ValidationRuleSet};
 pub use suggestions::{Suggestion, SuggestionAction};
