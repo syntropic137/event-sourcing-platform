@@ -167,9 +167,8 @@ jobs:
         run: make -C event-sourcing/typescript qa-fast
 
       - name: TypeScript SDK tests
-        run: |
-          cd event-sourcing/typescript
-          pnpm run test
+        working-directory: event-sourcing/typescript
+        run: pnpm exec jest --runInBand
 
   python_sdk_fast:
     name: SDK (Python) • qa-fast
