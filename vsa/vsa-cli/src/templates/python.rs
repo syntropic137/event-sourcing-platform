@@ -290,7 +290,7 @@ async def {{feature_name}}_endpoint(
 {{/each}}    controller: {{controller_name}} = Depends(),
 ):
     """{{feature_name}} endpoint"""
-    return await controller.handle({{#each fields}}{{name}},{{/each}})
+    return await controller.handle({{#each fields}}{{name}}{{#unless @last}}, {{/unless}}{{/each}})
 "#;
 
 /// Query test template for Python

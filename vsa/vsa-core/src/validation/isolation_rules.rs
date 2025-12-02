@@ -292,8 +292,8 @@ fn extract_python_imports(content: &str) -> Vec<String> {
         }
     }
 
-    // Pattern: import x.y.z
-    let import_pattern = Regex::new(r#"^import\s+([\w.]+)"#).unwrap();
+    // Pattern: import x.y.z (use multiline flag to match at start of any line)
+    let import_pattern = Regex::new(r#"(?m)^import\s+([\w.]+)"#).unwrap();
     for cap in import_pattern.captures_iter(content) {
         if let Some(module) = cap.get(1) {
             imports.push(module.as_str().to_string());

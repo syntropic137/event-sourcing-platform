@@ -437,7 +437,7 @@ mod tests {
 
     #[test]
     fn test_to_read_model_name() {
-        // Standard cases
+        // Standard cases - implementation strips prefix and appends Summary/Detail
         assert_eq!(TemplateContext::to_read_model_name("ListWorkflows"), "WorkflowsSummary");
         assert_eq!(TemplateContext::to_read_model_name("GetWorkflow"), "WorkflowDetail");
         assert_eq!(TemplateContext::to_read_model_name("GetAllItems"), "ItemsSummary");
