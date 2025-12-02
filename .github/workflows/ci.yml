@@ -160,8 +160,8 @@ jobs:
             ts-build-${{ runner.os }}-${{ hashFiles('**/package.json', '**/pnpm-lock.yaml', '**/tsconfig*.json', 'turbo.json') }}-
             ts-build-${{ runner.os }}-
 
-      - name: Install dependencies (workspace)
-        run: pnpm -w install --frozen-lockfile
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: TypeScript SDK qa-fast (lint + type-check)
         run: make -C event-sourcing/typescript qa-fast
