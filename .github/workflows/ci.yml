@@ -113,7 +113,7 @@ jobs:
         run: make -C event-sourcing/rust qa-fast
 
   ts_sdk:
-    name: SDK (TypeScript) • qa
+    name: SDK (TypeScript) • qa + tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -163,8 +163,13 @@ jobs:
       - name: Install dependencies (workspace)
         run: pnpm -w install --frozen-lockfile
 
-      - name: TypeScript SDK qa (lint + type-check + tests)
-        run: make -C event-sourcing/typescript qa
+      - name: TypeScript SDK qa-fast (lint + type-check)
+        run: make -C event-sourcing/typescript qa-fast
+
+      - name: TypeScript SDK tests
+        run: |
+          cd event-sourcing/typescript
+          pnpm run test
 
   python_sdk_fast:
     name: SDK (Python) • qa-fast
@@ -251,7 +256,7 @@ jobs:
             echo "| event-store (qa-fast) | ${{ needs.rust_event_store_fast.result }} |";
             echo "| event-store (qa-full + coverage) | ${{ needs.rust_event_store_full.result }} |";
             echo "| SDK Rust (qa-fast) | ${{ needs.rust_sdk_fast.result }} |";
-            echo "| SDK TypeScript (qa) | ${{ needs.ts_sdk.result }} |";
+            echo "| SDK TypeScript (qa + tests) | ${{ needs.ts_sdk.result }} |";
             echo "| SDK Python (qa-fast) | ${{ needs.python_sdk_fast.result }} |";
             echo "| Examples (build + smoke) | ${{ needs.examples_test.result }} |";
           } >> "$GITHUB_STEP_SUMMARY"
