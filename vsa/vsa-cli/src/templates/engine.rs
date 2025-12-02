@@ -1,11 +1,27 @@
 //! Template rendering engine
 
 use anyhow::Result;
-use handlebars::Handlebars;
+use handlebars::{Context, Handlebars, Helper, HelperResult, JsonRender, Output, RenderContext};
 use vsa_core::VsaConfig;
 
 use super::context::TemplateContext;
 use super::{python, typescript};
+
+/// Helper to strip "Event" suffix from event names
+/// Usage in templates: {{strip_event_suffix this}}
+/// Example: "WorkflowCreatedEvent" -> "WorkflowCreated"
+fn strip_event_suffix_helper(
+    h: &Helper,
+    _: &Handlebars,
+    _: &Context,
+    _: &mut RenderContext,
+    out: &mut dyn Output,
+) -> HelperResult {
+    let param = h.param(0).map(|v| v.value().render()).unwrap_or_default();
+    let stripped = param.strip_suffix("Event").unwrap_or(&param);
+    out.write(stripped)?;
+    Ok(())
+}
 
 /// Template engine for code generation
 pub struct TemplateEngine {
@@ -18,6 +34,9 @@ impl TemplateEngine {
     pub fn new(config: VsaConfig) -> Result<Self> {
         let mut handlebars = Handlebars::new();
         handlebars.set_strict_mode(true);
+
+        // Register custom helpers
+        handlebars.register_helper("strip_event_suffix", Box::new(strip_event_suffix_helper));
 
         // Register TypeScript templates
         handlebars.register_template_string("ts_command", typescript::COMMAND_TEMPLATE)?;
@@ -32,6 +51,29 @@ impl TemplateEngine {
         handlebars.register_template_string("py_handler", python::HANDLER_TEMPLATE)?;
         handlebars.register_template_string("py_test", python::TEST_TEMPLATE)?;
         handlebars.register_template_string("py_aggregate", python::AGGREGATE_TEMPLATE)?;
+
+        // Register TypeScript query slice templates
+        handlebars.register_template_string("ts_query", typescript::QUERY_TEMPLATE)?;
+        handlebars.register_template_string("ts_projection", typescript::PROJECTION_TEMPLATE)?;
+        handlebars
+            .register_template_string("ts_query_handler", typescript::QUERY_HANDLER_TEMPLATE)?;
+        handlebars.register_template_string(
+            "ts_query_controller",
+            typescript::QUERY_CONTROLLER_TEMPLATE,
+        )?;
+        handlebars.register_template_string("ts_query_test", typescript::QUERY_TEST_TEMPLATE)?;
+        handlebars
+            .register_template_string("ts_slice_manifest", typescript::SLICE_MANIFEST_TEMPLATE)?;
+
+        // Register Python query slice templates
+        handlebars.register_template_string("py_query", python::QUERY_TEMPLATE)?;
+        handlebars.register_template_string("py_projection", python::PROJECTION_TEMPLATE)?;
+        handlebars.register_template_string("py_query_handler", python::QUERY_HANDLER_TEMPLATE)?;
+        handlebars
+            .register_template_string("py_query_controller", python::QUERY_CONTROLLER_TEMPLATE)?;
+        handlebars.register_template_string("py_query_test", python::QUERY_TEST_TEMPLATE)?;
+        handlebars
+            .register_template_string("py_slice_manifest", python::SLICE_MANIFEST_TEMPLATE)?;
 
         Ok(Self { handlebars, config })
     }
@@ -85,6 +127,76 @@ impl TemplateEngine {
         let template_name = match self.config.language.as_str() {
             "typescript" => "ts_aggregate",
             "python" => "py_aggregate",
+            _ => anyhow::bail!("Unsupported language: {}", self.config.language),
+        };
+
+        Ok(self.handlebars.render(template_name, &ctx)?)
+    }
+
+    // =========================================================================
+    // QUERY SLICE RENDERING METHODS
+    // =========================================================================
+
+    /// Render query template
+    pub fn render_query(&self, ctx: &TemplateContext) -> Result<String> {
+        let template_name = match self.config.language.as_str() {
+            "typescript" => "ts_query",
+            "python" => "py_query",
+            _ => anyhow::bail!("Unsupported language: {}", self.config.language),
+        };
+
+        Ok(self.handlebars.render(template_name, &ctx)?)
+    }
+
+    /// Render projection template
+    pub fn render_projection(&self, ctx: &TemplateContext) -> Result<String> {
+        let template_name = match self.config.language.as_str() {
+            "typescript" => "ts_projection",
+            "python" => "py_projection",
+            _ => anyhow::bail!("Unsupported language: {}", self.config.language),
+        };
+
+        Ok(self.handlebars.render(template_name, &ctx)?)
+    }
+
+    /// Render query handler template
+    pub fn render_query_handler(&self, ctx: &TemplateContext) -> Result<String> {
+        let template_name = match self.config.language.as_str() {
+            "typescript" => "ts_query_handler",
+            "python" => "py_query_handler",
+            _ => anyhow::bail!("Unsupported language: {}", self.config.language),
+        };
+
+        Ok(self.handlebars.render(template_name, &ctx)?)
+    }
+
+    /// Render query controller template
+    pub fn render_query_controller(&self, ctx: &TemplateContext) -> Result<String> {
+        let template_name = match self.config.language.as_str() {
+            "typescript" => "ts_query_controller",
+            "python" => "py_query_controller",
+            _ => anyhow::bail!("Unsupported language: {}", self.config.language),
+        };
+
+        Ok(self.handlebars.render(template_name, &ctx)?)
+    }
+
+    /// Render query test template
+    pub fn render_query_test(&self, ctx: &TemplateContext) -> Result<String> {
+        let template_name = match self.config.language.as_str() {
+            "typescript" => "ts_query_test",
+            "python" => "py_query_test",
+            _ => anyhow::bail!("Unsupported language: {}", self.config.language),
+        };
+
+        Ok(self.handlebars.render(template_name, &ctx)?)
+    }
+
+    /// Render slice manifest template
+    pub fn render_slice_manifest(&self, ctx: &TemplateContext) -> Result<String> {
+        let template_name = match self.config.language.as_str() {
+            "typescript" => "ts_slice_manifest",
+            "python" => "py_slice_manifest",
             _ => anyhow::bail!("Unsupported language: {}", self.config.language),
         };
 

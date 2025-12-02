@@ -316,11 +316,11 @@ mod tests {
 
         // Should find at least some components (exact counts depend on scanners)
         assert!(
-            model.aggregates.len() > 0
-                || model.commands.len() > 0
-                || model.queries.len() > 0
-                || model.events.len() > 0
-                || model.upcasters.len() > 0
+            !model.aggregates.is_empty()
+                || !model.commands.is_empty()
+                || !model.queries.is_empty()
+                || !model.events.is_empty()
+                || !model.upcasters.is_empty()
         );
     }
 }
