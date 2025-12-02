@@ -206,6 +206,12 @@ jobs:
           node-version: 20
           cache: pnpm
 
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
