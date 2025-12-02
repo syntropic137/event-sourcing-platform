@@ -11,9 +11,13 @@ const config: Config = {
   organizationName: 'NeuralEmpowerment',
   projectName: 'event-sourcing-platform',
   onBrokenLinks: 'throw',
-  onBrokenMarkdownLinks: 'warn',
   i18n: { defaultLocale: 'en', locales: ['en'] },
-  markdown: { mermaid: true },
+  markdown: {
+    mermaid: true,
+    hooks: {
+      onBrokenMarkdownLinks: 'warn',
+    },
+  },
   themes: [
     '@docusaurus/theme-mermaid',
     [
