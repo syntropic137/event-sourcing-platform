@@ -167,8 +167,7 @@ jobs:
         run: make -C event-sourcing/typescript qa-fast
 
       - name: TypeScript SDK tests
-        working-directory: event-sourcing/typescript
-        run: pnpm exec jest --runInBand
+        run: pnpm --filter "@neuralempowerment/event-sourcing-typescript" run test
 
   python_sdk_fast:
     name: SDK (Python) • qa-fast
