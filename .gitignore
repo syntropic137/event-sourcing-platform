@@ -1,3 +1,7 @@
+# Agent Files
+PROJECT-PLAN_*.md
+EXECUTION-PROMPT_*.md
+
 # Logs
 logs
 *.log
