@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections.abc import AsyncIterator
 
 import grpc
 
@@ -275,10 +276,11 @@ class GrpcEventStoreClient:
             import asyncio
 
             envelopes: list[EventEnvelope[DomainEvent]] = []
-            # TODO: Extract magic numbers into configuration options
+            # Configuration for reliable catch-up reading
+            # Increased from original values for more reliable event retrieval
             consecutive_keepalives = 0
-            max_consecutive_keepalives = 5  # Exit after 5 consecutive keepalives (~1 second)
-            timeout_seconds = 3.0  # Timeout for reading historical events
+            max_consecutive_keepalives = 10  # Exit after 10 consecutive keepalives (~2 seconds)
+            timeout_seconds = 10.0  # Timeout for reading historical events (increased for reliability)
 
             async def read_with_timeout() -> None:
                 # Subscribe returns a stream; collect up to limit events
@@ -323,3 +325,49 @@ class GrpcEventStoreClient:
         except grpc.RpcError as e:
             logger.error(f"gRPC error reading all events: {e}")
             raise EventStoreError(f"Failed to read all events: {e}") from e
+
+    async def subscribe(
+        self,
+        from_global_nonce: int = 0,
+    ) -> AsyncIterator[EventEnvelope[DomainEvent]]:
+        """
+        Subscribe to events from a global nonce (live streaming).
+
+        This method returns an async iterator that yields events as they arrive.
+        It's designed for live subscriptions that run indefinitely until cancelled.
+
+        Args:
+            from_global_nonce: global nonce to start from (inclusive)
+
+        Yields:
+            EventEnvelope objects as they arrive
+
+        Raises:
+            EventStoreError: If subscription fails
+        """
+        if not self._stub:
+            raise EventStoreError("Client is not connected")
+
+        request = eventstore_pb2.SubscribeRequest(
+            tenant_id=self.tenant_id,
+            aggregate_id_prefix="",  # Subscribe to all aggregates
+            from_global_nonce=from_global_nonce,
+        )
+
+        try:
+            logger.info(f"Starting subscription from global nonce {from_global_nonce}")
+            async for response in self._stub.Subscribe(request):
+                # Skip keepalive messages (event: None)
+                if not response.HasField("event"):
+                    logger.debug("Received keepalive from Subscribe stream")
+                    continue
+
+                envelope = self._proto_to_envelope(response.event)
+                yield envelope
+
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.CANCELLED:
+                logger.info("Subscription cancelled")
+                return
+            logger.error(f"gRPC error in subscription: {e}")
+            raise EventStoreError(f"Subscription failed: {e}") from e

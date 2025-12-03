@@ -1,6 +1,8 @@
 """In-memory event store client for testing."""
 
+import asyncio
 import logging
+from collections.abc import AsyncIterator
 
 from event_sourcing.core.errors import ConcurrencyConflictError, EventStoreError
 from event_sourcing.core.event import DomainEvent, EventEnvelope
@@ -169,3 +171,38 @@ class MemoryEventStoreClient:
 
         # Apply limit
         return sorted_events[:limit]
+
+    async def subscribe(
+        self,
+        from_global_nonce: int = 0,
+    ) -> AsyncIterator[EventEnvelope[DomainEvent]]:
+        """
+        Subscribe to events from a global nonce (live streaming).
+
+        For the memory client, this polls for new events every 100ms.
+        This is suitable for testing but not for production.
+
+        Args:
+            from_global_nonce: global nonce to start from (inclusive)
+
+        Yields:
+            EventEnvelope objects as they arrive
+        """
+        current_nonce = from_global_nonce
+        logger.debug(f"Memory subscription starting from global nonce {from_global_nonce}")
+
+        while True:
+            # Read events after current position
+            events = await self.read_all_events_from(
+                after_global_nonce=current_nonce - 1,  # -1 because read_all_events_from is exclusive
+                limit=100,
+            )
+
+            for event in events:
+                if event.metadata.global_nonce is not None:
+                    if event.metadata.global_nonce >= current_nonce:
+                        yield event
+                        current_nonce = event.metadata.global_nonce + 1
+
+            # Poll interval
+            await asyncio.sleep(0.1)

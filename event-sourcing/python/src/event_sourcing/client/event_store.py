@@ -1,5 +1,6 @@
 """Event store client interface."""
 
+from collections.abc import AsyncIterator
 from typing import Protocol
 
 from event_sourcing.core.event import DomainEvent, EventEnvelope
@@ -93,6 +94,27 @@ class EventStoreClient(Protocol):
 
         Raises:
             EventStoreError: If reading fails
+        """
+        ...
+
+    def subscribe(
+        self,
+        from_global_nonce: int = 0,
+    ) -> AsyncIterator[EventEnvelope[DomainEvent]]:
+        """
+        Subscribe to events from a global nonce (live streaming).
+
+        This method returns an async iterator that yields events as they arrive.
+        It's designed for live subscriptions that run indefinitely until cancelled.
+
+        Args:
+            from_global_nonce: global nonce to start from (inclusive)
+
+        Yields:
+            EventEnvelope objects as they arrive
+
+        Raises:
+            EventStoreError: If subscription fails
         """
         ...
 
