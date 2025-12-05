@@ -79,8 +79,8 @@ This release represents a major milestone with a complete, production-ready even
 #### Architecture Progression
 The examples demonstrate a clear progression through event sourcing concepts:
 ```
-001: Basic Store → 002: Simple Aggregate → 003: Multiple Aggregates → 
-004: CQRS Patterns → 005: Projections → 006: Event Bus → 
+001: Basic Store → 002: Simple Aggregate → 003: Multiple Aggregates →
+004: CQRS Patterns → 005: Projections → 006: Event Bus →
 007: Inventory System → 008: Observability → 009: Web Dashboard
 ```
 
@@ -114,10 +114,62 @@ For users upgrading from previous versions:
 
 ---
 
+## [0.4.0-beta] - 2025-12-05
+
+### 🎯 Major Feature: ReadAll RPC for Global Event Stream
+
+This release adds a proper `ReadAll` RPC for batch reading events from a global position, replacing the fragile Subscribe-based approach for projection catch-up.
+
+### ✨ Added
+
+#### Event Store
+- **ReadAll RPC**: New gRPC operation for paginated reads from global position
+  - `ReadAllRequest`: Parameters for `from_global_nonce`, `max_count`, `forward`
+  - `ReadAllResponse`: Events array with explicit `is_end` flag and `next_from_global_nonce`
+- **Rust Backend**: `read_all` implemented in EventStore trait, Postgres, and Memory backends
+- **SDK-RS**: `read_all` method in Rust SDK
+
+#### TypeScript SDK
+- **event-sourcing SDK**: `readAll` method in EventStoreClient interface
+- **sdk-ts**: Low-level `readAll` implementation
+- **MemoryEventStoreClient**: Test environment guard for safer test isolation
+
+#### Python SDK
+- **event-sourcing SDK**: `read_all` method in EventStoreClient interface
+- **sdk-py**: Low-level `read_all` implementation
+- **MemoryEventStoreClient**: Test environment guard (per ADR-004)
+
+#### Documentation
+- **ADR-012**: ReadAll Global Stream design decision (Accepted)
+
+### 🧪 Testing
+- Unit tests for `read_all` in TypeScript SDK
+- Unit tests for `read_all` in Python SDK
+- Rust backend unit tests for `read_all`
+
+### 🔄 Migration Guide
+
+For projection catch-up, replace Subscribe-based heuristics with ReadAll:
+
+```python
+# Before (fragile)
+async for response in stub.Subscribe(request):
+    if consecutive_keepalives >= 10:
+        break  # Heuristic-based end detection
+
+# After (reliable)
+events, is_end, next_pos = await client.read_all(from_position, max_count=100)
+for event in events:
+    await process(event)
+if is_end:
+    break  # Explicit end signal
+```
+
+---
+
 ## [Unreleased]
 
 ### 🚧 In Development
-- Additional language SDKs (Python, Rust)
 - Advanced projection patterns
 - Event store clustering and high availability
 - Performance benchmarking and optimization

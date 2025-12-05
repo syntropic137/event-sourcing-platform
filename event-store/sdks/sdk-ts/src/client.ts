@@ -4,6 +4,8 @@ import { EventStoreClient as GrpcClientCtor } from "./gen/eventstore/v1/eventsto
 import type {
   AppendRequest,
   AppendResponse,
+  ReadAllRequest,
+  ReadAllResponse,
   ReadStreamRequest,
   ReadStreamResponse,
   SubscribeRequest,
@@ -37,6 +39,21 @@ export class EventStoreClientTS {
   readStream(req: ReadStreamRequest): Promise<ReadStreamResponse> {
     return new Promise((resolve, reject) => {
       this.client.readStream(req, (err, resp) => {
+        if (err) return reject(err);
+        resolve(resp);
+      });
+    });
+  }
+
+  /**
+   * Read all events from a global position (for projections/catch-up).
+   *
+   * @param req - ReadAllRequest with tenant_id, from_global_nonce, max_count, forward
+   * @returns Promise with events, is_end flag, and next_from_global_nonce
+   */
+  readAll(req: ReadAllRequest): Promise<ReadAllResponse> {
+    return new Promise((resolve, reject) => {
+      this.client.readAll(req, (err, resp) => {
         if (err) return reject(err);
         resolve(resp);
       });

@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections.abc import AsyncIterator
 
 import grpc
 
@@ -247,6 +248,57 @@ class GrpcEventStoreClient:
 
         return EventEnvelope(event=event, metadata=metadata)
 
+    async def read_all(
+        self,
+        from_global_nonce: int = 0,
+        max_count: int = 100,
+        forward: bool = True,
+    ) -> tuple[list[EventEnvelope[DomainEvent]], bool, int]:
+        """
+        Read all events from a global position (for projections/catch-up).
+
+        This method uses the dedicated ReadAll RPC which provides explicit
+        pagination and end-of-batch signaling.
+
+        Args:
+            from_global_nonce: Global nonce to read from (inclusive)
+            max_count: Maximum number of events to return per page
+            forward: Direction (True = ascending order)
+
+        Returns:
+            Tuple of (events, is_end, next_from_global_nonce)
+            - events: List of event envelopes in requested order
+            - is_end: True if no more events after this batch
+            - next_from_global_nonce: Position for next page (if not is_end)
+        """
+        if not self._stub:
+            raise EventStoreError("Client is not connected")
+
+        request = eventstore_pb2.ReadAllRequest(
+            tenant_id=self.tenant_id,
+            from_global_nonce=from_global_nonce,
+            max_count=max_count,
+            forward=forward,
+        )
+
+        try:
+            response = await self._stub.ReadAll(request)
+            envelopes = []
+
+            for event_data in response.events:
+                envelope = self._proto_to_envelope(event_data)
+                envelopes.append(envelope)
+
+            logger.debug(
+                f"ReadAll returned {len(envelopes)} events, "
+                f"is_end={response.is_end}, next={response.next_from_global_nonce}"
+            )
+            return envelopes, response.is_end, response.next_from_global_nonce
+
+        except grpc.RpcError as e:
+            logger.error(f"gRPC error in ReadAll: {e}")
+            raise EventStoreError(f"Failed to read all events: {e}") from e
+
     async def read_all_events_from(
         self,
         after_global_nonce: int = 0,
@@ -255,6 +307,10 @@ class GrpcEventStoreClient:
         """
         Read all events from a global nonce (for projections/catch-up).
 
+        .. deprecated::
+            Use :meth:`read_all` instead for explicit pagination and end-of-batch signaling.
+            This method is kept for backward compatibility.
+
         Args:
             after_global_nonce: global nonce to read from (exclusive)
             limit: Maximum number of events to return
@@ -262,64 +318,57 @@ class GrpcEventStoreClient:
         Returns:
             List of event envelopes in global order
         """
+        # Use the new ReadAll RPC with from_global_nonce = after_global_nonce + 1
+        # because read_all_events_from is exclusive, but ReadAll is inclusive
+        events, _is_end, _next_pos = await self.read_all(
+            from_global_nonce=after_global_nonce + 1,
+            max_count=limit,
+            forward=True,
+        )
+        return events
+
+    async def subscribe(
+        self,
+        from_global_nonce: int = 0,
+    ) -> AsyncIterator[EventEnvelope[DomainEvent]]:
+        """
+        Subscribe to events from a global nonce (live streaming).
+
+        This method returns an async iterator that yields events as they arrive.
+        It's designed for live subscriptions that run indefinitely until cancelled.
+
+        Args:
+            from_global_nonce: global nonce to start from (inclusive)
+
+        Yields:
+            EventEnvelope objects as they arrive
+
+        Raises:
+            EventStoreError: If subscription fails
+        """
         if not self._stub:
             raise EventStoreError("Client is not connected")
 
         request = eventstore_pb2.SubscribeRequest(
             tenant_id=self.tenant_id,
-            aggregate_id_prefix="",  # Read from all aggregates
-            from_global_nonce=after_global_nonce + 1,  # +1 because Subscribe is inclusive
+            aggregate_id_prefix="",  # Subscribe to all aggregates
+            from_global_nonce=from_global_nonce,
         )
 
         try:
-            import asyncio
+            logger.info(f"Starting subscription from global nonce {from_global_nonce}")
+            async for response in self._stub.Subscribe(request):
+                # Skip keepalive messages (event: None)
+                if not response.HasField("event"):
+                    logger.debug("Received keepalive from Subscribe stream")
+                    continue
 
-            envelopes: list[EventEnvelope[DomainEvent]] = []
-            # TODO: Extract magic numbers into configuration options
-            consecutive_keepalives = 0
-            max_consecutive_keepalives = 5  # Exit after 5 consecutive keepalives (~1 second)
-            timeout_seconds = 3.0  # Timeout for reading historical events
-
-            async def read_with_timeout() -> None:
-                # Subscribe returns a stream; collect up to limit events
-                if self._stub is None:
-                    raise EventStoreError("Not connected to event store")
-                async for response in self._stub.Subscribe(request):
-                    # Skip keepalive messages (event: None) from the stream
-                    if not response.HasField("event"):
-                        logger.debug("Received keepalive from Subscribe stream (event: None)")
-                        nonlocal consecutive_keepalives
-                        consecutive_keepalives += 1
-
-                        # If we've seen enough consecutive keepalives, assume we're caught up
-                        if consecutive_keepalives >= max_consecutive_keepalives:
-                            logger.debug(
-                                f"Received {consecutive_keepalives} consecutive keepalives, "
-                                "assuming end of historical events"
-                            )
-                            break
-                        continue
-
-                    # Reset keepalive counter when we get a real event
-                    consecutive_keepalives = 0
-                    envelope = self._proto_to_envelope(response.event)
-                    envelopes.append(envelope)
-
-                    if len(envelopes) >= limit:
-                        break
-
-            # Apply timeout to prevent hanging
-            try:
-                await asyncio.wait_for(read_with_timeout(), timeout=timeout_seconds)
-            except TimeoutError:
-                logger.debug(
-                    f"Subscribe stream timed out after {timeout_seconds}s, "
-                    f"read {len(envelopes)} events"
-                )
-
-            logger.debug(f"Read {len(envelopes)} events from global nonce {after_global_nonce}")
-            return envelopes
+                envelope = self._proto_to_envelope(response.event)
+                yield envelope
 
         except grpc.RpcError as e:
-            logger.error(f"gRPC error reading all events: {e}")
-            raise EventStoreError(f"Failed to read all events: {e}") from e
+            if e.code() == grpc.StatusCode.CANCELLED:
+                logger.info("Subscription cancelled")
+                return
+            logger.error(f"gRPC error in subscription: {e}")
+            raise EventStoreError(f"Subscription failed: {e}") from e

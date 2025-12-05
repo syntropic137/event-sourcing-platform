@@ -1,6 +1,6 @@
 use anyhow::Result;
 use eventstore_proto::gen::event_store_client::EventStoreClient;
-use eventstore_proto::gen::{AppendRequest, ReadStreamRequest, SubscribeRequest};
+use eventstore_proto::gen::{AppendRequest, ReadAllRequest, ReadStreamRequest, SubscribeRequest};
 use tonic::transport::Channel;
 
 pub struct EventStore {
@@ -35,6 +35,15 @@ impl EventStore {
     ) -> Result<tonic::Streaming<eventstore_proto::gen::SubscribeResponse>> {
         let stream = self.inner.subscribe(req).await?.into_inner();
         Ok(stream)
+    }
+
+    /// Read all events from a global position (for projections/catch-up).
+    pub async fn read_all(
+        &mut self,
+        req: ReadAllRequest,
+    ) -> Result<eventstore_proto::gen::ReadAllResponse> {
+        let resp = self.inner.read_all(req).await?.into_inner();
+        Ok(resp)
     }
 }
 

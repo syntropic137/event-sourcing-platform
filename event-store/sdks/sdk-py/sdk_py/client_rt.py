@@ -29,3 +29,8 @@ class EventStoreClientRT:
     def subscribe(self, req: dict):
         message = json_format.ParseDict(req, self.pb.SubscribeRequest())
         return self.stub.Subscribe(message)
+
+    def read_all(self, req: dict):
+        """Read all events from a global position (for projections/catch-up)."""
+        message = json_format.ParseDict(req, self.pb.ReadAllRequest())
+        return self.stub.ReadAll(message)

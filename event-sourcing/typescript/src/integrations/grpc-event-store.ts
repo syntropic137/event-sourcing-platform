@@ -3,7 +3,7 @@
  */
 
 import { EventSerializer, type EventEnvelope } from '../core/event';
-import type { EventStoreClient as RepoEventStoreClient } from '../client/event-store-client';
+import type { EventStoreClient as RepoEventStoreClient, ReadAllResult } from '../client/event-store-client';
 import { EventStoreError } from '../core/errors';
 import type { JsonObject, JsonValue } from '../types/common';
 
@@ -212,6 +212,81 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
 
   async disconnect(): Promise<void> {
     // No explicit disconnect required; channel lifecycle is managed by Node
+  }
+
+  /**
+   * Read all events from a global position (for projections/catch-up).
+   */
+  async readAll(
+    fromGlobalNonce = 0,
+    maxCount = 100,
+    forward = true
+  ): Promise<ReadAllResult> {
+    try {
+      const client = await this.clientPromise;
+      const resp = await client.readAll({
+        tenantId: this.tenantId,
+        fromGlobalNonce,
+        maxCount,
+        forward,
+      });
+
+      const events: EventEnvelope[] = [];
+      for (const e of resp.events) {
+        if (!e.meta) continue;
+        const meta = e.meta as ReadStreamMetadata;
+        const payloadJson = safeJsonParse(e.payload);
+
+        const recordedUnixMs = Number(
+          meta.recordedTimeUnixMs ?? meta.timestampUnixMs ?? Date.now()
+        );
+        const timestampUnixMs = Number(meta.timestampUnixMs ?? recordedUnixMs);
+        const recordedIso = new Date(recordedUnixMs).toISOString();
+        const timestampIso = new Date(timestampUnixMs).toISOString();
+
+        const metadataJson: JsonObject = {
+          eventId: meta.eventId,
+          timestamp: timestampIso,
+          recordedTimestamp: recordedIso,
+          aggregateNonce: Number(meta.aggregateNonce),
+          aggregateId: meta.aggregateId,
+          aggregateType: meta.aggregateType || '',
+          tenantId: meta.tenantId || '',
+          globalNonce: meta.globalNonce ?? null,
+          contentType: meta.contentType || 'application/json',
+          correlationId: meta.correlationId || '',
+          causationId: meta.causationId || '',
+          actorId: meta.actorId || '',
+          headers: meta.headers ?? {},
+          customMetadata: {},
+        };
+
+        if (meta.payloadSha256 && meta.payloadSha256.length > 0) {
+          metadataJson.payloadHash = bytesToHex(meta.payloadSha256);
+        }
+
+        const eventJson: JsonObject = {
+          eventType: meta.eventType,
+          schemaVersion: meta.eventVersion ?? 0,
+          data: payloadJson,
+        };
+
+        const envelopeJson: JsonObject = {
+          event: eventJson,
+          metadata: metadataJson,
+        };
+
+        events.push(EventSerializer.deserialize(envelopeJson));
+      }
+
+      return {
+        events,
+        isEnd: resp.isEnd,
+        nextFromGlobalNonce: resp.nextFromGlobalNonce,
+      };
+    } catch (err) {
+      throw new EventStoreError('readAll failed', err as Error);
+    }
   }
 }
 

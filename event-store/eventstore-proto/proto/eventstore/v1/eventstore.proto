@@ -87,6 +87,21 @@ message SubscribeResponse {
   EventData event                 = 1;
 }
 
+// Request to read all events from a global position (for projections/catch-up)
+message ReadAllRequest {
+  string tenant_id                = 1;  // Required: tenant scope
+  uint64 from_global_nonce        = 2;  // Inclusive start position (0 = beginning)
+  uint32 max_count                = 3;  // Page size (default: 100, max: 1000)
+  bool   forward                  = 4;  // Direction (default: true = ascending)
+}
+
+// Response with paginated events from global stream
+message ReadAllResponse {
+  repeated EventData events       = 1;  // Events in requested order
+  bool is_end                     = 2;  // True if no more events after this batch
+  uint64 next_from_global_nonce   = 3;  // Position for next page (if !is_end)
+}
+
 // Attach as google.rpc.Status details on concurrency failures.
 message ConcurrencyErrorDetail {
   string tenant_id                = 1;
@@ -99,4 +114,6 @@ service EventStore {
   rpc Append     (AppendRequest)      returns (AppendResponse);
   rpc ReadStream (ReadStreamRequest)  returns (ReadStreamResponse);
   rpc Subscribe  (SubscribeRequest)   returns (stream SubscribeResponse);
+  // Read all events from global position (for projections/catch-up)
+  rpc ReadAll    (ReadAllRequest)     returns (ReadAllResponse);
 }
