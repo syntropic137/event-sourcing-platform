@@ -627,7 +627,7 @@ impl EventStoreTrait for PostgresStore {
 
         Box::pin(stream::unfold(
             (pool, tenant_id, prefix, from_global, None::<Phase>),
-            |(pool, tenant, prefix, mut cursor, phase)| async move {
+            |(pool, tenant, prefix, cursor, phase)| async move {
                 let mut phase = phase;
                 if phase.is_none() {
                     let rows = if prefix.is_empty() {
@@ -659,17 +659,38 @@ impl EventStoreTrait for PostgresStore {
                         .await
                         .unwrap_or_default()
                     };
+
+                    // FIX (ADR-013): Don't advance cursor during collection.
+                    // The cursor will be updated as events are yielded during replay iteration.
+                    // Track max_read_cursor to handle malformed rows (prevents infinite loop).
                     let mut items = Vec::with_capacity(rows.len());
+                    let mut max_read_cursor = cursor;
                     for row in rows.iter() {
+                        let row_cursor = row.get::<i64, _>("global_nonce");
+                        max_read_cursor = max_read_cursor.max(row_cursor);
+
                         if let Ok(event) = row_to_event(row) {
-                            cursor = row.get::<i64, _>("global_nonce");
                             items.push(event);
+                        } else {
+                            // Log warning for malformed row (consistent with Live phase)
+                            eprintln!(
+                                "Warning: Failed to parse event at global_nonce={row_cursor}, skipping"
+                            );
                         }
                     }
+
+                    // If ALL rows were malformed, advance cursor to max_read_cursor to prevent infinite loop.
+                    // Otherwise, start from current cursor - it will advance as events are yielded.
+                    let initial_cursor = if items.is_empty() && !rows.is_empty() {
+                        max_read_cursor
+                    } else {
+                        cursor
+                    };
+
                     phase = Some(Phase::Replay {
                         items,
                         idx: 0,
-                        cursor,
+                        cursor: initial_cursor,
                     });
                 }
 
@@ -677,20 +698,28 @@ impl EventStoreTrait for PostgresStore {
                     Some(Phase::Replay {
                         items,
                         mut idx,
-                        cursor: replay_cursor,
+                        cursor: _replay_cursor,
                     }) => {
                         if idx < items.len() {
                             let event = items[idx].clone();
                             idx += 1;
+
+                            // FIX (ADR-013): Update cursor to the position of the event we're yielding
+                            let yielded_cursor = event
+                                .meta
+                                .as_ref()
+                                .map(|m| m.global_nonce as i64)
+                                .unwrap_or(cursor);
+
                             let next_state = (
                                 pool,
                                 tenant,
                                 prefix,
-                                replay_cursor,
+                                yielded_cursor,
                                 Some(Phase::Replay {
                                     items,
                                     idx,
-                                    cursor: replay_cursor,
+                                    cursor: yielded_cursor,
                                 }),
                             );
                             Some((
@@ -698,13 +727,14 @@ impl EventStoreTrait for PostgresStore {
                                 next_state,
                             ))
                         } else {
+                            // All replay items yielded, transition to Live phase
                             let next_state = (
                                 pool,
                                 tenant,
                                 prefix,
-                                replay_cursor,
+                                cursor,
                                 Some(Phase::Live {
-                                    cursor: replay_cursor,
+                                    cursor,
                                     interval: interval(Duration::from_millis(200)),
                                 }),
                             );
@@ -712,7 +742,7 @@ impl EventStoreTrait for PostgresStore {
                         }
                     }
                     Some(Phase::Live {
-                        mut cursor,
+                        cursor,
                         mut interval,
                     }) => {
                         let rows = if prefix.is_empty() {
@@ -747,10 +777,11 @@ impl EventStoreTrait for PostgresStore {
 
                         if !rows.is_empty() {
                             let mut items = Vec::with_capacity(rows.len());
+                            let mut max_read_cursor = cursor; // Track max read for malformed row handling
+
                             for row in rows.iter() {
-                                // Always advance cursor to prevent infinite loop on malformed rows
                                 let row_cursor = row.get::<i64, _>("global_nonce");
-                                cursor = cursor.max(row_cursor);
+                                max_read_cursor = max_read_cursor.max(row_cursor);
 
                                 if let Ok(event) = row_to_event(row) {
                                     items.push(event);
@@ -761,23 +792,58 @@ impl EventStoreTrait for PostgresStore {
                                     );
                                 }
                             }
-                            let event = items.first().cloned();
-                            let remaining = if items.len() > 1 {
-                                items[1..].to_vec()
+
+                            if !items.is_empty() {
+                                // FIX (ADR-013): Only advance cursor to the event we're yielding
+                                let first_event = items[0].clone();
+                                let yielded_cursor = first_event
+                                    .meta
+                                    .as_ref()
+                                    .map(|m| m.global_nonce as i64)
+                                    .unwrap_or(cursor);
+
+                                let remaining = if items.len() > 1 {
+                                    items[1..].to_vec()
+                                } else {
+                                    Vec::new()
+                                };
+
+                                let next_phase = if remaining.is_empty() {
+                                    Phase::Live {
+                                        cursor: yielded_cursor,
+                                        interval,
+                                    }
+                                } else {
+                                    // Store remaining items with cursor at last yielded position
+                                    Phase::Replay {
+                                        items: remaining,
+                                        idx: 0,
+                                        cursor: yielded_cursor,
+                                    }
+                                };
+
+                                let next_state =
+                                    (pool, tenant, prefix, yielded_cursor, Some(next_phase));
+                                Some((
+                                    Ok(proto::SubscribeResponse {
+                                        event: Some(first_event),
+                                    }),
+                                    next_state,
+                                ))
                             } else {
-                                Vec::new()
-                            };
-                            let next_phase = if remaining.is_empty() {
-                                Phase::Live { cursor, interval }
-                            } else {
-                                Phase::Replay {
-                                    items: remaining,
-                                    idx: 0,
-                                    cursor,
-                                }
-                            };
-                            let next_state = (pool, tenant, prefix, cursor, Some(next_phase));
-                            Some((Ok(proto::SubscribeResponse { event }), next_state))
+                                // All rows failed to parse - advance cursor to prevent infinite loop
+                                let next_state = (
+                                    pool,
+                                    tenant,
+                                    prefix,
+                                    max_read_cursor,
+                                    Some(Phase::Live {
+                                        cursor: max_read_cursor,
+                                        interval,
+                                    }),
+                                );
+                                Some((Ok(proto::SubscribeResponse { event: None }), next_state))
+                            }
                         } else {
                             interval.tick().await;
                             let next_state = (
