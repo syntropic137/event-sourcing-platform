@@ -5,6 +5,16 @@ All notable changes to the Event Sourcing Platform will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0-beta.1] - 2025-12-05
+
+### 🔧 Fixed
+
+#### Subscribe RPC
+- **Empty Replay to Live Transition**: Fixed a bug where the `Subscribe` RPC would skip the first requested event when no events existed at the starting position during subscription initialization. When the Replay phase found 0 events and transitioned to Live, the cursor was incorrectly set to `from_global_nonce` instead of `from_global_nonce - 1`, causing the Live phase query (`global_nonce > cursor`) to skip the first event written to that position. (ADR-013)
+
+### 📚 Documentation
+- **ADR-013 Updated**: Added documentation for the empty Replay → Live transition edge case fix
+
 ## [0.3.0-beta] - 2025-09-20
 
 ### 🎯 Major Milestone: Complete Event Sourcing Platform
