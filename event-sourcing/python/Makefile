@@ -73,5 +73,7 @@ gen-proto:
 		--grpc_python_out=src/event_sourcing/proto \
 		--pyi_out=src/event_sourcing/proto \
 		../../event-store/eventstore-proto/proto/eventstore/v1/eventstore.proto
+	@# Fix imports in generated grpc file (grpc_tools uses wrong import path)
+	@sed -i '' 's/from eventstore.v1 import eventstore_pb2/from event_sourcing.proto.eventstore.v1 import eventstore_pb2/g' \
+		src/event_sourcing/proto/eventstore/v1/eventstore_pb2_grpc.py
 	@echo "✅ Proto stubs generated successfully"
-

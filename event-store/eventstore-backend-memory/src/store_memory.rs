@@ -11,8 +11,8 @@ use tokio_stream::{self as ts, StreamExt};
 
 use eventstore_core::{proto, EventStore, StoreError, StoreStream};
 use proto::{
-    AppendRequest, AppendResponse, ConcurrencyErrorDetail, EventData, ReadStreamRequest,
-    ReadStreamResponse, SubscribeRequest, SubscribeResponse,
+    AppendRequest, AppendResponse, ConcurrencyErrorDetail, EventData, ReadAllRequest,
+    ReadAllResponse, ReadStreamRequest, ReadStreamResponse, SubscribeRequest, SubscribeResponse,
 };
 
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
@@ -416,6 +416,73 @@ impl EventStore for InMemoryStore {
         })
     }
 
+    async fn read_all(&self, req: ReadAllRequest) -> Result<ReadAllResponse, StoreError> {
+        if req.tenant_id.is_empty() {
+            return Err(StoreError::Unauthenticated(
+                "tenant_id is required on ReadAllRequest".into(),
+            ));
+        }
+
+        // Apply defaults: max_count defaults to 100, capped at 1000
+        let max_count = if req.max_count == 0 {
+            100
+        } else {
+            req.max_count.min(1000)
+        } as usize;
+
+        let from_global = req.from_global_nonce;
+        let all = self.all.read();
+
+        // Filter events by tenant and global_nonce
+        let filtered: Vec<EventData> = all
+            .iter()
+            .filter(|ev| {
+                ev.meta.as_ref().is_some_and(|m| {
+                    m.tenant_id == req.tenant_id
+                        && if req.forward {
+                            m.global_nonce >= from_global
+                        } else {
+                            m.global_nonce <= from_global
+                        }
+                })
+            })
+            .cloned()
+            .collect();
+
+        // Sort by global_nonce
+        let mut sorted = filtered;
+        if req.forward {
+            sorted.sort_by_key(|ev| ev.meta.as_ref().map(|m| m.global_nonce).unwrap_or(0));
+        } else {
+            sorted.sort_by_key(|ev| {
+                std::cmp::Reverse(ev.meta.as_ref().map(|m| m.global_nonce).unwrap_or(0))
+            });
+        }
+
+        // Apply limit
+        let page: Vec<EventData> = sorted.into_iter().take(max_count).collect();
+
+        // Determine if we've reached the end
+        let is_end = page.len() < max_count;
+
+        // Calculate next position for pagination
+        let next_from = if req.forward {
+            page.last()
+                .and_then(|ev| ev.meta.as_ref().map(|m| m.global_nonce + 1))
+                .unwrap_or(from_global)
+        } else {
+            page.first()
+                .and_then(|ev| ev.meta.as_ref().map(|m| m.global_nonce.saturating_sub(1)))
+                .unwrap_or(0)
+        };
+
+        Ok(ReadAllResponse {
+            events: page,
+            is_end,
+            next_from_global_nonce: next_from,
+        })
+    }
+
     fn subscribe(&self, req: SubscribeRequest) -> StoreStream<SubscribeResponse> {
         let tenant_id = req.tenant_id.clone();
         let prefix = req.aggregate_id_prefix.clone();
@@ -463,5 +530,232 @@ impl EventStore for InMemoryStore {
         });
 
         Box::pin(replay.chain(live))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_event(tenant: &str, agg_id: &str, agg_type: &str, nonce: u64) -> EventData {
+        EventData {
+            meta: Some(proto::EventMetadata {
+                event_id: format!("evt-{nonce}"),
+                aggregate_id: agg_id.to_string(),
+                aggregate_type: agg_type.to_string(),
+                aggregate_nonce: nonce,
+                event_type: "Test".to_string(),
+                event_version: 1,
+                content_type: "application/octet-stream".to_string(),
+                tenant_id: tenant.to_string(),
+                ..Default::default()
+            }),
+            payload: format!("payload-{nonce}").into_bytes(),
+        }
+    }
+
+    fn make_append(
+        tenant: &str,
+        agg_id: &str,
+        agg_type: &str,
+        expected: u64,
+        events: Vec<EventData>,
+    ) -> AppendRequest {
+        AppendRequest {
+            tenant_id: tenant.to_string(),
+            aggregate_id: agg_id.to_string(),
+            aggregate_type: agg_type.to_string(),
+            expected_aggregate_nonce: expected,
+            idempotency_key: String::new(),
+            events,
+        }
+    }
+
+    #[tokio::test]
+    async fn read_all_returns_events_in_global_order() {
+        let store = InMemoryStore::new();
+        let tenant = "tenant-test";
+
+        // Append to two different aggregates
+        store
+            .append(make_append(
+                tenant,
+                "agg-1",
+                "Order",
+                0,
+                vec![make_event(tenant, "agg-1", "Order", 1)],
+            ))
+            .await
+            .unwrap();
+
+        store
+            .append(make_append(
+                tenant,
+                "agg-2",
+                "Order",
+                0,
+                vec![make_event(tenant, "agg-2", "Order", 1)],
+            ))
+            .await
+            .unwrap();
+
+        store
+            .append(make_append(
+                tenant,
+                "agg-1",
+                "Order",
+                1,
+                vec![make_event(tenant, "agg-1", "Order", 2)],
+            ))
+            .await
+            .unwrap();
+
+        // Read all events
+        let result = store
+            .read_all(ReadAllRequest {
+                tenant_id: tenant.to_string(),
+                from_global_nonce: 0,
+                max_count: 10,
+                forward: true,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.events.len(), 3);
+        assert!(result.is_end);
+
+        // Verify global ordering
+        let nonces: Vec<u64> = result
+            .events
+            .iter()
+            .map(|e| e.meta.as_ref().unwrap().global_nonce)
+            .collect();
+        assert_eq!(nonces, vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn read_all_pagination_works() {
+        let store = InMemoryStore::new();
+        let tenant = "tenant-test";
+
+        // Append 5 events
+        for i in 1..=5 {
+            store
+                .append(make_append(
+                    tenant,
+                    &format!("agg-{i}"),
+                    "Order",
+                    0,
+                    vec![make_event(tenant, &format!("agg-{i}"), "Order", 1)],
+                ))
+                .await
+                .unwrap();
+        }
+
+        // Read first page (2 events)
+        let page1 = store
+            .read_all(ReadAllRequest {
+                tenant_id: tenant.to_string(),
+                from_global_nonce: 0,
+                max_count: 2,
+                forward: true,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(page1.events.len(), 2);
+        assert!(!page1.is_end);
+        assert_eq!(page1.next_from_global_nonce, 3);
+
+        // Read second page
+        let page2 = store
+            .read_all(ReadAllRequest {
+                tenant_id: tenant.to_string(),
+                from_global_nonce: page1.next_from_global_nonce,
+                max_count: 2,
+                forward: true,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(page2.events.len(), 2);
+        assert!(!page2.is_end);
+
+        // Read last page
+        let page3 = store
+            .read_all(ReadAllRequest {
+                tenant_id: tenant.to_string(),
+                from_global_nonce: page2.next_from_global_nonce,
+                max_count: 2,
+                forward: true,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(page3.events.len(), 1);
+        assert!(page3.is_end);
+    }
+
+    #[tokio::test]
+    async fn read_all_filters_by_tenant() {
+        let store = InMemoryStore::new();
+
+        // Append events for two tenants
+        store
+            .append(make_append(
+                "tenant-a",
+                "agg-1",
+                "Order",
+                0,
+                vec![make_event("tenant-a", "agg-1", "Order", 1)],
+            ))
+            .await
+            .unwrap();
+
+        store
+            .append(make_append(
+                "tenant-b",
+                "agg-2",
+                "Order",
+                0,
+                vec![make_event("tenant-b", "agg-2", "Order", 1)],
+            ))
+            .await
+            .unwrap();
+
+        // Read all for tenant-a only
+        let result = store
+            .read_all(ReadAllRequest {
+                tenant_id: "tenant-a".to_string(),
+                from_global_nonce: 0,
+                max_count: 10,
+                forward: true,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(
+            result.events[0].meta.as_ref().unwrap().tenant_id,
+            "tenant-a"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_all_empty_store_returns_is_end() {
+        let store = InMemoryStore::new();
+
+        let result = store
+            .read_all(ReadAllRequest {
+                tenant_id: "tenant-test".to_string(),
+                from_global_nonce: 0,
+                max_count: 10,
+                forward: true,
+            })
+            .await
+            .unwrap();
+
+        assert!(result.events.is_empty());
+        assert!(result.is_end);
     }
 }

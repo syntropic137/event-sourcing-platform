@@ -7,7 +7,8 @@ use eventstore_core::EventStore as EventStoreTrait;
 use eventstore_proto::gen::event_store_client::EventStoreClient;
 use eventstore_proto::gen::event_store_server::EventStore;
 use eventstore_proto::gen::{
-    self as proto, AppendRequest, EventData, EventMetadata, ReadStreamRequest, SubscribeRequest,
+    self as proto, AppendRequest, EventData, EventMetadata, ReadAllRequest, ReadStreamRequest,
+    SubscribeRequest,
 };
 use tokio::task::JoinHandle;
 use tokio_stream::{Stream, StreamExt};
@@ -111,6 +112,18 @@ impl EventStore for Service {
         let req = request.into_inner();
         self.store
             .read_stream(req)
+            .await
+            .map(Response::new)
+            .map_err(|e| e.to_status())
+    }
+
+    async fn read_all(
+        &self,
+        request: Request<ReadAllRequest>,
+    ) -> Result<Response<proto::ReadAllResponse>, Status> {
+        let req = request.into_inner();
+        self.store
+            .read_all(req)
             .await
             .map(Response::new)
             .map_err(|e| e.to_status())

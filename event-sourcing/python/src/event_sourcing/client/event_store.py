@@ -74,6 +74,34 @@ class EventStoreClient(Protocol):
         """Disconnect from the event store."""
         ...
 
+    async def read_all(
+        self,
+        from_global_nonce: int = 0,
+        max_count: int = 100,
+        forward: bool = True,
+    ) -> tuple[list[EventEnvelope[DomainEvent]], bool, int]:
+        """
+        Read all events from a global position (for projections/catch-up).
+
+        This is the preferred method for catch-up reads as it provides explicit
+        pagination and end-of-batch signaling.
+
+        Args:
+            from_global_nonce: Global nonce to read from (inclusive)
+            max_count: Maximum number of events to return per page
+            forward: Direction (True = ascending order)
+
+        Returns:
+            Tuple of (events, is_end, next_from_global_nonce)
+            - events: List of event envelopes in requested order
+            - is_end: True if no more events after this batch
+            - next_from_global_nonce: Position for next page (if not is_end)
+
+        Raises:
+            EventStoreError: If reading fails
+        """
+        ...
+
     async def read_all_events_from(
         self,
         after_global_nonce: int = 0,
@@ -82,8 +110,8 @@ class EventStoreClient(Protocol):
         """
         Read all events from a global nonce (for projections/catch-up).
 
-        This method enables projections to rebuild state by reading all events
-        in order from a checkpoint.
+        .. deprecated::
+            Use :meth:`read_all` instead for explicit pagination and end-of-batch signaling.
 
         Args:
             after_global_nonce: global nonce to read from (exclusive)

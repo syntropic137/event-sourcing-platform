@@ -527,6 +527,85 @@ impl EventStoreTrait for PostgresStore {
         })
     }
 
+    async fn read_all(
+        &self,
+        req: proto::ReadAllRequest,
+    ) -> Result<proto::ReadAllResponse, StoreError> {
+        if req.tenant_id.is_empty() {
+            return Err(StoreError::Unauthenticated(
+                "tenant_id is required on ReadAllRequest".into(),
+            ));
+        }
+
+        // Apply defaults: max_count defaults to 100, capped at 1000
+        let max_count = if req.max_count == 0 {
+            100
+        } else {
+            req.max_count.min(1000)
+        } as i64;
+
+        let from_global = req.from_global_nonce as i64;
+
+        let rows = if req.forward {
+            sqlx::query(
+                r#"
+                SELECT * FROM events
+                WHERE tenant_id = $1 AND global_nonce >= $2
+                ORDER BY global_nonce ASC
+                LIMIT $3
+                "#,
+            )
+            .bind(&req.tenant_id)
+            .bind(from_global)
+            .bind(max_count)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_db_error)?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT * FROM events
+                WHERE tenant_id = $1 AND global_nonce <= $2
+                ORDER BY global_nonce DESC
+                LIMIT $3
+                "#,
+            )
+            .bind(&req.tenant_id)
+            .bind(from_global)
+            .bind(max_count)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_db_error)?
+        };
+
+        let mut events = Vec::with_capacity(rows.len());
+        for row in rows.into_iter() {
+            events.push(row_to_event(&row)?);
+        }
+
+        // Determine if we've reached the end
+        let is_end = (events.len() as i64) < max_count;
+
+        // Calculate next position for pagination
+        let next_from = if req.forward {
+            events
+                .last()
+                .and_then(|ev| ev.meta.as_ref().map(|m| m.global_nonce + 1))
+                .unwrap_or(from_global as u64)
+        } else {
+            events
+                .first()
+                .and_then(|ev| ev.meta.as_ref().map(|m| m.global_nonce.saturating_sub(1)))
+                .unwrap_or(0)
+        };
+
+        Ok(proto::ReadAllResponse {
+            events,
+            is_end,
+            next_from_global_nonce: next_from,
+        })
+    }
+
     fn subscribe(&self, req: proto::SubscribeRequest) -> StoreStream<proto::SubscribeResponse> {
         let pool = self.pool.clone();
         let tenant_id = req.tenant_id.clone();
