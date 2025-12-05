@@ -662,18 +662,35 @@ impl EventStoreTrait for PostgresStore {
 
                     // FIX (ADR-013): Don't advance cursor during collection.
                     // The cursor will be updated as events are yielded during replay iteration.
+                    // Track max_read_cursor to handle malformed rows (prevents infinite loop).
                     let mut items = Vec::with_capacity(rows.len());
+                    let mut max_read_cursor = cursor;
                     for row in rows.iter() {
+                        let row_cursor = row.get::<i64, _>("global_nonce");
+                        max_read_cursor = max_read_cursor.max(row_cursor);
+
                         if let Ok(event) = row_to_event(row) {
                             items.push(event);
+                        } else {
+                            // Log warning for malformed row (consistent with Live phase)
+                            eprintln!(
+                                "Warning: Failed to parse event at global_nonce={row_cursor}, skipping"
+                            );
                         }
                     }
 
-                    // Start with cursor at initial position - it will advance as events are yielded
+                    // If ALL rows were malformed, advance cursor to max_read_cursor to prevent infinite loop.
+                    // Otherwise, start from current cursor - it will advance as events are yielded.
+                    let initial_cursor = if items.is_empty() && !rows.is_empty() {
+                        max_read_cursor
+                    } else {
+                        cursor
+                    };
+
                     phase = Some(Phase::Replay {
                         items,
                         idx: 0,
-                        cursor,
+                        cursor: initial_cursor,
                     });
                 }
 
