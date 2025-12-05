@@ -1,11 +1,39 @@
 """In-memory event store client for testing."""
 
+import asyncio
 import logging
+import os
+from collections.abc import AsyncIterator
 
 from event_sourcing.core.errors import ConcurrencyConflictError, EventStoreError
 from event_sourcing.core.event import DomainEvent, EventEnvelope
 
 logger = logging.getLogger(__name__)
+
+
+class MockTestEnvironmentError(RuntimeError):
+    """Raised when mock objects are used outside of test environment."""
+
+    pass
+
+
+def _assert_test_environment() -> None:
+    """Assert test environment - REQUIRED for all mocks.
+
+    This prevents mock objects from being used in development, staging,
+    or production environments where real implementations should be used.
+
+    Raises:
+        MockTestEnvironmentError: If APP_ENVIRONMENT is not 'test'
+    """
+    app_env = os.getenv("APP_ENVIRONMENT", "").lower()
+    if app_env != "test":
+        raise MockTestEnvironmentError(
+            f"MemoryEventStoreClient can only be used in test environment. "
+            f"Current APP_ENVIRONMENT: '{app_env}'. "
+            f"Set APP_ENVIRONMENT=test for unit tests, or use GrpcEventStoreClient "
+            f"for development/production."
+        )
 
 
 class MemoryEventStoreClient:
@@ -14,9 +42,16 @@ class MemoryEventStoreClient:
 
     This implementation stores events in memory and provides the same
     interface as the gRPC client, making it ideal for testing.
+
+    WARNING: This client can ONLY be used in test environments.
+    It will raise MockTestEnvironmentError if APP_ENVIRONMENT is not 'test'.
+    For development and production, use GrpcEventStoreClient.
     """
 
     def __init__(self) -> None:
+        # CRITICAL: Validate test environment before allowing usage
+        _assert_test_environment()
+
         self._streams: dict[str, list[EventEnvelope[DomainEvent]]] = {}
         self._connected = False
         self._global_nonce_counter = 0  # For assigning global nonces
@@ -136,6 +171,72 @@ class MemoryEventStoreClient:
         """Get the current version of a stream (for testing)."""
         return len(self._streams.get(stream_name, []))
 
+    async def read_all(
+        self,
+        from_global_nonce: int = 0,
+        max_count: int = 100,
+        forward: bool = True,
+    ) -> tuple[list[EventEnvelope[DomainEvent]], bool, int]:
+        """
+        Read all events from a global position (for projections/catch-up).
+
+        Args:
+            from_global_nonce: Global nonce to read from (inclusive)
+            max_count: Maximum number of events to return per page
+            forward: Direction (True = ascending order)
+
+        Returns:
+            Tuple of (events, is_end, next_from_global_nonce)
+        """
+        # Collect all events from all streams
+        all_events: list[EventEnvelope[DomainEvent]] = []
+        for stream_events in self._streams.values():
+            all_events.extend(stream_events)
+
+        # Filter events based on global nonce and direction
+        if forward:
+            filtered_events = [
+                event
+                for event in all_events
+                if event.metadata.global_nonce is not None
+                and event.metadata.global_nonce >= from_global_nonce
+            ]
+            # Sort ascending
+            sorted_events = sorted(filtered_events, key=lambda e: e.metadata.global_nonce or 0)
+        else:
+            filtered_events = [
+                event
+                for event in all_events
+                if event.metadata.global_nonce is not None
+                and event.metadata.global_nonce <= from_global_nonce
+            ]
+            # Sort descending
+            sorted_events = sorted(
+                filtered_events, key=lambda e: e.metadata.global_nonce or 0, reverse=True
+            )
+
+        # Apply limit
+        page = sorted_events[:max_count]
+
+        # Determine if we've reached the end
+        is_end = len(page) < max_count
+
+        # Calculate next position for pagination
+        if forward:
+            next_from = (
+                page[-1].metadata.global_nonce + 1
+                if page and page[-1].metadata.global_nonce is not None
+                else from_global_nonce
+            )
+        else:
+            next_from = (
+                max(0, page[0].metadata.global_nonce - 1)
+                if page and page[0].metadata.global_nonce is not None
+                else 0
+            )
+
+        return page, is_end, next_from
+
     async def read_all_events_from(
         self,
         after_global_nonce: int = 0,
@@ -144,6 +245,9 @@ class MemoryEventStoreClient:
         """
         Read all events from a global nonce (for projections/catch-up).
 
+        .. deprecated::
+            Use :meth:`read_all` instead for explicit pagination and end-of-batch signaling.
+
         Args:
             after_global_nonce: global nonce to read from (exclusive)
             limit: Maximum number of events to return
@@ -151,21 +255,46 @@ class MemoryEventStoreClient:
         Returns:
             List of event envelopes in global order
         """
-        # Collect all events from all streams
-        all_events: list[EventEnvelope[DomainEvent]] = []
-        for stream_events in self._streams.values():
-            all_events.extend(stream_events)
+        # Use the new read_all method with from_global_nonce = after_global_nonce + 1
+        events, _is_end, _next_pos = await self.read_all(
+            from_global_nonce=after_global_nonce + 1,
+            max_count=limit,
+            forward=True,
+        )
+        return events
 
-        # Filter events after the specified global nonce
-        filtered_events = [
-            event
-            for event in all_events
-            if event.metadata.global_nonce is not None
-            and event.metadata.global_nonce > after_global_nonce
-        ]
+    async def subscribe(
+        self,
+        from_global_nonce: int = 0,
+    ) -> AsyncIterator[EventEnvelope[DomainEvent]]:
+        """
+        Subscribe to events from a global nonce (live streaming).
 
-        # Sort by global nonce
-        sorted_events = sorted(filtered_events, key=lambda e: e.metadata.global_nonce or 0)
+        For the memory client, this polls for new events every 100ms.
+        This is suitable for testing but not for production.
 
-        # Apply limit
-        return sorted_events[:limit]
+        Args:
+            from_global_nonce: global nonce to start from (inclusive)
+
+        Yields:
+            EventEnvelope objects as they arrive
+        """
+        current_nonce = from_global_nonce
+        logger.debug(f"Memory subscription starting from global nonce {from_global_nonce}")
+
+        while True:
+            # Read events from current position using read_all directly
+            events, _is_end, _next_pos = await self.read_all(
+                from_global_nonce=current_nonce,
+                max_count=100,
+                forward=True,
+            )
+
+            for event in events:
+                if event.metadata.global_nonce is not None:
+                    if event.metadata.global_nonce >= current_nonce:
+                        yield event
+                        current_nonce = event.metadata.global_nonce + 1
+
+            # Poll interval
+            await asyncio.sleep(0.1)

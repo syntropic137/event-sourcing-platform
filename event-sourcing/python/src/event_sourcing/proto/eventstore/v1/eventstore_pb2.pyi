@@ -123,6 +123,28 @@ class SubscribeResponse(_message.Message):
     event: EventData
     def __init__(self, event: _Optional[_Union[EventData, _Mapping]] = ...) -> None: ...
 
+class ReadAllRequest(_message.Message):
+    __slots__ = ("tenant_id", "from_global_nonce", "max_count", "forward")
+    TENANT_ID_FIELD_NUMBER: _ClassVar[int]
+    FROM_GLOBAL_NONCE_FIELD_NUMBER: _ClassVar[int]
+    MAX_COUNT_FIELD_NUMBER: _ClassVar[int]
+    FORWARD_FIELD_NUMBER: _ClassVar[int]
+    tenant_id: str
+    from_global_nonce: int
+    max_count: int
+    forward: bool
+    def __init__(self, tenant_id: _Optional[str] = ..., from_global_nonce: _Optional[int] = ..., max_count: _Optional[int] = ..., forward: bool = ...) -> None: ...
+
+class ReadAllResponse(_message.Message):
+    __slots__ = ("events", "is_end", "next_from_global_nonce")
+    EVENTS_FIELD_NUMBER: _ClassVar[int]
+    IS_END_FIELD_NUMBER: _ClassVar[int]
+    NEXT_FROM_GLOBAL_NONCE_FIELD_NUMBER: _ClassVar[int]
+    events: _containers.RepeatedCompositeFieldContainer[EventData]
+    is_end: bool
+    next_from_global_nonce: int
+    def __init__(self, events: _Optional[_Iterable[_Union[EventData, _Mapping]]] = ..., is_end: bool = ..., next_from_global_nonce: _Optional[int] = ...) -> None: ...
+
 class ConcurrencyErrorDetail(_message.Message):
     __slots__ = ("tenant_id", "aggregate_id", "actual_last_aggregate_nonce", "actual_last_global_nonce")
     TENANT_ID_FIELD_NUMBER: _ClassVar[int]

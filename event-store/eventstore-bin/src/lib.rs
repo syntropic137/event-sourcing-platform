@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use eventstore_core::{proto, EventStore as EventStoreTrait};
 use eventstore_proto::gen::event_store_server::EventStore;
-use eventstore_proto::gen::{AppendRequest, ReadStreamRequest};
+use eventstore_proto::gen::{AppendRequest, ReadAllRequest, ReadStreamRequest};
 use tokio_stream::{Stream, StreamExt};
 use tonic::{Request, Response, Status};
 use tracing::{error, info, instrument, warn};
@@ -64,6 +64,33 @@ impl EventStore for Service {
             }
             Err(e) => {
                 warn!(error = %e, "read_stream failed");
+                Err(e.to_status())
+            }
+        }
+    }
+
+    #[instrument(name = "rpc.read_all", skip(self, request), fields(
+        from_global_nonce = request.get_ref().from_global_nonce,
+        max_count = request.get_ref().max_count,
+        forward = request.get_ref().forward,
+    ))]
+    async fn read_all(
+        &self,
+        request: Request<ReadAllRequest>,
+    ) -> Result<Response<proto::ReadAllResponse>, Status> {
+        let req = request.into_inner();
+        match self.store.read_all(req).await {
+            Ok(resp) => {
+                info!(
+                    events = resp.events.len(),
+                    is_end = resp.is_end,
+                    next_from_global_nonce = resp.next_from_global_nonce,
+                    "read_all ok"
+                );
+                Ok(Response::new(resp))
+            }
+            Err(e) => {
+                warn!(error = %e, "read_all failed");
                 Err(e.to_status())
             }
         }

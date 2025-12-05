@@ -19,6 +19,16 @@ export interface EventStoreClientConfig extends BaseConfig {
   timeoutMs?: number;
 }
 
+/** Result from readAll operation */
+export interface ReadAllResult {
+  /** Events in requested order */
+  events: EventEnvelope[];
+  /** True if no more events after this batch */
+  isEnd: boolean;
+  /** Position for next page (if !isEnd) */
+  nextFromGlobalNonce: number;
+}
+
 /** Event store client interface */
 export interface EventStoreClient {
   /** Read events from a stream */
@@ -33,6 +43,19 @@ export interface EventStoreClient {
 
   /** Check if a stream exists */
   streamExists(streamName: string): Promise<boolean>;
+
+  /**
+   * Read all events from a global position (for projections/catch-up).
+   * @param fromGlobalNonce - Global nonce to read from (inclusive)
+   * @param maxCount - Maximum number of events to return per page
+   * @param forward - Direction (true = ascending order)
+   * @returns Events, isEnd flag, and next position
+   */
+  readAll(
+    fromGlobalNonce?: number,
+    maxCount?: number,
+    forward?: boolean
+  ): Promise<ReadAllResult>;
 
   /** Connect to the event store */
   connect(): Promise<void>;
@@ -68,6 +91,13 @@ export class EventStoreClientFactory {
       },
       async streamExists(streamName: string) {
         return adapter.streamExists(streamName);
+      },
+      async readAll(
+        fromGlobalNonce?: number,
+        maxCount?: number,
+        forward?: boolean
+      ) {
+        return adapter.readAll(fromGlobalNonce, maxCount, forward);
       },
       async connect() {
         // no-op; underlying gRPC client is ready on construction
