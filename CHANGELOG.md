@@ -158,10 +158,10 @@ async for response in stub.Subscribe(request):
         break  # Heuristic-based end detection
 
 # After (reliable)
-response = await client.read_all(from_position, max_count=100)
-for event in response.events:
+events, is_end, next_pos = await client.read_all(from_position, max_count=100)
+for event in events:
     await process(event)
-if response.is_end:
+if is_end:
     break  # Explicit end signal
 ```
 

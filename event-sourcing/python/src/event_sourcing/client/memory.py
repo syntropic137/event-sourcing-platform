@@ -224,11 +224,15 @@ class MemoryEventStoreClient:
         # Calculate next position for pagination
         if forward:
             next_from = (
-                page[-1].metadata.global_nonce + 1 if page and page[-1].metadata.global_nonce else from_global_nonce
+                page[-1].metadata.global_nonce + 1
+                if page and page[-1].metadata.global_nonce is not None
+                else from_global_nonce
             )
         else:
             next_from = (
-                max(0, page[0].metadata.global_nonce - 1) if page and page[0].metadata.global_nonce else 0
+                max(0, page[0].metadata.global_nonce - 1)
+                if page and page[0].metadata.global_nonce is not None
+                else 0
             )
 
         return page, is_end, next_from
@@ -279,10 +283,11 @@ class MemoryEventStoreClient:
         logger.debug(f"Memory subscription starting from global nonce {from_global_nonce}")
 
         while True:
-            # Read events after current position
-            events = await self.read_all_events_from(
-                after_global_nonce=current_nonce - 1,  # -1 because read_all_events_from is exclusive
-                limit=100,
+            # Read events from current position using read_all directly
+            events, _is_end, _next_pos = await self.read_all(
+                from_global_nonce=current_nonce,
+                max_count=100,
+                forward=True,
             )
 
             for event in events:
