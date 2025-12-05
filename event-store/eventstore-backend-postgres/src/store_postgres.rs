@@ -669,11 +669,15 @@ impl EventStoreTrait for PostgresStore {
                         }
                     }
 
-                    // Start with cursor at initial position - it will advance as events are yielded
+                    // FIX: Set cursor to from_global - 1 so that if Replay is empty,
+                    // the Live phase query (global_nonce > cursor) will correctly
+                    // include from_global. This handles the case where events at
+                    // from_global don't exist yet when subscription starts.
+                    let initial_cursor = if cursor > 0 { cursor - 1 } else { 0 };
                     phase = Some(Phase::Replay {
                         items,
                         idx: 0,
-                        cursor,
+                        cursor: initial_cursor,
                     });
                 }
 
@@ -681,7 +685,7 @@ impl EventStoreTrait for PostgresStore {
                     Some(Phase::Replay {
                         items,
                         mut idx,
-                        cursor: _replay_cursor,
+                        cursor: replay_cursor,
                     }) => {
                         if idx < items.len() {
                             let event = items[idx].clone();
@@ -711,13 +715,15 @@ impl EventStoreTrait for PostgresStore {
                             ))
                         } else {
                             // All replay items yielded, transition to Live phase
+                            // FIX: Use replay_cursor (which is from_global - 1 for empty replay)
+                            // so that Live query `> replay_cursor` correctly includes from_global
                             let next_state = (
                                 pool,
                                 tenant,
                                 prefix,
-                                cursor,
+                                replay_cursor,
                                 Some(Phase::Live {
-                                    cursor,
+                                    cursor: replay_cursor,
                                     interval: interval(Duration::from_millis(200)),
                                 }),
                             );

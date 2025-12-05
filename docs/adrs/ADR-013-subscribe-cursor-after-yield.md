@@ -2,6 +2,7 @@
 
 **Status**: Accepted ✅
 **Date**: 2025-12-05
+**Updated**: 2025-12-05 (Added fix for empty Replay → Live transition)
 **Author**: AI Pair Programming Session
 
 ## Context
@@ -92,11 +93,44 @@ if !rows.is_empty() {
 }
 ```
 
+### Additional Fix: Empty Replay → Live Transition
+
+A second bug was discovered when events don't exist at the requested `from_global_nonce` when the subscription starts:
+
+**Scenario**:
+1. Subscriber requests events starting from position 3
+2. No events exist yet at position 3
+3. Replay phase finds 0 events
+4. Transitions to Live phase with `cursor = from_global = 3`
+5. Later, events 3, 4, 5 are written
+6. Live phase queries `WHERE global_nonce > 3` and finds only 4, 5
+7. **Event 3 is skipped!**
+
+**Fix**: Set initial cursor to `from_global - 1` when creating the Replay phase, so that when transitioning to Live (even with an empty Replay), the query `global_nonce > cursor` correctly includes `from_global`:
+
+```rust
+// Initialize cursor for Replay phase
+let initial_cursor = if cursor > 0 { cursor - 1 } else { 0 };
+phase = Some(Phase::Replay {
+    items,
+    idx: 0,
+    cursor: initial_cursor,  // from_global - 1
+});
+
+// When transitioning to Live from empty Replay:
+Phase::Live {
+    cursor: replay_cursor,  // Still from_global - 1
+    interval,
+}
+// Live query: global_nonce > (from_global - 1) → includes from_global ✅
+```
+
 ### Key Invariants
 
 1. **Cursor = last yielded event's position** (not last read)
 2. **On stream interruption**: Client resumes from cursor, re-reading any events that were read but not yielded
 3. **Idempotency**: Projections should be idempotent to handle potential duplicate delivery
+4. **Empty Replay handling**: Initial cursor must be `from_global - 1` so Live phase correctly includes `from_global`
 
 ## Consequences
 
