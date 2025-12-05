@@ -167,6 +167,36 @@ if is_end:
 
 ---
 
+## [0.2.1] - 2025-12-05 (event-store crates)
+
+### 🐛 Fixed
+
+#### Event Store Subscribe
+- **Cursor Advancement Bug (ADR-013)**: Fixed critical bug where the `Subscribe` gRPC method advanced the cursor position **before** events were yielded to clients
+  - Previously, if a connection dropped mid-batch, events could be lost because the cursor already pointed past undelivered events
+  - Now cursor only advances after an event has been successfully yielded
+  - Affects both Replay and Live phases of the subscription
+
+### ✨ Added
+
+#### Testing
+- **Regression Tests**: Added tests to verify correct subscription behavior:
+  - `postgres_subscribe_yields_all_events_in_order`
+  - `postgres_subscribe_live_phase_yields_all_batch_events`
+
+#### Documentation
+- **ADR-013**: Subscribe Cursor Advancement After Yield (Accepted)
+
+### 📦 Packages Updated
+- `eventstore-proto`: 0.2.0 → 0.2.1
+- `eventstore-core`: 0.2.0 → 0.2.1
+- `eventstore-backend-postgres`: 0.2.0 → 0.2.1
+- `eventstore-backend-memory`: 0.2.0 → 0.2.1
+- `eventstore-bin`: 0.2.0 → 0.2.1
+- `eventstore-sdk-rs`: 0.2.0 → 0.2.1
+
+---
+
 ## [Unreleased]
 
 ### 🚧 In Development
