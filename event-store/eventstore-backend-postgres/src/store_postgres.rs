@@ -662,18 +662,34 @@ impl EventStoreTrait for PostgresStore {
 
                     // FIX (ADR-013): Don't advance cursor during collection.
                     // The cursor will be updated as events are yielded during replay iteration.
+                    // Track max_read_cursor to handle malformed rows (prevents infinite loop).
                     let mut items = Vec::with_capacity(rows.len());
+                    let mut max_read_cursor = cursor;
                     for row in rows.iter() {
+                        let row_cursor = row.get::<i64, _>("global_nonce");
+                        max_read_cursor = max_read_cursor.max(row_cursor);
+
                         if let Ok(event) = row_to_event(row) {
                             items.push(event);
+                        } else {
+                            // Log warning for malformed row (consistent with Live phase)
+                            eprintln!(
+                                "Warning: Failed to parse event at global_nonce={row_cursor}, skipping"
+                            );
                         }
                     }
 
-                    // FIX: Set cursor to from_global - 1 so that if Replay is empty,
-                    // the Live phase query (global_nonce > cursor) will correctly
-                    // include from_global. This handles the case where events at
-                    // from_global don't exist yet when subscription starts.
-                    let initial_cursor = if cursor > 0 { cursor - 1 } else { 0 };
+                    // If we have valid items, start Replay from cursor-1 so yielding works correctly.
+                    // If ALL rows were malformed, advance to max_read_cursor to prevent infinite loop.
+                    let initial_cursor = if items.is_empty() && !rows.is_empty() {
+                        // All rows malformed - advance past them
+                        max_read_cursor
+                    } else if cursor > 0 {
+                        cursor - 1
+                    } else {
+                        0
+                    };
+
                     phase = Some(Phase::Replay {
                         items,
                         idx: 0,
