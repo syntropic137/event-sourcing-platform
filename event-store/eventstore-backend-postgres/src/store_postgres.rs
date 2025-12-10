@@ -727,14 +727,24 @@ impl EventStoreTrait for PostgresStore {
                                 next_state,
                             ))
                         } else {
-                            // All replay items yielded, transition to Live phase
+                            // All replay items yielded, transition to Live phase.
+                            // FIX: If replay was empty (no events existed yet at from_global_nonce),
+                            // we need to subtract 1 from cursor so that Live polling with
+                            // `global_nonce > (cursor-1)` effectively catches events at the
+                            // original from_global_nonce position. This handles the race condition
+                            // where subscription starts before an event is created at that position.
+                            let live_cursor = if items.is_empty() {
+                                cursor.saturating_sub(1)
+                            } else {
+                                cursor
+                            };
                             let next_state = (
                                 pool,
                                 tenant,
                                 prefix,
-                                cursor,
+                                live_cursor,
                                 Some(Phase::Live {
-                                    cursor,
+                                    cursor: live_cursor,
                                     interval: interval(Duration::from_millis(200)),
                                 }),
                             );

@@ -527,3 +527,167 @@ async fn postgres_subscribe_live_phase_yields_all_batch_events() {
         "Events not in correct order"
     );
 }
+
+/// Regression test for off-by-one bug in subscribe when starting before event exists.
+///
+/// This tests the race condition where:
+/// 1. Subscription starts at position N (where no event exists yet)
+/// 2. Initial replay query returns empty
+/// 3. Subscription transitions to Live phase with cursor = N
+/// 4. Event is created at position N
+/// 5. Live polling with `> N` would MISS the event at N (BUG!)
+///
+/// The fix: When replay is empty, subtract 1 from cursor before transitioning to Live,
+/// so that Live polling with `> (N-1)` catches events at N.
+#[tokio::test]
+async fn postgres_subscribe_catches_event_at_from_position_when_created_after_subscribe_starts() {
+    let url = common::get_test_database_url().await;
+    let store = PostgresStore::connect_for_tests(&url)
+        .await
+        .expect("connect");
+
+    // Use a unique aggregate ID to avoid conflicts
+    let aggregate_id = format!(
+        "OffByOne-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+
+    // First, create an initial event to establish a known global_nonce
+    store
+        .append(proto::AppendRequest {
+            tenant_id: TENANT_SUBSCRIBE.into(),
+            aggregate_id: aggregate_id.clone(),
+            aggregate_type: "SubscribeTest".into(),
+            expected_aggregate_nonce: 0,
+            idempotency_key: String::new(),
+            events: vec![new_subscribe_event(
+                TENANT_SUBSCRIBE,
+                &aggregate_id,
+                1,
+                "Setup",
+            )],
+        })
+        .await
+        .expect("setup append");
+
+    // Get the global_nonce of the setup event
+    let read_result = store
+        .read_stream(proto::ReadStreamRequest {
+            tenant_id: TENANT_SUBSCRIBE.into(),
+            aggregate_id: aggregate_id.clone(),
+            from_aggregate_nonce: 1,
+            max_count: 1,
+            forward: true,
+        })
+        .await
+        .expect("read");
+
+    let setup_global_nonce = read_result.events[0].meta.as_ref().unwrap().global_nonce;
+
+    // Start subscription from AFTER the setup event (position that doesn't exist yet)
+    // This simulates the race condition where we subscribe before an event is created
+    let target_position = setup_global_nonce + 1;
+
+    let mut stream = store.subscribe(proto::SubscribeRequest {
+        tenant_id: TENANT_SUBSCRIBE.into(),
+        aggregate_id_prefix: aggregate_id.clone(),
+        from_global_nonce: target_position,
+    });
+
+    // Wait for the subscription to enter Live phase (indicated by empty response)
+    let mut entered_live = false;
+    for _ in 0..5 {
+        if let Some(Ok(response)) =
+            tokio::time::timeout(std::time::Duration::from_millis(300), stream.next())
+                .await
+                .ok()
+                .flatten()
+        {
+            if response.event.is_none() {
+                entered_live = true;
+                break;
+            }
+        } else {
+            entered_live = true;
+            break;
+        }
+    }
+    assert!(entered_live, "Subscription should enter live phase");
+
+    // NOW create the event at the position we subscribed from
+    // This is the critical test: will the subscription catch this event?
+    store
+        .append(proto::AppendRequest {
+            tenant_id: TENANT_SUBSCRIBE.into(),
+            aggregate_id: aggregate_id.clone(),
+            aggregate_type: "SubscribeTest".into(),
+            expected_aggregate_nonce: 1,
+            idempotency_key: String::new(),
+            events: vec![new_subscribe_event(
+                TENANT_SUBSCRIBE,
+                &aggregate_id,
+                2,
+                "TargetEvent",
+            )],
+        })
+        .await
+        .expect("target append");
+
+    // Collect events from the live stream
+    let mut received_events = Vec::new();
+    let mut poll_attempts = 0;
+    const MAX_POLLS: usize = 10;
+
+    while received_events.is_empty() && poll_attempts < MAX_POLLS {
+        poll_attempts += 1;
+        if let Some(result) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), stream.next())
+                .await
+                .ok()
+                .flatten()
+        {
+            match result {
+                Ok(response) => {
+                    if let Some(event) = response.event {
+                        received_events.push(event);
+                    }
+                }
+                Err(e) => panic!("Subscribe error: {e:?}"),
+            }
+        }
+    }
+
+    // CRITICAL ASSERTION: We MUST receive the event that was created after subscription started
+    assert_eq!(
+        received_events.len(),
+        1,
+        "Regression: Subscription missed event at from_global_nonce position! \
+         This is the off-by-one bug where Live phase uses `> cursor` instead of `>= cursor` \
+         when no events existed during initial replay. Polls: {poll_attempts}"
+    );
+
+    // Verify it's the correct event
+    let event_type = received_events[0]
+        .meta
+        .as_ref()
+        .map(|m| m.event_type.as_str())
+        .unwrap_or("");
+    assert_eq!(
+        event_type, "TargetEvent",
+        "Received wrong event type: {event_type}"
+    );
+
+    // Verify global_nonce is at or after target position
+    let event_nonce = received_events[0]
+        .meta
+        .as_ref()
+        .map(|m| m.global_nonce)
+        .unwrap_or(0);
+    assert!(
+        event_nonce >= target_position,
+        "Event nonce {event_nonce} should be >= target {target_position}"
+    );
+}
