@@ -1,7 +1,7 @@
 # Architecture Decision Records - Index
 
-**Status:** 📘 Master Reference  
-**Last Updated:** 2025-12-02
+**Status:** 📘 Master Reference
+**Last Updated:** 2025-12-10
 
 This document provides a comprehensive overview of all architectural decisions for the **Hexagonal Event-Sourced Vertical Slice Architecture** pattern.
 
@@ -70,6 +70,7 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 | [ADR-009](./ADR-009-cqrs-pattern-implementation.md) | CQRS Pattern | ✅ Accepted | Formalizes CQRS implementation |
 | [ADR-010](./ADR-010-decorator-patterns-framework.md) | Decorator Patterns | ✅ Accepted | Documents framework integration decorators |
 | [ADR-011](./ADR-011-ts-proto-v1-retention.md) | ts-proto v1 Retention | ✅ Accepted | Decision to retain ts-proto v1.172.0 vs v2 upgrade |
+| [ADR-014](./ADR-014-projection-checkpoint-architecture.md) | Projection Checkpoints | ✅ Accepted | Per-projection checkpoint tracking for reliable event processing |
 
 ---
 
@@ -342,8 +343,8 @@ export class TaskGrpcController {
 
 ### Layer 1: Domain (Core)
 
-**Location:** `domain/`  
-**Dependencies:** NONE (zero outward dependencies)  
+**Location:** `domain/`
+**Dependencies:** NONE (zero outward dependencies)
 **Contains:**
 - Aggregates (with `@CommandHandler` methods)
 - Commands
@@ -363,8 +364,8 @@ export class TaskGrpcController {
 
 ### Layer 2: Infrastructure (Application Services)
 
-**Location:** `infrastructure/`  
-**Dependencies:** Domain  
+**Location:** `infrastructure/`
+**Dependencies:** Domain
 **Contains:**
 - CommandBus
 - QueryBus
@@ -383,8 +384,8 @@ export class TaskGrpcController {
 
 ### Layer 3: Adapters (Slices)
 
-**Location:** `slices/`  
-**Dependencies:** Domain (read-only), Infrastructure  
+**Location:** `slices/`
+**Dependencies:** Domain (read-only), Infrastructure
 **Contains:**
 - Controllers (REST, CLI, gRPC, GraphQL)
 - Request/Response DTOs
@@ -541,6 +542,7 @@ vsa validate --config vsa.yaml
 |------|---------|---------|
 | 2025-11-06 | 1.0.0 | Initial ADR index created |
 | 2025-12-02 | 1.1.0 | Added ADR-011: ts-proto v1 retention decision |
+| 2025-12-10 | 1.2.0 | Added ADR-014: Projection checkpoint architecture for reliable event processing |
 
 ---
 
@@ -550,4 +552,3 @@ vsa validate --config vsa.yaml
 3. 🔄 Refactor vsa-core to implement validation
 4. 🔄 Update examples to follow pattern
 5. ⏳ Create tutorial documentation
-

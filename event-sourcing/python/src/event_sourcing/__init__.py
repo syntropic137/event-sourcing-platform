@@ -29,9 +29,10 @@ from event_sourcing.core.event import (
     GenericDomainEvent,
 )
 from event_sourcing.core.projection import (
-    AutoDispatchProjection,
-    Projection,
-    ProjectionManager,
+    CheckpointedProjection,
+    ProjectionCheckpoint,
+    ProjectionCheckpointStore,
+    ProjectionResult,
 )
 from event_sourcing.core.query import Query, QueryBus, QueryHandler
 from event_sourcing.core.repository import (
@@ -50,6 +51,8 @@ from event_sourcing.decorators.events import (
     event_sourcing_handler,
     get_event_metadata,
 )
+from event_sourcing.stores import MemoryCheckpointStore, PostgresCheckpointStore
+from event_sourcing.subscriptions import SubscriptionCoordinator
 
 __version__ = "0.1.0"
 
@@ -71,10 +74,16 @@ __all__ = [
     "Query",
     "QueryHandler",
     "QueryBus",
-    # Projections
-    "Projection",
-    "ProjectionManager",
-    "AutoDispatchProjection",
+    # Projections (ADR-014 Checkpoint Architecture)
+    "CheckpointedProjection",
+    "ProjectionCheckpoint",
+    "ProjectionCheckpointStore",
+    "ProjectionResult",
+    # Checkpoint Stores
+    "PostgresCheckpointStore",
+    "MemoryCheckpointStore",
+    # Subscription Coordinator
+    "SubscriptionCoordinator",
     # Repository
     "Repository",
     "EventStoreRepository",
