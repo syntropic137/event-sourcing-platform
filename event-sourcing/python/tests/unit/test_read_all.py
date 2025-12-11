@@ -75,9 +75,7 @@ class TestReadAll:
         assert global_nonces == [0, 1, 2]
 
     @pytest.mark.asyncio
-    async def test_read_all_pagination(
-        self, memory_client: MemoryEventStoreClient
-    ) -> None:
+    async def test_read_all_pagination(self, memory_client: MemoryEventStoreClient) -> None:
         """Test that read_all supports pagination."""
         # Append 5 events
         for i in range(5):
@@ -109,9 +107,7 @@ class TestReadAll:
         assert is_end3 is True
 
     @pytest.mark.asyncio
-    async def test_read_all_empty_store(
-        self, memory_client: MemoryEventStoreClient
-    ) -> None:
+    async def test_read_all_empty_store(self, memory_client: MemoryEventStoreClient) -> None:
         """Test that read_all returns is_end=True for empty store."""
         events, is_end, _ = await memory_client.read_all(
             from_global_nonce=0, max_count=10, forward=True
@@ -138,9 +134,7 @@ class TestReadAll:
         )
 
         # Use deprecated method (exclusive start)
-        events = await memory_client.read_all_events_from(
-            after_global_nonce=0, limit=10
-        )
+        events = await memory_client.read_all_events_from(after_global_nonce=0, limit=10)
 
         assert len(events) == 1  # Only events after 0, so starting from 1
 
