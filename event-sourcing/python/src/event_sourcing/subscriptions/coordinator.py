@@ -30,9 +30,7 @@ logger = logging.getLogger(__name__)
 class EventStoreSubscriber(Protocol):
     """Protocol for event store subscription interface."""
 
-    async def subscribe(
-        self, from_global_nonce: int
-    ) -> AsyncIterator[EventEnvelope[Any]]:
+    async def subscribe(self, from_global_nonce: int) -> AsyncIterator[EventEnvelope[Any]]:
         """
         Subscribe to events starting from a given global nonce.
 
@@ -96,9 +94,18 @@ class SubscriptionCoordinator:
         """
         self._event_store = event_store
         self._checkpoint_store = checkpoint_store
-        self._projections = {p.get_name(): p for p in projections}
         self._running = False
-        self._subscription_task: asyncio.Task[None] | None = None
+
+        # Validate for duplicate projection names
+        self._projections: dict[str, CheckpointedProjection] = {}
+        for projection in projections:
+            name = projection.get_name()
+            if name in self._projections:
+                raise ValueError(
+                    f"Duplicate projection name: '{name}'. "
+                    "Each projection must have a unique name."
+                )
+            self._projections[name] = projection
 
         logger.info(
             "Initialized subscription coordinator",
@@ -137,9 +144,7 @@ class SubscriptionCoordinator:
 
         try:
             # Subscribe from minimum position
-            async for envelope in self._event_store.subscribe(
-                from_global_nonce=min_position
-            ):
+            async for envelope in self._event_store.subscribe(from_global_nonce=min_position):
                 if not self._running:
                     break
 
@@ -157,19 +162,16 @@ class SubscriptionCoordinator:
             raise
 
     async def stop(self) -> None:
-        """Stop the subscription coordinator gracefully."""
+        """Stop the subscription coordinator gracefully.
+
+        Sets `_running` to False which causes the subscription loop in `start()`
+        to exit on the next iteration.
+        """
         if not self._running:
             return
 
         logger.info("Stopping subscription coordinator")
         self._running = False
-
-        if self._subscription_task:
-            self._subscription_task.cancel()
-            try:
-                await self._subscription_task
-            except asyncio.CancelledError:
-                pass
 
     async def _get_minimum_position(self) -> int:
         """
@@ -194,13 +196,16 @@ class SubscriptionCoordinator:
             # Check version mismatch (needs rebuild)
             if checkpoint.version != projection.get_version():
                 logger.warning(
-                    "Projection version mismatch, needs rebuild",
+                    "Projection version mismatch, clearing data and checkpoint for rebuild",
                     extra={
                         "projection_name": name,
                         "stored_version": checkpoint.version,
                         "current_version": projection.get_version(),
                     },
                 )
+                # Clear projection data before replay to avoid data corruption
+                await projection.clear_all_data()
+                await self._checkpoint_store.delete_checkpoint(name)
                 return 0
 
             if min_pos is None or checkpoint.global_position < min_pos:
@@ -264,7 +269,7 @@ class SubscriptionCoordinator:
                     },
                 )
                 # DO NOT advance checkpoint - event will be retried
-            elif result in (ProjectionResult.SUCCESS, ProjectionResult.SKIP):
+            elif result == ProjectionResult.SUCCESS:
                 logger.debug(
                     "Projection processed event",
                     extra={
@@ -276,6 +281,18 @@ class SubscriptionCoordinator:
                 )
                 # Checkpoint should be saved by the projection itself
                 # for atomicity with data updates
+            elif result == ProjectionResult.SKIP:
+                # SKIP means the projection doesn't care about this event.
+                # We must still advance the checkpoint so it's not retried.
+                logger.debug(
+                    "Projection skipped event, advancing checkpoint",
+                    extra={
+                        "projection_name": name,
+                        "event_type": event_type,
+                        "global_nonce": global_nonce,
+                    },
+                )
+                await self._advance_checkpoint_if_behind(name, global_nonce)
 
         except Exception as e:
             logger.error(

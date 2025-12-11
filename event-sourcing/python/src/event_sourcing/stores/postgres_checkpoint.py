@@ -110,9 +110,7 @@ class PostgresCheckpointStore:
             self._table_created = True
             logger.info("Ensured projection_checkpoints table exists")
 
-    async def get_checkpoint(
-        self, projection_name: str
-    ) -> ProjectionCheckpoint | None:
+    async def get_checkpoint(self, projection_name: str) -> ProjectionCheckpoint | None:
         """
         Get the current checkpoint for a projection.
 

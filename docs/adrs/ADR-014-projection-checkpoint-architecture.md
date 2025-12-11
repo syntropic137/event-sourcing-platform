@@ -366,11 +366,12 @@ class CheckpointedProjection(ABC):
         ...
 
     async def clear_all_data(self) -> None:
-        """Clear projection data for rebuild. Override if needed."""
-        raise NotImplementedError(
-            f"Projection {self.get_name()} must implement clear_all_data() "
-            "to support rebuilds."
-        )
+        """Clear projection data for rebuild.
+
+        The default implementation does nothing. Override this method if your
+        projection has persistent storage that must be cleared for a rebuild.
+        """
+        pass
 ```
 
 ### Phase 3: Subscription Coordinator

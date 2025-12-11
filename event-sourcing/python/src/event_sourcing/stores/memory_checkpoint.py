@@ -68,9 +68,7 @@ class MemoryCheckpointStore:
         _assert_test_environment()
         self._checkpoints: dict[str, ProjectionCheckpoint] = {}
 
-    async def get_checkpoint(
-        self, projection_name: str
-    ) -> ProjectionCheckpoint | None:
+    async def get_checkpoint(self, projection_name: str) -> ProjectionCheckpoint | None:
         """
         Get the current checkpoint for a projection.
 
