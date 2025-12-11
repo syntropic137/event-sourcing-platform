@@ -52,9 +52,9 @@ USER eventstore
 # Expose gRPC port
 EXPOSE 50051
 
-# Health check
+# Health check using bash /dev/tcp (no nc needed)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD [ "sh", "-c", "nc -z localhost 50051 || exit 1" ]
+  CMD [ "bash", "-c", "</dev/tcp/localhost/50051 || exit 1" ]
 
 # Run the binary
 ENTRYPOINT ["/usr/local/bin/eventstore"]
