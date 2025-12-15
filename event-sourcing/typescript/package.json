@@ -51,7 +51,7 @@
     },
     "dependencies": {
         "@eventstore/sdk-ts": "workspace:*",
-        "@grpc/grpc-js": "^1.14.2",
+        "@grpc/grpc-js": "^1.14.3",
         "@grpc/proto-loader": "^0.8.0",
         "long": "^5.2.3",
         "uuid": "^11.0.3",
