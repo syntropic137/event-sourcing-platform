@@ -137,7 +137,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache generated protobuf files
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             event-store/sdks/sdk-ts/src/gen
@@ -146,7 +146,7 @@ jobs:
             protobuf-gen-${{ runner.os }}-
 
       - name: Cache TypeScript build outputs
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             event-sourcing/typescript/dist
