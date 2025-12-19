@@ -6,6 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a comprehensive event sourcing platform organized around Domain-Driven Design principles. The platform provides both a low-level event store (Rust) and high-level event sourcing abstractions (multi-language SDKs), plus a Vertical Slice Architecture (VSA) manager tool for code organization.
 
+**Key Philosophy Documents:**
+- [Platform Philosophy](docs/PLATFORM-PHILOSOPHY.md) — What this platform IS and IS NOT
+- [Maintainability Doctrine](docs/MAINTAINABILITY-DOCTRINE.md) — Engineering principles for sustainability
+- [ADR Index](docs/adrs/ADR-INDEX.md) — Architectural decisions
+
 ## Key Architecture Principles
 
 1. **Domain Focus**: Event Store and Event Sourcing define the rules of the event sourcing domain

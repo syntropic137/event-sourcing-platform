@@ -1,0 +1,9 @@
+{
+  "label": "Projection Ops",
+  "position": 5,
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "description": "Production-ready projection infrastructure with checkpoints, failure handling, and monitoring"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "label": "Testing",
+  "position": 6,
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "description": "Testing patterns and utilities for Event Sourcing applications"
+  }
+}
