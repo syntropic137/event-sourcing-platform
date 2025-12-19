@@ -376,8 +376,14 @@ export class TracingContext {
  * Uses AsyncLocalStorage when available (Node.js 14.8+) for automatic
  * context propagation through async operations.
  */
+// Define the AsyncLocalStorage interface inline to avoid import issues
+interface AsyncLocalStorageInterface<T> {
+  run<R>(store: T, callback: () => R): R;
+  getStore(): T | undefined;
+}
+
 class TracingContextStorage {
-  private storage: AsyncLocalStorage<TracingContext> | null = null;
+  private storage: AsyncLocalStorageInterface<TracingContext> | null = null;
   private fallbackContext: TracingContext = TracingContext.empty();
 
   constructor() {
@@ -385,8 +391,10 @@ class TracingContextStorage {
     try {
       // Dynamic import to avoid issues in environments without it
       // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { AsyncLocalStorage } = require('async_hooks');
-      this.storage = new AsyncLocalStorage<TracingContext>();
+      const asyncHooks = require('async_hooks');
+      if (asyncHooks && asyncHooks.AsyncLocalStorage) {
+        this.storage = new asyncHooks.AsyncLocalStorage();
+      }
     } catch {
       // AsyncLocalStorage not available, fall back to simple storage
       this.storage = null;
@@ -430,9 +438,6 @@ class TracingContextStorage {
     return !this.fallbackContext.isEmpty();
   }
 }
-
-// Import AsyncLocalStorage type
-import { AsyncLocalStorage } from 'async_hooks';
 
 /**
  * Global context storage instance.

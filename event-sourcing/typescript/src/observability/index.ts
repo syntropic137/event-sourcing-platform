@@ -43,7 +43,7 @@
 // TYPES
 // ============================================================================
 
-export {
+export type {
   // Span types
   Span,
   SpanStatus,
@@ -67,7 +67,9 @@ export {
   LogEntry,
   Logger,
   LogOutput,
+} from './types';
 
+export {
   // Constants
   ES_METRICS,
   ES_METRIC_LABELS,
@@ -85,7 +87,9 @@ export {
   getCurrentContext,
   hasContext,
   contextStorage,
+} from './tracing/tracing-context';
 
+export type {
   // Types
   RequestHeaders,
   IncomingRequest,
@@ -96,7 +100,6 @@ export {
 export {
   // Decorator
   Traced,
-  TracedOptions,
 
   // Global tracer
   setGlobalTracer,
@@ -113,11 +116,12 @@ export {
   NoOpTracer,
 } from './tracing/traced-decorator';
 
+export type { TracedOptions } from './tracing/traced-decorator';
+
 export {
   // OpenTelemetry integration
   createOTelTracer,
   fromOTelTracer,
-  OTelTracerConfig,
 
   // W3C Trace Context utilities
   parseTraceparent,
@@ -125,6 +129,8 @@ export {
   generateTraceId,
   generateSpanId,
 } from './tracing/opentelemetry';
+
+export type { OTelTracerConfig } from './tracing/opentelemetry';
 
 // ============================================================================
 // METRICS
@@ -177,7 +183,6 @@ export {
 export {
   // Logger implementation
   StructuredLogger,
-  StructuredLoggerOptions,
 
   // Outputs
   ConsoleJsonOutput,
@@ -203,3 +208,5 @@ export {
   // ES-specific helpers
   ESLogMessages,
 } from './logging/logger';
+
+export type { StructuredLoggerOptions } from './logging/logger';

@@ -7,7 +7,7 @@
 import { AggregateRoot } from '../../core/aggregate';
 import { DomainEvent, EventEnvelope, BaseDomainEvent } from '../../core/event';
 import { TestFixture, FixtureEvent, ExpectedState } from '../fixtures/fixture-types';
-import { deepEqual, DeepPartialMatch, createDiff } from './state-assertions';
+import { deepEqual, DeepPartialMatch, createDiff, StateDifference } from './state-assertions';
 
 /**
  * Result of a replay operation
@@ -63,19 +63,8 @@ export interface StateComparisonResult {
   differences: StateDifference[];
 }
 
-/**
- * A single difference between expected and actual state
- */
-export interface StateDifference {
-  /** Path to the differing field (e.g., "order.items[0].quantity") */
-  path: string;
-
-  /** Expected value */
-  expected: unknown;
-
-  /** Actual value */
-  actual: unknown;
-}
+// Re-export StateDifference from state-assertions for backwards compatibility
+export type { StateDifference } from './state-assertions';
 
 /**
  * Options for the ReplayTester

@@ -49,14 +49,14 @@
 // TYPES
 // ============================================================================
 
-export {
-  ProjectionResult,
+export { ProjectionResult, DEFAULT_RETRY_POLICY } from './types';
+
+export type {
   ProjectionCheckpoint,
   FailedEvent,
   FailedEventStatus,
   ProjectionHealth,
   RetryPolicyConfig,
-  DEFAULT_RETRY_POLICY,
 } from './types';
 
 // ============================================================================
@@ -72,13 +72,13 @@ export {
 // CHECKPOINT STORES
 // ============================================================================
 
-export {
-  ProjectionCheckpointStore,
-  MemoryCheckpointStore,
-} from './checkpoint/checkpoint-store';
+export { MemoryCheckpointStore } from './checkpoint/checkpoint-store';
 
-export {
-  PostgresCheckpointStore,
+export type { ProjectionCheckpointStore } from './checkpoint/checkpoint-store';
+
+export { PostgresCheckpointStore } from './checkpoint/postgres-checkpoint-store';
+
+export type {
   PostgresCheckpointStoreOptions,
   PostgresClient,
 } from './checkpoint/postgres-checkpoint-store';
@@ -88,18 +88,20 @@ export {
 // ============================================================================
 
 export {
-  FailedEventStore,
   MemoryFailedEventStore,
   generateFailedEventId,
 } from './failure/failed-event-store';
+
+export type { FailedEventStore } from './failure/failed-event-store';
 
 export {
   RetryPolicy,
   sleep,
 } from './failure/retry-policy';
 
-export {
-  ProjectionErrorHandler,
+export { ProjectionErrorHandler } from './failure/error-handler';
+
+export type {
   ErrorHandlerConfig,
   ErrorHandlerCallbacks,
   ErrorHandleResult,
@@ -109,8 +111,9 @@ export {
 // SUBSCRIPTION COORDINATOR
 // ============================================================================
 
-export {
-  SubscriptionCoordinator,
+export { SubscriptionCoordinator } from './subscription-coordinator';
+
+export type {
   SubscriptionCoordinatorConfig,
   EventStoreSubscription,
   CoordinatorLogger,
@@ -123,9 +126,12 @@ export {
 
 export {
   ProjectionHealthChecker,
+  DEFAULT_HEALTH_THRESHOLDS,
+  createHealthCheckResponse,
+} from './health/projection-health';
+
+export type {
   HealthCheckerConfig,
   HealthThresholds,
-  DEFAULT_HEALTH_THRESHOLDS,
   PositionProvider,
-  createHealthCheckResponse,
 } from './health/projection-health';

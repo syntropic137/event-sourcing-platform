@@ -37,16 +37,15 @@
 // FIXTURES
 // ============================================================================
 
-export {
-  // Types
+export { validateFixture } from './fixtures/fixture-types';
+
+export type {
   TestFixture,
   FixtureEvent,
   ExpectedState,
   LoadedFixture,
   LoadFixtureOptions,
   FixtureValidationError,
-  // Functions
-  validateFixture,
 } from './fixtures/fixture-types';
 
 export {
@@ -61,76 +60,65 @@ export {
 // REPLAY TESTING
 // ============================================================================
 
-export {
-  // Types
+export { ReplayTester, createReplayTester } from './replay/replay-tester';
+
+export type {
   ReplayResult,
   ReplayError,
   StateComparisonResult,
   StateDifference,
   ReplayTesterOptions,
   EventFactory,
-  // Class
-  ReplayTester,
-  // Factory
-  createReplayTester,
 } from './replay/replay-tester';
 
 export {
-  // Types
-  DeepPartialMatch,
-  // Functions
   deepEqual,
   partialMatch,
   createDiff,
   formatDifferences,
   assertStateMatches,
-  // Errors
   StateAssertionError,
 } from './replay/state-assertions';
+
+export type { DeepPartialMatch } from './replay/state-assertions';
 
 // ============================================================================
 // INVARIANT TESTING
 // ============================================================================
 
 export {
-  // Types
-  InvariantMetadata,
-  InvariantOptions,
-  InvariantAwareConstructor,
   INVARIANT_METADATA,
-  // Decorator
   Invariant,
-  // Functions
   getInvariants,
   hasInvariants,
 } from './invariants/invariant-decorator';
 
-export {
-  // Types
+export type {
+  InvariantMetadata,
+  InvariantOptions,
+  InvariantAwareConstructor,
+} from './invariants/invariant-decorator';
+
+export { InvariantChecker, createInvariantChecker } from './invariants/invariant-checker';
+
+export type {
   InvariantCheckResult,
   InvariantSnapshot,
   InvariantVerificationResult,
   InvariantViolation,
   InvariantCheckerOptions,
-  // Class
-  InvariantChecker,
-  // Factory
-  createInvariantChecker,
 } from './invariants/invariant-checker';
 
 // ============================================================================
 // PROJECTION TESTING
 // ============================================================================
 
-export {
-  // Types
+export { ProjectionTester, createProjectionTester } from './projections/projection-tester';
+
+export type {
   TestableProjection,
   ProjectionTestResult,
   ProjectionTestError,
   DeterminismResult,
   ProjectionTesterOptions,
-  // Class
-  ProjectionTester,
-  // Factory
-  createProjectionTester,
 } from './projections/projection-tester';

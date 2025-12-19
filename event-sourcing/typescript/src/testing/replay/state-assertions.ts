@@ -2,7 +2,19 @@
  * State assertion utilities for comparing expected and actual aggregate states
  */
 
-import { StateDifference } from './replay-tester';
+/**
+ * A single difference between expected and actual state
+ */
+export interface StateDifference {
+  /** Path to the differing field (e.g., "order.items[0].quantity") */
+  path: string;
+
+  /** Expected value */
+  expected: unknown;
+
+  /** Actual value */
+  actual: unknown;
+}
 
 /**
  * Type for partial matching (only specified fields are checked)
