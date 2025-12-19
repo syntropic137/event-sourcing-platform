@@ -11,7 +11,7 @@ import {
   SpanStatus,
   Tracer,
 } from '../types';
-import { getCurrentContext, TracingContext } from './tracing-context';
+import { getCurrentContext } from './tracing-context';
 
 // ============================================================================
 // NO-OP IMPLEMENTATIONS

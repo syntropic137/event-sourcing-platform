@@ -5,7 +5,7 @@
  */
 
 import { LogLevel, LogContext, LogEntry, Logger, LogOutput } from '../types';
-import { getCurrentContext, TracingContext } from '../tracing/tracing-context';
+import { getCurrentContext } from '../tracing/tracing-context';
 
 // ============================================================================
 // LOG LEVEL UTILITIES
@@ -453,7 +453,7 @@ export const ESLogMessages = {
     level: 'error' as LogLevel,
   }),
 
-  projectionCheckpointSaved: (projectionName: string, position: bigint) => ({
+  projectionCheckpointSaved: (projectionName: string, position: number | bigint) => ({
     message: `Projection checkpoint saved: ${projectionName}`,
     context: { projectionName, position: position.toString() },
     level: 'debug' as LogLevel,

@@ -9,6 +9,18 @@
             "types": "./dist/index.d.ts",
             "default": "./dist/index.js"
         },
+        "./testing": {
+            "types": "./dist/testing/index.d.ts",
+            "default": "./dist/testing/index.js"
+        },
+        "./projections": {
+            "types": "./dist/projections/index.d.ts",
+            "default": "./dist/projections/index.js"
+        },
+        "./observability": {
+            "types": "./dist/observability/index.d.ts",
+            "default": "./dist/observability/index.js"
+        },
         "./package.json": "./package.json"
     },
     "files": [

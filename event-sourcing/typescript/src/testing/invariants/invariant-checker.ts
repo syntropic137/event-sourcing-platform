@@ -9,7 +9,6 @@ import {
   InvariantMetadata,
   InvariantAwareConstructor,
   getInvariants,
-  INVARIANT_METADATA,
 } from './invariant-decorator';
 
 /**
@@ -260,22 +259,8 @@ export class InvariantChecker<TAggregate extends AggregateRoot<DomainEvent>> {
       const event = this.options.eventFactory(fixtureEvent);
       const id = aggregateId ?? `test-aggregate-${Date.now()}`;
 
-      // Create envelope and apply event
-      const envelope: EventEnvelope<DomainEvent> = {
-        event,
-        metadata: {
-          eventId: fixtureEvent.metadata?.eventId ?? `event-${i}`,
-          timestamp: fixtureEvent.metadata?.timestamp ?? new Date().toISOString(),
-          recordedTimestamp: new Date().toISOString(),
-          aggregateNonce: i + 1,
-          aggregateId: id,
-          aggregateType: aggregate.getAggregateType(),
-          contentType: 'application/json',
-          headers: {},
-          customMetadata: {},
-        },
-      };
-
+      // Apply event to aggregate
+      // Note: We create event with metadata context but applyEvent only needs the event
       try {
         aggregate.applyEvent(event);
       } catch (error) {

@@ -4,7 +4,7 @@
 
 import { DomainEvent, EventEnvelope } from '../../core/event';
 import { FixtureEvent } from '../fixtures/fixture-types';
-import { deepEqual, createDiff, StateDifference } from '../replay/state-assertions';
+import { createDiff, StateDifference } from '../replay/state-assertions';
 
 /**
  * Interface that projections must implement for testing

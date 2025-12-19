@@ -4,13 +4,12 @@
  * Pre-configured metrics for Event Sourcing operations.
  */
 
-import { ES_METRICS, ES_METRIC_LABELS, MetricLabels } from '../types';
+import { ES_METRICS, ES_METRIC_LABELS } from '../types';
 import {
   counter,
   gauge,
   histogram,
   DEFAULT_LATENCY_BUCKETS,
-  startTimer,
 } from './metrics';
 
 // ============================================================================

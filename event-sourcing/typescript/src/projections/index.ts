@@ -87,17 +87,15 @@ export type {
 // FAILURE HANDLING
 // ============================================================================
 
-export {
-  MemoryFailedEventStore,
-  generateFailedEventId,
-} from './failure/failed-event-store';
+export { MemoryFailedEventStore } from './failure/failed-event-store';
 
 export type { FailedEventStore } from './failure/failed-event-store';
 
-export {
-  RetryPolicy,
-  sleep,
-} from './failure/retry-policy';
+// Note: generateFailedEventId is intentionally not exported as it's an internal utility
+
+export { RetryPolicy } from './failure/retry-policy';
+
+// Note: sleep is intentionally not exported as it's an internal utility
 
 export { ProjectionErrorHandler } from './failure/error-handler';
 

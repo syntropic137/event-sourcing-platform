@@ -312,6 +312,13 @@ export class SubscriptionCoordinator {
 
   /**
    * Rebuild a specific projection from scratch
+   *
+   * IMPORTANT: If the coordinator is running, this method will stop it,
+   * perform the rebuild, and restart it. This ensures the projection
+   * replays events from position 0.
+   *
+   * @param projectionName - Name of the projection to rebuild
+   * @throws Error if projection is not found
    */
   async rebuildProjection(projectionName: string): Promise<void> {
     const projection = this.projections.get(projectionName);
@@ -319,17 +326,35 @@ export class SubscriptionCoordinator {
       throw new Error(`Projection not found: ${projectionName}`);
     }
 
-    this.logger.info('Rebuilding projection', { projection: projectionName });
+    const wasRunning = this.state === 'running';
 
-    // Delete checkpoint
+    this.logger.info('Rebuilding projection', {
+      projection: projectionName,
+      wasRunning,
+    });
+
+    // If running, stop first to ensure clean restart from new position
+    if (wasRunning) {
+      this.logger.info('Stopping coordinator for rebuild');
+      await this.stop();
+    }
+
+    // Delete checkpoint - this ensures we start from position 0
     await this.checkpointStore.deleteCheckpoint(projectionName);
 
     // Clear projection data
     await projection.clearData();
 
-    // If running, the projection will catch up naturally
-    // If stopped, caller should start the coordinator
-    this.logger.info('Projection rebuild initiated', { projection: projectionName });
+    this.logger.info('Projection data cleared', { projection: projectionName });
+
+    // If was running, restart coordinator
+    // It will now start from the new minimum position (0 for this projection)
+    if (wasRunning) {
+      this.logger.info('Restarting coordinator after rebuild');
+      await this.start();
+    }
+
+    this.logger.info('Projection rebuild complete', { projection: projectionName });
   }
 
   /**

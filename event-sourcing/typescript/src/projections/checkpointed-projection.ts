@@ -6,7 +6,7 @@
  */
 
 import { DomainEvent, EventEnvelope } from '../core/event';
-import { ProjectionResult, ProjectionCheckpoint } from './types';
+import { ProjectionResult } from './types';
 import { ProjectionCheckpointStore } from './checkpoint/checkpoint-store';
 
 /**

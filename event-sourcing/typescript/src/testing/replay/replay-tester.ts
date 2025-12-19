@@ -5,9 +5,9 @@
  */
 
 import { AggregateRoot } from '../../core/aggregate';
-import { DomainEvent, EventEnvelope, BaseDomainEvent } from '../../core/event';
+import { DomainEvent, EventEnvelope } from '../../core/event';
 import { TestFixture, FixtureEvent, ExpectedState } from '../fixtures/fixture-types';
-import { deepEqual, DeepPartialMatch, createDiff, StateDifference } from './state-assertions';
+import { createDiff, StateDifference } from './state-assertions';
 
 /**
  * Result of a replay operation

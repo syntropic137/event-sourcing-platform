@@ -11,7 +11,6 @@ import {
   SpanKind,
   SpanStatus,
   StartSpanOptions,
-  TracingContextData,
 } from '../types';
 
 // ============================================================================
