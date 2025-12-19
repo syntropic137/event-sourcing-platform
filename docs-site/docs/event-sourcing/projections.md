@@ -525,4 +525,4 @@ class IndexedProjection {
 
 - Learn about Event Bus for cross-aggregate communication
 - Explore CQRS patterns that leverage projections
-- See [Examples](./examples/) for projection implementations in action
+- See [Examples](../examples/) for projection implementations in action
