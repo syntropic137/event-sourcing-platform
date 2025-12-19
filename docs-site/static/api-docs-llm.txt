@@ -1,5 +1,5 @@
 === EVENT SOURCING PLATFORM API REFERENCE ===
-Generated: 2025-11-05T20:01:41.783Z
+Generated: 2025-12-19T21:05:42.938Z
 Format: Plain Text (LLM-optimized)
 
 This document contains comprehensive API documentation for the Event Sourcing Platform,
@@ -5350,7 +5350,7 @@ class IndexedProjection {
 
 - Learn about Event Bus for cross-aggregate communication
 - Explore CQRS patterns that leverage projections
-- See Examples for projection implementations in action
+- See the Examples section for projection implementations in action
 
 
 ================================================================================
