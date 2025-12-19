@@ -1,0 +1,9 @@
+{
+  "label": "Observability",
+  "position": 7,
+  "collapsed": false,
+  "link": {
+    "type": "doc",
+    "id": "event-sourcing/observability/index"
+  }
+}

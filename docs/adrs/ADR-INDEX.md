@@ -1,7 +1,7 @@
 # Architecture Decision Records - Index
 
 **Status:** 📘 Master Reference
-**Last Updated:** 2025-12-10
+**Last Updated:** 2025-12-19
 
 This document provides a comprehensive overview of all architectural decisions for the **Hexagonal Event-Sourced Vertical Slice Architecture** pattern.
 
@@ -71,6 +71,9 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 | [ADR-010](./ADR-010-decorator-patterns-framework.md) | Decorator Patterns | ✅ Accepted | Documents framework integration decorators |
 | [ADR-011](./ADR-011-ts-proto-v1-retention.md) | ts-proto v1 Retention | ✅ Accepted | Decision to retain ts-proto v1.172.0 vs v2 upgrade |
 | [ADR-014](./ADR-014-projection-checkpoint-architecture.md) | Projection Checkpoints | ✅ Accepted | Per-projection checkpoint tracking for reliable event processing |
+| [ADR-015](./ADR-015-es-test-kit-architecture.md) | ES Test Kit Architecture | 📋 Proposed | Reusable testing harness for ES applications |
+| [ADR-016](./ADR-016-projection-failure-handling.md) | Projection Failure Handling | 📋 Proposed | DLQ, retry policies, and error handling for projections |
+| [ADR-017](./ADR-017-observability-conventions.md) | Observability Conventions | ✅ Accepted | Tracing, metrics, and logging standards |
 
 ---
 
@@ -529,10 +532,10 @@ vsa validate --config vsa.yaml
 
 ## See Also
 
+- [Platform Philosophy](../PLATFORM-PHILOSOPHY.md) — What this platform IS and IS NOT
+- [Maintainability Doctrine](../MAINTAINABILITY-DOCTRINE.md) — Engineering principles for sustainability
 - [VSA Configuration Reference](../../vsa/examples/vsa.reference.yaml)
 - [Slice Metadata Reference](../../vsa/examples/slice.reference.yaml)
-- [VSA Core Refactor Plan](../../PROJECT-PLAN_20251106_vsa-core-hexagonal-refactor.md)
-- [Hexagonal VSA Architecture Plan](../../PROJECT-PLAN_20251106_hexagonal-vsa-architecture.md)
 
 ---
 
