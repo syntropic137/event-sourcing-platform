@@ -295,6 +295,6 @@ groups:
 
 ## Related
 
-- [Failure Handling](../projections/failure-handling.md)
+- [Failure Handling](../../projections/failure-handling.md)
 - [Projection Lag Runbook](./projection-lag.md)
-- [Rebuilding Projections](../projections/rebuilding.md)
+- [Rebuilding Projections](../../projections/rebuilding.md)
