@@ -171,5 +171,5 @@ export class MemoryFailedEventStore implements FailedEventStore {
  * Generate a unique ID for a failed event
  */
 export function generateFailedEventId(): string {
-  return `failed-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  return `failed-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
 }

@@ -3,7 +3,7 @@
  */
 
 import { AggregateRoot } from '../../core/aggregate';
-import { DomainEvent, EventEnvelope } from '../../core/event';
+import { DomainEvent } from '../../core/event';
 import { FixtureEvent } from '../fixtures/fixture-types';
 import {
   InvariantMetadata,
@@ -142,7 +142,7 @@ export class InvariantChecker<TAggregate extends AggregateRoot<DomainEvent>> {
   private readonly AggregateClass: new () => TAggregate;
   private readonly options: Required<InvariantCheckerOptions>;
   private readonly invariants: Map<string, InvariantMetadata>;
-  private readonly additionalInvariants: InvariantCheckerOptions['additionalInvariants'];
+  private readonly additionalInvariants: NonNullable<InvariantCheckerOptions['additionalInvariants']>;
 
   constructor(
     AggregateClass: new () => TAggregate,
@@ -203,7 +203,7 @@ export class InvariantChecker<TAggregate extends AggregateRoot<DomainEvent>> {
     }
 
     // Check additional invariants
-    for (const additional of this.additionalInvariants ?? []) {
+    for (const additional of this.additionalInvariants) {
       try {
         const holds = additional.check(aggregate);
         results.push({
@@ -257,10 +257,8 @@ export class InvariantChecker<TAggregate extends AggregateRoot<DomainEvent>> {
     for (let i = 0; i < events.length; i++) {
       const fixtureEvent = events[i];
       const event = this.options.eventFactory(fixtureEvent);
-      const id = aggregateId ?? `test-aggregate-${Date.now()}`;
 
       // Apply event to aggregate
-      // Note: We create event with metadata context but applyEvent only needs the event
       try {
         aggregate.applyEvent(event);
       } catch (error) {
@@ -331,7 +329,7 @@ export class InvariantChecker<TAggregate extends AggregateRoot<DomainEvent>> {
     check: (aggregate: TAggregate) => boolean,
     severity: 'error' | 'warning' = 'error'
   ): this {
-    (this.additionalInvariants ?? []).push({
+    this.additionalInvariants.push({
       description,
       check: check as (aggregate: AggregateRoot<DomainEvent>) => boolean,
       severity,

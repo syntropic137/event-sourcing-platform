@@ -79,8 +79,8 @@ export class ConsolePrettyOutput implements LogOutput {
     const contextStr =
       contextKeys.length > 0
         ? ` ${JSON.stringify(
-            Object.fromEntries(contextKeys.map((k) => [k, entry[k]]))
-          )}`
+          Object.fromEntries(contextKeys.map((k) => [k, entry[k]]))
+        )}`
         : '';
 
     const output = `${color}${time} ${level}${this.reset} ${component}${entry.message}${correlation}${contextStr}`;

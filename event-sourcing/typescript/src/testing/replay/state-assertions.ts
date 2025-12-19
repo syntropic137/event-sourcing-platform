@@ -79,9 +79,12 @@ export function partialMatch(expected: unknown, actual: unknown): boolean {
   // Handle different types
   if (typeof expected !== typeof actual) return false;
 
-  // Handle arrays - expected must be subset
+  // Handle arrays - expected elements must match corresponding actual elements
+  // This is a "prefix match" for partial testing: [a, b] matches [a, b, c]
+  // The length check ensures expected isn't longer than actual
   if (Array.isArray(expected) && Array.isArray(actual)) {
     if (expected.length > actual.length) return false;
+    // Each expected element at index i must match actual element at index i
     return expected.every((item, index) => partialMatch(item, actual[index]));
   }
 
