@@ -246,4 +246,12 @@ If you share this philosophy, welcome. Let's build great things.
 
 ---
 
+## Related Documents
+
+- [Maintainability Doctrine](./MAINTAINABILITY-DOCTRINE.md) — Engineering principles for long-term sustainability
+- [ADR Index](./adrs/ADR-INDEX.md) — Architectural decisions and their rationale
+- [When to Use ES](../docs-site/docs/event-sourcing/when-to-use-es/) — Guidance on choosing Event Sourcing
+
+---
+
 **Last Updated:** 2025-12-19

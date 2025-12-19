@@ -532,10 +532,10 @@ vsa validate --config vsa.yaml
 
 ## See Also
 
+- [Platform Philosophy](../PLATFORM-PHILOSOPHY.md) — What this platform IS and IS NOT
+- [Maintainability Doctrine](../MAINTAINABILITY-DOCTRINE.md) — Engineering principles for sustainability
 - [VSA Configuration Reference](../../vsa/examples/vsa.reference.yaml)
 - [Slice Metadata Reference](../../vsa/examples/slice.reference.yaml)
-- [VSA Core Refactor Plan](../../PROJECT-PLAN_20251106_vsa-core-hexagonal-refactor.md)
-- [Hexagonal VSA Architecture Plan](../../PROJECT-PLAN_20251106_hexagonal-vsa-architecture.md)
 
 ---
 
