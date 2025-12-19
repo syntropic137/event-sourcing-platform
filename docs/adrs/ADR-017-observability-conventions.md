@@ -1,6 +1,6 @@
 # ADR-017: Observability Conventions
 
-**Status:** 📋 Proposed  
+**Status:** ✅ Accepted  
 **Date:** 2025-12-19  
 **Decision Makers:** Platform Team  
 **Related:** ADR-005 (Hexagonal Architecture), Event Store Proto

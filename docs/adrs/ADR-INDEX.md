@@ -73,7 +73,7 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 | [ADR-014](./ADR-014-projection-checkpoint-architecture.md) | Projection Checkpoints | ✅ Accepted | Per-projection checkpoint tracking for reliable event processing |
 | [ADR-015](./ADR-015-es-test-kit-architecture.md) | ES Test Kit Architecture | 📋 Proposed | Reusable testing harness for ES applications |
 | [ADR-016](./ADR-016-projection-failure-handling.md) | Projection Failure Handling | 📋 Proposed | DLQ, retry policies, and error handling for projections |
-| [ADR-017](./ADR-017-observability-conventions.md) | Observability Conventions | 📋 Proposed | Tracing, metrics, and logging standards |
+| [ADR-017](./ADR-017-observability-conventions.md) | Observability Conventions | ✅ Accepted | Tracing, metrics, and logging standards |
 
 ---
 
