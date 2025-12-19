@@ -1,0 +1,9 @@
+{
+  "label": "When to Use Event Sourcing",
+  "position": 1,
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "description": "Guidance on when Event Sourcing is the right choice for your domain"
+  }
+}
