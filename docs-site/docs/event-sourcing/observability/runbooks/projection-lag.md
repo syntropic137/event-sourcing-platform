@@ -250,6 +250,6 @@ Key panels:
 
 ## Related
 
-- [Projection Failure Handling](../projections/failure-handling.md)
-- [Rebuilding Projections](../projections/rebuilding.md)
-- [Health Monitoring](../projections/health-monitoring.md)
+- [Projection Failure Handling](../../projections/failure-handling.md)
+- [Rebuilding Projections](../../projections/rebuilding.md)
+- [Health Monitoring](../../projections/health-monitoring.md)

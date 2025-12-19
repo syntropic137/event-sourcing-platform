@@ -1,6 +1,6 @@
 # Observability
 
-The observability module provides tracing, metrics, and structured logging for Event Sourcing applications. It follows conventions from [ADR-017](/docs/adrs/ADR-017-observability-conventions.md).
+The observability module provides tracing, metrics, and structured logging for Event Sourcing applications. It follows conventions from ADR-017 (Observability Conventions).
 
 ## Quick Start
 
