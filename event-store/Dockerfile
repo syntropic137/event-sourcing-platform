@@ -1,6 +1,6 @@
 # Multi-stage build for Event Store
 # Stage 1: Build the Rust binary
-FROM rust:1.82-slim as builder
+FROM rust:1.82-slim AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
