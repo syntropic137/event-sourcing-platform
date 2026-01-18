@@ -51,16 +51,18 @@ impl PatternMatcher {
 
     /// Get the file type
     pub fn get_file_type(&self, path: &Path) -> Option<FileType> {
-        if self.is_command(path) {
+        // Check more specific patterns first to avoid false matches
+        // e.g., "ExecuteCommandHandler" should match Handler, not Command
+        if self.is_handler(path) {
+            Some(FileType::Handler)
+        } else if self.is_query(path) {
+            Some(FileType::Query)
+        } else if self.is_command(path) {
             Some(FileType::Command)
         } else if self.is_integration_event(path) {
             Some(FileType::IntegrationEvent)
         } else if self.is_event(path) {
             Some(FileType::Event)
-        } else if self.is_handler(path) {
-            Some(FileType::Handler)
-        } else if self.is_query(path) {
-            Some(FileType::Query)
         } else if self.is_test(path) {
             Some(FileType::Test)
         } else {
@@ -82,7 +84,9 @@ impl PatternMatcher {
     }
 
     fn glob_to_regex(&self, pattern: &str) -> String {
-        pattern.replace(".", r"\.").replace("*", ".*").replace("?", ".")
+        // Anchor the regex to match the entire string (^ at start, $ at end)
+        // This prevents "*Command" from matching "ExecuteCommandHandler"
+        format!("^{}$", pattern.replace(".", r"\.").replace("*", ".*").replace("?", "."))
     }
 }
 
