@@ -37,7 +37,6 @@
       "matchUpdateTypes": [
         "patch"
       ],
-      "matchCurrentVersion": "!/^0/",
       "automerge": true,
       "automergeType": "pr",
       "automergeStrategy": "squash"
@@ -134,7 +133,7 @@
       "matchPackageNames": [
         "@types/node"
       ],
-      "allowedVersions": "20.x"
+      "allowedVersions": ">=20.0.0 <21.0.0"
     },
     {
       "description": "Auto-merge GitHub Actions patch updates",
