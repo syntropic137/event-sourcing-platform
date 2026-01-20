@@ -4,7 +4,6 @@
 
 version: 2
 updates: []
-
 # Version updates have been migrated to Renovate Bot for better:
 # - Dependency Dashboard (single issue vs many PRs)
 # - Auto-merge for security patches

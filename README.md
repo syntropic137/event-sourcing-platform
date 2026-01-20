@@ -2,9 +2,9 @@
 
 A comprehensive event sourcing platform that packages a robust event store with higher-level event sourcing abstractions. This platform provides reliable, robust, and flexible packages for implementing event sourcing in different applications, with progressive examples serving as living documentation.
 
-[![CI](https://github.com/NeuralEmpowerment/event-sourcing-platform/actions/workflows/test.yml/badge.svg)](https://github.com/NeuralEmpowerment/event-sourcing-platform/actions/workflows/test.yml)
+[![CI](https://github.com/NeuralEmpowerment/event-sourcing-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/NeuralEmpowerment/event-sourcing-platform/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/NeuralEmpowerment/event-sourcing-platform/actions/workflows/codeql.yml/badge.svg)](https://github.com/NeuralEmpowerment/event-sourcing-platform/actions/workflows/codeql.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ## 📋 Table of Contents
 
@@ -28,9 +28,9 @@ event-sourcing-platform/
 │   └── eventstore-bin/        # gRPC server binary
 ├── event-sourcing/        # Event sourcing SDKs and abstractions
 │   ├── rust/                  # Rust SDK (alpha)
-│   ├── typescript/            # TypeScript SDK (primary focus)
-│   └── python/                # Placeholder for future Python SDK
-├── vsa/                   # Vertical Slice Architecture Manager (in planning)
+│   ├── typescript/            # TypeScript SDK (stable)
+│   └── python/                # Python SDK (beta)
+├── vsa/                   # Vertical Slice Architecture Manager (beta)
 │   ├── vsa-core/             # Core Rust library
 │   ├── vsa-cli/              # CLI tool
 │   └── vsa-wasm/             # WASM bindings for Node.js
