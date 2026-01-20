@@ -113,8 +113,11 @@ jobs:
         run: make -C event-sourcing/rust qa-fast
 
   ts_sdk:
-    name: SDK (TypeScript) • qa + tests
+    name: SDK (TypeScript) • qa + tests (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 24]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -127,7 +130,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: ${{ matrix.node-version }}
           cache: pnpm
 
       - name: Setup protoc
@@ -206,7 +209,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: ${{ matrix.node-version }}
           cache: pnpm
 
       - name: Setup protoc
