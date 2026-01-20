@@ -51,16 +51,18 @@ impl PatternMatcher {
 
     /// Get the file type
     pub fn get_file_type(&self, path: &Path) -> Option<FileType> {
-        if self.is_command(path) {
+        // Check more specific patterns first to avoid false matches
+        // e.g., "ExecuteCommandHandler" should match Handler, not Command
+        if self.is_handler(path) {
+            Some(FileType::Handler)
+        } else if self.is_query(path) {
+            Some(FileType::Query)
+        } else if self.is_command(path) {
             Some(FileType::Command)
         } else if self.is_integration_event(path) {
             Some(FileType::IntegrationEvent)
         } else if self.is_event(path) {
             Some(FileType::Event)
-        } else if self.is_handler(path) {
-            Some(FileType::Handler)
-        } else if self.is_query(path) {
-            Some(FileType::Query)
         } else if self.is_test(path) {
             Some(FileType::Test)
         } else {
@@ -82,7 +84,9 @@ impl PatternMatcher {
     }
 
     fn glob_to_regex(&self, pattern: &str) -> String {
-        pattern.replace(".", r"\.").replace("*", ".*").replace("?", ".")
+        // Anchor the regex to match the entire string (^ at start, $ at end)
+        // This prevents "*Command" from matching "ExecuteCommandHandler"
+        format!("^{}$", pattern.replace(".", r"\.").replace("*", ".*").replace("?", "."))
     }
 }
 
@@ -188,5 +192,99 @@ mod tests {
         let slices_config = SlicesConfig::default();
         assert_eq!(slices_config.path, PathBuf::from("slices"));
         assert_eq!(slices_config.types.len(), 3);
+    }
+
+    /// Regression test for composite filename classification bug
+    ///
+    /// Before the fix, files like "ExecuteCommandHandler" would match both
+    /// *Command and *Handler patterns because the regex was not anchored.
+    /// Since get_file_type() checked is_command() first, these files were
+    /// incorrectly classified as Commands instead of Handlers.
+    ///
+    /// This test ensures that with anchored regex patterns, composite names
+    /// containing multiple keywords are classified by their suffix, not by
+    /// keywords appearing in the middle of the name.
+    #[test]
+    fn test_composite_file_names_regression() {
+        let matcher = create_matcher();
+
+        // Primary regression case: ExecuteCommandHandler should be Handler, not Command
+        assert_eq!(
+            matcher.get_file_type(&PathBuf::from("ExecuteCommandHandler.ts")),
+            Some(FileType::Handler),
+            "ExecuteCommandHandler should be classified as Handler (not Command)"
+        );
+
+        // Additional edge cases with multiple keywords
+        assert_eq!(
+            matcher.get_file_type(&PathBuf::from("CreateWorkspaceCommandHandler.ts")),
+            Some(FileType::Handler),
+            "CreateWorkspaceCommandHandler should be classified as Handler"
+        );
+
+        assert_eq!(
+            matcher.get_file_type(&PathBuf::from("ProcessEventHandler.ts")),
+            Some(FileType::Handler),
+            "ProcessEventHandler should be classified as Handler (not Event)"
+        );
+
+        assert_eq!(
+            matcher.get_file_type(&PathBuf::from("QueryCommandHandler.ts")),
+            Some(FileType::Handler),
+            "QueryCommandHandler should be classified as Handler"
+        );
+
+        // Verify that pure Commands/Events/Queries still work correctly
+        assert_eq!(
+            matcher.get_file_type(&PathBuf::from("ExecuteWorkspaceCommand.ts")),
+            Some(FileType::Command),
+            "ExecuteWorkspaceCommand should still be classified as Command"
+        );
+
+        assert_eq!(
+            matcher.get_file_type(&PathBuf::from("WorkspaceCreatedEvent.ts")),
+            Some(FileType::Event),
+            "WorkspaceCreatedEvent should still be classified as Event"
+        );
+
+        assert_eq!(
+            matcher.get_file_type(&PathBuf::from("GetWorkspaceQuery.ts")),
+            Some(FileType::Query),
+            "GetWorkspaceQuery should still be classified as Query"
+        );
+    }
+
+    /// Test that anchored regex patterns only match complete suffixes
+    #[test]
+    fn test_anchored_pattern_matching() {
+        let matcher = create_matcher();
+
+        // Pattern *Command should match files ENDING with Command
+        assert!(
+            matcher.is_command(&PathBuf::from("CreateCommand.ts")),
+            "*Command pattern should match CreateCommand.ts"
+        );
+
+        // But should NOT match files with Command in the middle
+        assert!(
+            !matcher.is_command(&PathBuf::from("CommandHandler.ts")),
+            "*Command pattern should NOT match CommandHandler.ts (Command is not at the end)"
+        );
+
+        assert!(
+            !matcher.is_command(&PathBuf::from("ExecuteCommandHandler.ts")),
+            "*Command pattern should NOT match ExecuteCommandHandler.ts"
+        );
+
+        // Same for Handler pattern
+        assert!(
+            matcher.is_handler(&PathBuf::from("CreateHandler.ts")),
+            "*Handler pattern should match CreateHandler.ts"
+        );
+
+        assert!(
+            !matcher.is_handler(&PathBuf::from("HandlerFactory.ts")),
+            "*Handler pattern should NOT match HandlerFactory.ts (Handler is not at the end)"
+        );
     }
 }
