@@ -1,169 +1,19 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:base",
-    "group:monorepos",
-    "group:recommended",
-    ":dependencyDashboard",
-    ":semanticCommits",
-    ":prConcurrentLimit10"
+    "config:recommended"
   ],
-  "description": "Renovate configuration for Event Sourcing Platform - Prioritizes security while minimizing PR noise",
-  "timezone": "America/Los_Angeles",
-  "schedule": [
-    "before 3am on monday"
-  ],
-  "prConcurrentLimit": 5,
-  "prCreation": "not-pending",
-  "labels": [
-    "dependencies"
-  ],
-  "assignees": [],
-  "reviewers": [],
-  "vulnerabilityAlerts": {
-    "enabled": true,
-    "labels": [
-      "security",
-      "high-priority"
-    ],
-    "automerge": true,
-    "schedule": [
-      "at any time"
-    ]
-  },
+  "dependencyDashboard": true,
   "packageRules": [
     {
-      "description": "Auto-merge patch updates for stable dependencies (security + bug fixes)",
-      "matchUpdateTypes": [
-        "patch"
-      ],
-      "automerge": true,
-      "automergeType": "pr",
-      "automergeStrategy": "squash"
-    },
-    {
-      "description": "Group minor updates for monthly review",
-      "matchUpdateTypes": [
-        "minor"
-      ],
-      "groupName": "Minor dependency updates",
-      "schedule": [
-        "before 3am on first day of month"
-      ]
-    },
-    {
-      "description": "Major updates require manual approval from dashboard",
-      "matchUpdateTypes": [
-        "major"
-      ],
-      "dependencyDashboardApproval": true,
-      "labels": [
-        "major-update",
-        "breaking-change"
-      ]
-    },
-    {
-      "description": "Block ts-proto v2 per ADR-011 - Retain v1.x",
-      "matchPackageNames": [
-        "ts-proto"
-      ],
-      "allowedVersions": "<2.0.0",
-      "enabled": false
-    },
-    {
-      "description": "Block protobufjs v8 until evaluated (potential breaking changes)",
-      "matchPackageNames": [
-        "protobufjs"
-      ],
-      "allowedVersions": "<8.0.0"
-    },
-    {
-      "description": "Group TypeScript ecosystem updates",
-      "groupName": "TypeScript ecosystem",
-      "matchPackagePatterns": [
-        "^typescript$",
-        "^@types/"
-      ]
-    },
-    {
-      "description": "Group gRPC ecosystem updates",
-      "groupName": "gRPC ecosystem",
-      "matchPackagePatterns": [
-        "^@grpc/",
-        "^protobufjs$",
-        "^long$"
-      ]
-    },
-    {
-      "description": "Group React ecosystem updates (docs site)",
-      "groupName": "React ecosystem",
-      "matchPackagePatterns": [
-        "^react",
-        "^@docusaurus/"
-      ]
-    },
-    {
-      "description": "Group ESLint ecosystem updates",
-      "groupName": "ESLint ecosystem",
-      "matchPackagePatterns": [
-        "^eslint",
-        "^@typescript-eslint/"
-      ]
-    },
-    {
-      "description": "Group testing framework updates",
-      "groupName": "Testing frameworks",
-      "matchPackagePatterns": [
-        "^jest",
-        "^@types/jest",
-        "^ts-jest"
-      ]
-    },
-    {
-      "description": "Group build tools",
-      "groupName": "Build tools",
-      "matchPackagePatterns": [
-        "^turbo$",
-        "^rimraf$",
-        "^tsx$"
-      ]
-    },
-    {
-      "description": "Pin Node.js types to LTS version (20.x) across all packages",
-      "matchPackageNames": [
-        "@types/node"
-      ],
-      "allowedVersions": ">=20.0.0 <21.0.0"
-    },
-    {
-      "description": "Auto-merge GitHub Actions patch updates",
-      "matchManagers": [
-        "github-actions"
-      ],
-      "matchUpdateTypes": [
-        "patch"
-      ],
-      "automerge": true
-    },
-    {
-      "description": "Require approval for GitHub Actions major updates",
-      "matchManagers": [
-        "github-actions"
-      ],
-      "matchUpdateTypes": [
-        "major"
-      ],
+      "description": "Require approval for major updates",
+      "matchUpdateTypes": ["major"],
       "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Block ts-proto v2 per ADR-011",
+      "matchPackageNames": ["ts-proto"],
+      "allowedVersions": "<2.0.0"
     }
-  ],
-  "ignoreDeps": [],
-  "ignorePresets": [],
-  "prBodyTemplate": "{{{header}}}{{{table}}}{{{notes}}}{{{changelogs}}}{{{configDescription}}}{{{controls}}}{{{footer}}}",
-  "prTitle": "{{{semanticPrefix}}}{{#if isPin}}Pin{{else}}Update{{/if}} dependency {{depName}} to {{#if isPinDigest}}{{{newDigestShort}}}{{else}}{{#if isMajor}}{{prettyNewMajor}}{{else}}{{#if isSingleVersion}}{{prettyNewVersion}}{{else}}{{newValue}}{{/if}}{{/if}}{{/if}}",
-  "commitMessagePrefix": "chore(deps):",
-  "commitMessageAction": "update",
-  "commitMessageTopic": "{{depName}}",
-  "commitMessageExtra": "to {{#if isPinDigest}}{{{newDigestShort}}}{{else}}{{#if isMajor}}{{prettyNewMajor}}{{else}}{{#if isSingleVersion}}{{prettyNewVersion}}{{else}}{{newValue}}{{/if}}{{/if}}{{/if}}",
-  "commitMessageSuffix": ""
+  ]
 }
-
