@@ -1,7 +1,7 @@
 # Architecture Decision Records - Index
 
 **Status:** 📘 Master Reference
-**Last Updated:** 2025-12-19
+**Last Updated:** 2026-01-20
 
 This document provides a comprehensive overview of all architectural decisions for the **Hexagonal Event-Sourced Vertical Slice Architecture** pattern.
 
@@ -74,6 +74,7 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 | [ADR-015](./ADR-015-es-test-kit-architecture.md) | ES Test Kit Architecture | 📋 Proposed | Reusable testing harness for ES applications |
 | [ADR-016](./ADR-016-projection-failure-handling.md) | Projection Failure Handling | 📋 Proposed | DLQ, retry policies, and error handling for projections |
 | [ADR-017](./ADR-017-observability-conventions.md) | Observability Conventions | ✅ Accepted | Tracing, metrics, and logging standards |
+| [ADR-018](./ADR-018-renovate-bot-adoption.md) | Renovate Bot Adoption | 📋 Proposed | Migration from Dependabot to Renovate for dependency management |
 
 ---
 
