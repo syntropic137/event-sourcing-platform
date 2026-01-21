@@ -4,6 +4,10 @@
     "config:recommended"
   ],
   "dependencyDashboard": true,
+  "schedule": ["before 6am on monday"],
+  "timezone": "America/Los_Angeles",
+  "prConcurrentLimit": 3,
+  "prHourlyLimit": 2,
   "packageRules": [
     {
       "description": "Require approval for major updates",
@@ -14,6 +18,29 @@
       "description": "Block ts-proto v2 per ADR-011",
       "matchPackageNames": ["ts-proto"],
       "allowedVersions": "<2.0.0"
+    },
+    {
+      "description": "Group all non-major Rust dependencies",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "rust dependencies (non-major)"
+    },
+    {
+      "description": "Group all non-major npm dependencies",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "npm dependencies (non-major)"
+    },
+    {
+      "description": "Group TypeScript type definitions",
+      "matchPackagePatterns": ["^@types/"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "typescript type definitions"
+    },
+    {
+      "description": "Prevent downgrades",
+      "matchUpdateTypes": ["rollback"],
+      "enabled": false
     }
   ]
 }
