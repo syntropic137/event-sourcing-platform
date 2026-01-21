@@ -5,7 +5,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use vsa_core::{Manifest, VsaConfig};
 
-pub fn run(config_path: &Path, output: Option<PathBuf>, format: String) -> Result<()> {
+pub fn run(
+    config_path: &Path,
+    output: Option<PathBuf>,
+    format: String,
+    include_domain: bool,
+) -> Result<()> {
     println!("📝 Generating manifest...");
 
     // Load configuration
@@ -13,8 +18,8 @@ pub fn run(config_path: &Path, output: Option<PathBuf>, format: String) -> Resul
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
     let root = config.resolve_root(config_dir);
 
-    // Generate manifest
-    let manifest = Manifest::generate(&config, root)?;
+    // Generate manifest with optional domain model
+    let manifest = Manifest::generate_with_options(&config, root, include_domain)?;
 
     // Serialize based on format
     let content = match format.as_str() {

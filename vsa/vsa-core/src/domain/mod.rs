@@ -22,10 +22,11 @@ pub use projection::Projection;
 pub use query::{Query, QueryField};
 pub use upcaster::Upcaster;
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Complete domain model containing all domain components
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DomainModel {
     pub aggregates: Vec<Aggregate>,
     pub commands: Vec<Command>,

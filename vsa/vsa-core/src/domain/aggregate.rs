@@ -1,9 +1,10 @@
 //! Aggregate metadata
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Metadata for a domain aggregate
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Aggregate {
     /// Name of the aggregate (e.g., "TaskAggregate", "CartAggregate")
     pub name: String,
@@ -39,7 +40,7 @@ impl Aggregate {
 }
 
 /// Metadata for a command handler method
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CommandHandler {
     /// Command type this handler processes (e.g., "CreateTaskCommand")
     pub command_type: String,
@@ -49,10 +50,14 @@ pub struct CommandHandler {
 
     /// Line number in the file
     pub line_number: usize,
+
+    /// Events emitted by this command handler
+    #[serde(default)]
+    pub emits_events: Vec<String>,
 }
 
 /// Metadata for an event sourcing handler method
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventHandler {
     /// Event type this handler processes (e.g., "TaskCreatedEvent")
     pub event_type: String,
@@ -78,11 +83,13 @@ mod tests {
                     command_type: "CreateTaskCommand".to_string(),
                     method_name: "handle".to_string(),
                     line_number: 25,
+                    emits_events: vec!["TaskCreatedEvent".to_string()],
                 },
                 CommandHandler {
                     command_type: "CompleteTaskCommand".to_string(),
                     method_name: "handle".to_string(),
                     line_number: 45,
+                    emits_events: vec!["TaskCompletedEvent".to_string()],
                 },
             ],
             event_handlers: vec![
