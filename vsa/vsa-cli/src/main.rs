@@ -100,6 +100,10 @@ enum Commands {
         /// Output format (json, yaml)
         #[arg(short, long, default_value = "json")]
         format: String,
+
+        /// Include domain model (aggregates, commands, events, relationships)
+        #[arg(long)]
+        include_domain: bool,
     },
 }
 
@@ -125,7 +129,9 @@ fn main() {
             list::run(&cli.config, contexts_only, context, format)
         }
 
-        Commands::Manifest { output, format } => manifest::run(&cli.config, output, format),
+        Commands::Manifest { output, format, include_domain } => {
+            manifest::run(&cli.config, output, format, include_domain)
+        }
     };
 
     if let Err(e) = result {

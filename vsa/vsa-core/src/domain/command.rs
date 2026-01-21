@@ -1,9 +1,10 @@
 //! Command metadata
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Metadata for a domain command
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Command {
     /// Name of the command (e.g., "CreateTaskCommand")
     pub name: String,
@@ -36,7 +37,7 @@ impl Command {
 }
 
 /// Metadata for a command field
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CommandField {
     /// Field name
     pub name: String,

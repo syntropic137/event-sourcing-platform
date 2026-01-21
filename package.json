@@ -5,7 +5,8 @@
   "workspaces": [
     "event-store/sdks/sdk-ts",
     "event-sourcing/typescript",
-    "examples/*-ts"
+    "examples/*-ts",
+    "vsa/vsa-visualizer"
   ],
   "scripts": {
     "build": "turbo run build --filter='!docs-site'",

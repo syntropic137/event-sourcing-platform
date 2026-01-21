@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### VSA Visualizer v0.1.0 - Architecture Documentation Generator ✨
+
+**New TypeScript Tool (`vsa-visualizer/`)**
+- Automatic architecture documentation generation from VSA manifests
+- C4 diagrams (Context, Container, Component levels)
+- Aggregate detail pages with sequence diagrams
+- Cross-aggregate flow detection and visualization
+- Mermaid diagram output (version-controllable)
+- 91 comprehensive tests with 95% coverage
+- Full CLI with stdin/file support
+
+**Features:**
+- `OverviewGenerator` - System overview with C4 diagrams
+- `AggregateGenerator` - Detailed aggregate documentation
+- `FlowsGenerator` - Cross-aggregate flow visualization
+- Manifest parser with validation
+- Integration tests for all example projects
+
+**Usage:**
+```bash
+vsa manifest --include-domain | vsa-visualizer --output ./docs/architecture
+```
+
+**Manifest Schema Changes:**
+- Added `--include-domain` flag to `vsa manifest` command
+- Manifest status messages now output to stderr for clean piping
+- Domain model included in manifest with relationships
+
+**Makefile Targets:**
+- `make visualizer-install` - Install dependencies
+- `make visualizer-build` - Build TypeScript
+- `make visualizer-test` - Run tests
+- `make test-integration-visualizer` - Integration test with vsa-cli
+
 ## [0.1.0] - 2025-11-05
 
 ### Added

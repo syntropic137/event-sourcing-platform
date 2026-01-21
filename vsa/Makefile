@@ -57,3 +57,28 @@ vsa-validate: ## Validate VSA structure
 vsa-list: ## List contexts and features
 	cargo run --bin vsa -- list
 
+
+# VSA Visualizer targets
+visualizer-install: ## Install visualizer dependencies
+	cd vsa-visualizer && npm install
+
+visualizer-build: ## Build visualizer
+	cd vsa-visualizer && npm run build
+
+visualizer-test: ## Run visualizer tests
+	cd vsa-visualizer && npm test
+
+visualizer-check: ## Run all visualizer QA checks
+	cd vsa-visualizer && npm run check-fix
+
+visualizer-clean: ## Clean visualizer build
+	cd vsa-visualizer && rm -rf node_modules dist
+
+# Integration testing
+test-integration-visualizer: release ## Test visualizer with vsa-cli
+	@echo "Testing visualizer integration with 002-simple-aggregate-ts..."
+	cd ../examples/002-simple-aggregate-ts && \
+		rm -rf docs/architecture && \
+		../../vsa/target/release/vsa manifest --include-domain | \
+		node ../../vsa/vsa-visualizer/dist/index.js --output ./docs/architecture
+	@echo "✅ Integration test passed!"

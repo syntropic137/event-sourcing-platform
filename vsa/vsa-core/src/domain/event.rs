@@ -1,9 +1,10 @@
 //! Event metadata
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Metadata for a domain event
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     /// Name of the event class (e.g., "TaskCreatedEvent")
     pub name: String,
@@ -50,7 +51,7 @@ impl Event {
 }
 
 /// Event version representation
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum EventVersion {
     /// Simple version format (e.g., "v1", "v2")
     Simple(String),
@@ -103,7 +104,7 @@ impl std::fmt::Display for EventVersion {
 }
 
 /// Metadata for an event field
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventField {
     /// Field name
     pub name: String,
