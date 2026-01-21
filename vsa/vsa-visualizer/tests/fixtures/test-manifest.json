@@ -1,0 +1,155 @@
+{
+  "version": "0.6.1-beta",
+  "schema_version": "1.0.0",
+  "generated_at": "2026-01-21T00:00:00Z",
+  "domain": {
+    "aggregates": [
+      {
+        "name": "CartAggregate",
+        "file_path": "src/domain/cart/CartAggregate.ts",
+        "line_count": 150,
+        "command_handlers": [
+          {
+            "command_type": "CreateCart",
+            "method_name": "handleCreateCart",
+            "line_number": 20,
+            "emits_events": ["CartCreated"]
+          },
+          {
+            "command_type": "AddItemToCart",
+            "method_name": "handleAddItem",
+            "line_number": 35,
+            "emits_events": ["ItemAddedToCart"]
+          }
+        ],
+        "event_handlers": [
+          {
+            "event_type": "CartCreated",
+            "method_name": "onCartCreated",
+            "line_number": 60
+          },
+          {
+            "event_type": "ItemAddedToCart",
+            "method_name": "onItemAdded",
+            "line_number": 70
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "name": "CreateCart",
+        "file_path": "src/domain/cart/commands/CreateCart.ts",
+        "target_aggregate": "CartAggregate",
+        "has_aggregate_id": true,
+        "fields": [
+          {
+            "name": "cartId",
+            "field_type": "string",
+            "required": true,
+            "line_number": 5
+          },
+          {
+            "name": "userId",
+            "field_type": "string",
+            "required": true,
+            "line_number": 6
+          }
+        ]
+      },
+      {
+        "name": "AddItemToCart",
+        "file_path": "src/domain/cart/commands/AddItemToCart.ts",
+        "target_aggregate": "CartAggregate",
+        "has_aggregate_id": true,
+        "fields": [
+          {
+            "name": "cartId",
+            "field_type": "string",
+            "required": true,
+            "line_number": 5
+          },
+          {
+            "name": "productId",
+            "field_type": "string",
+            "required": true,
+            "line_number": 6
+          },
+          {
+            "name": "quantity",
+            "field_type": "number",
+            "required": true,
+            "line_number": 7
+          }
+        ]
+      }
+    ],
+    "events": [
+      {
+        "name": "CartCreated",
+        "event_type": "cart.created",
+        "version": "1.0.0",
+        "file_path": "src/domain/cart/events/CartCreated.ts",
+        "emitted_by": ["CartAggregate"],
+        "handled_by": ["CartAggregate"],
+        "fields": [
+          {
+            "name": "cartId",
+            "field_type": "string",
+            "required": true,
+            "line_number": 8
+          },
+          {
+            "name": "userId",
+            "field_type": "string",
+            "required": true,
+            "line_number": 9
+          }
+        ],
+        "decorator_present": true
+      },
+      {
+        "name": "ItemAddedToCart",
+        "event_type": "cart.item.added",
+        "version": "1.0.0",
+        "file_path": "src/domain/cart/events/ItemAddedToCart.ts",
+        "emitted_by": ["CartAggregate"],
+        "handled_by": ["CartAggregate"],
+        "fields": [
+          {
+            "name": "cartId",
+            "field_type": "string",
+            "required": true,
+            "line_number": 8
+          },
+          {
+            "name": "productId",
+            "field_type": "string",
+            "required": true,
+            "line_number": 9
+          },
+          {
+            "name": "quantity",
+            "field_type": "number",
+            "required": true,
+            "line_number": 10
+          }
+        ],
+        "decorator_present": true
+      }
+    ],
+    "relationships": {
+      "command_to_aggregate": {
+        "CreateCart": "CartAggregate",
+        "AddItemToCart": "CartAggregate"
+      },
+      "aggregate_to_events": {
+        "CartAggregate": ["CartCreated", "ItemAddedToCart"]
+      },
+      "event_to_handlers": {
+        "CartCreated": ["CartAggregate"],
+        "ItemAddedToCart": ["CartAggregate"]
+      }
+    }
+  }
+}

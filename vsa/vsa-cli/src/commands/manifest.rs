@@ -11,7 +11,8 @@ pub fn run(
     format: String,
     include_domain: bool,
 ) -> Result<()> {
-    println!("📝 Generating manifest...");
+    // Output status to stderr so it doesn't interfere with piping JSON
+    eprintln!("📝 Generating manifest...");
 
     // Load configuration
     let config = VsaConfig::from_file(config_path)?;
@@ -31,7 +32,7 @@ pub fn run(
     // Output
     if let Some(output_path) = output {
         fs::write(&output_path, &content)?;
-        println!("✅ Manifest written to: {}", output_path.display());
+        eprintln!("✅ Manifest written to: {}", output_path.display());
     } else {
         println!("{content}");
     }
