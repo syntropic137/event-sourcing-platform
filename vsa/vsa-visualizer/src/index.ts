@@ -6,7 +6,8 @@ import * as path from 'path';
 import { parseManifest, hasDomainData } from './manifest/parser';
 import { ManifestValidationError } from './types/manifest';
 import { OverviewGenerator } from './generators/overview-generator';
-import { writeFile, ensureDirectoryExists } from './utils/file-writer';
+import { AggregateGenerator } from './generators/aggregate-generator';
+import { writeFile, writeFiles, ensureDirectoryExists } from './utils/file-writer';
 
 const program = new Command();
 
@@ -71,6 +72,11 @@ program
         console.log(`[vsa-visualizer] Found ${manifest.domain!.events.length} events`);
       }
 
+      // Ensure output directory exists
+      ensureDirectoryExists(options.output);
+
+      const generatedFiles: string[] = [];
+
       // Generate Overview
       if (options.verbose) {
         console.log('[vsa-visualizer] Generating overview...');
@@ -78,13 +84,19 @@ program
 
       const overviewGenerator = new OverviewGenerator(manifest);
       const overviewContent = overviewGenerator.generate();
-
-      // Ensure output directory exists
-      ensureDirectoryExists(options.output);
-
-      // Write OVERVIEW.md
       const overviewPath = path.join(options.output, 'OVERVIEW.md');
       writeFile(overviewPath, overviewContent);
+      generatedFiles.push(overviewPath);
+
+      // Generate Aggregate pages
+      if (options.verbose) {
+        console.log('[vsa-visualizer] Generating aggregate documentation...');
+      }
+
+      const aggregateGenerator = new AggregateGenerator(manifest);
+      const aggregatePages = aggregateGenerator.generateAll();
+      const aggregatePaths = writeFiles(aggregatePages, options.output);
+      generatedFiles.push(...aggregatePaths);
 
       // Summary
       console.log('\n✅ Documentation generated successfully!');
@@ -102,9 +114,11 @@ program
       }
 
       console.log('\n📝 Generated files:');
-      console.log(`   - ${overviewPath}`);
+      for (const filePath of generatedFiles) {
+        console.log(`   - ${filePath}`);
+      }
 
-      console.log('\n⚠️  Note: Aggregate and Flow diagrams not yet implemented (Milestone 4-5)');
+      console.log('\n⚠️  Note: Flow diagrams not yet implemented (Milestone 5)');
     } catch (error) {
       if (error instanceof ManifestValidationError) {
         console.error(`\nValidation Error: ${error.message}`);
