@@ -152,28 +152,20 @@ make help
 
 ## 📚 Examples
 
-All examples are implemented in TypeScript today. They default to the gRPC event store provided by `dev-tools`; append `-- --memory` to run against the in-memory client.
+All examples are implemented in TypeScript. They default to the gRPC event store provided by `dev-tools`; append `-- --memory` to run against the in-memory client.
 
-| Example | Status | Highlights |
-| ------- | ------ | ---------- |
-| 001-basic-store-ts | ✅ Ready | Append/read streams, optimistic concurrency basics |
-| 002-simple-aggregate-ts | ✅ Ready | Aggregate decorators, repository pattern |
-| 003-multiple-aggregates-ts | ✅ Ready | Aggregate collaboration and sequencing |
-| 004-cqrs-patterns-ts | ✅ Ready | Separate write/read models with projections |
-| 005-projections-ts | ✅ Ready | Analytics projections and reporting views |
-| 006-event-bus-ts | ✅ Ready | Event-driven interactions across bounded contexts |
-| 007-ecommerce-complete-ts | 🚧 Placeholder | Wiring for future full e-commerce workflow |
-| 007-inventory-complete-ts | ✅ Ready | Inventory lifecycle with projections and alerts |
-| 008-observability-ts | ✅ Ready | Operational metrics and health instrumentation |
-| 008-banking-complete-ts | 🚧 Placeholder | Scaffold for banking domain (commands TBD) |
-| 009-web-dashboard-ts | ✅ Ready | Express-based dashboard consuming projections |
+| Example | Status | Highlights | Link |
+| ------- | ------ | ---------- | ---- |
+| 002-simple-aggregate-ts | ✅ Ready | Aggregate decorators, repository pattern | [README](examples/002-simple-aggregate-ts/README.md) |
+| 004-cqrs-patterns-ts | ✅ Ready | Separate write/read models with projections | [README](examples/004-cqrs-patterns-ts/README.md) |
+| 007-ecommerce-complete-ts | 🚧 In Progress | Full e-commerce workflow implementation | [README](examples/007-ecommerce-complete-ts/README.md) |
 
 Run an example with:
 
 ```bash
-make examples-001           # replace with desired example number
+make examples-002           # replace with desired example number
 # or directly with pnpm:
-pnpm --filter ./examples/001-basic-store-ts run start -- --memory
+pnpm --filter ./examples/002-simple-aggregate-ts run start -- --memory
 ```
 
 ## 🛠️ Development
@@ -298,17 +290,16 @@ We welcome contributions! Please see our contributing guidelines and code of con
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the Apache License 2.0 - see the LICENSE file for details.
 
 ## 🏷️ Status
 
 - ✅ **Event Store (Rust)** – Memory and Postgres backends with a production-ready gRPC surface.
 - ✅ **TypeScript SDK** – Drives all current examples; adding richer patterns iteratively.
 - 🔄 **Rust SDK** – Early alpha; core abstractions present, feature parity in progress.
-- 📋 **Python SDK** – Placeholder directory waiting for implementation.
-- 🔄 **VSA Tool** – Vertical Slice Architecture Manager in planning phase. See [vsa/README.md](vsa/README.md) for details.
-- ✅ **Examples** – TypeScript examples 001–006, 007 inventory, 008 observability, and 009 dashboard are runnable today.
-- 🚧 **Examples (future)** – 007 e-commerce and 008 banking are scaffolds awaiting domain logic.
+- 🔄 **Python SDK** – Beta. Core abstractions, repository pattern, projections, and gRPC integration implemented.
+- 🔄 **VSA Tool** – Beta. Core library, CLI, WASM bindings, and VSCode extension for vertical slice architecture management. See [vsa/README.md](vsa/README.md) for details.
+- ✅ **Examples** – TypeScript examples 002 (simple aggregate), 004 (CQRS patterns) are ready. Example 007 (e-commerce) is in progress.
 - 🚧 **Infra-as-code & docs-site** – Module scaffolding exists; provider-specific stacks and walkthroughs are being built.
 
 ## 📚 Inspiration & References
