@@ -19,7 +19,7 @@ pub struct Manifest {
     pub version: String,
     pub schema_version: String,
     pub generated_at: String,
-    pub contexts: Vec<ContextManifest>,
+    pub bounded_contexts: Vec<ContextManifest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain: Option<DomainManifest>,
 }
@@ -115,7 +115,7 @@ impl Manifest {
             version: crate::VERSION.to_string(),
             schema_version: MANIFEST_SCHEMA_VERSION.to_string(),
             generated_at: chrono::Utc::now().to_rfc3339(),
-            contexts: context_manifests,
+            bounded_contexts: context_manifests,
             domain,
         })
     }
@@ -197,7 +197,7 @@ mod tests {
             version: "0.1.0".to_string(),
             schema_version: MANIFEST_SCHEMA_VERSION.to_string(),
             generated_at: "2025-11-05T00:00:00Z".to_string(),
-            contexts: vec![ContextManifest {
+            bounded_contexts: vec![ContextManifest {
                 name: "warehouse".to_string(),
                 path: "/path/to/warehouse".to_string(),
                 features: vec![FeatureManifest {
