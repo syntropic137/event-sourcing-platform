@@ -44,7 +44,19 @@ Rust-based CLI tool for:
 - **Manifest Generation** - Document your architecture
 - **Watch Mode** - Real-time validation on file changes
 
-### 2. VS Code Extension (`vscode-extension/`)
+### 2. VSA Visualizer (`vsa-visualizer/`) ✨ **NEW**
+TypeScript tool for automatic architecture documentation:
+- **C4 Diagrams** - System context, containers, and components
+- **Event Flows** - Visualize cross-aggregate flows and sagas
+- **Aggregate Details** - Command/event documentation with sequence diagrams
+- **Mermaid Output** - Beautiful, version-controllable diagrams
+
+```bash
+# Generate architecture documentation
+vsa manifest --include-domain | vsa-visualizer --output ./docs/architecture
+```
+
+### 3. VS Code Extension (`vscode-extension/`)
 IDE integration with:
 - **Real-time Validation** - Errors and warnings inline
 - **Quick Fixes** - Create missing files, rename to follow conventions
