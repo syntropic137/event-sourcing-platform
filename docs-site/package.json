@@ -30,7 +30,7 @@
     "@docusaurus/module-type-aliases": "3.9.2",
     "@docusaurus/tsconfig": "3.9.2",
     "@docusaurus/types": "3.9.2",
-    "@types/node": "^24.10.1",
+    "@types/node": "^24.10.9",
     "tsx": "^4.21.0",
     "typescript": "~5.9.3"
   },
@@ -47,6 +47,6 @@
     ]
   },
   "engines": {
-    "node": ">=18.0"
+    "node": ">=20.0"
   }
 }
