@@ -89,12 +89,19 @@ export interface Relationships {
   event_to_handlers: Record<string, string[]>;
 }
 
+/**
+ * Bounded Context with features/slices
+ */
 export interface BoundedContext {
   name: string;
-  description?: string;
-  aggregates: string[];
-  publishes: string[];
-  subscribes: string[];
+  path: string;
+  features: Feature[];
+}
+
+export interface Feature {
+  name: string;
+  path: string;
+  files: string[];
 }
 
 /**
