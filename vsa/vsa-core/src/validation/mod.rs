@@ -5,6 +5,7 @@ mod integration_event_rules;
 mod isolation_rules;
 mod query_slice_rules;
 mod rules;
+mod slice_location_rules;
 mod suggestions;
 
 pub use bounded_context_rules::{
@@ -18,6 +19,7 @@ pub use query_slice_rules::{
     ProjectionEventSubscriptionRule, RequireHandlerForQueryRule, RequireProjectionForQueryRule,
 };
 pub use rules::{ValidationRule, ValidationRuleSet};
+pub use slice_location_rules::RequireSliceLocationRule;
 pub use suggestions::{Suggestion, SuggestionAction};
 
 use crate::config::VsaConfig;
