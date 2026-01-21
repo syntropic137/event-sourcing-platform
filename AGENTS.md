@@ -133,11 +133,18 @@ Types:
 - `test`: Test changes
 - `chore`: Maintenance
 
-### Files to Exclude
+### Files to NEVER Commit (Scratch Pads)
+- **PROJECT-PLAN_*.md** - Planning documents (gitignored)
+- **DEPENDENCY-AUDIT.md** - Analysis scratch pads
+- **BACKWARDS-COMPATIBILITY-*.md** - Analysis documents
+- ***-ANALYSIS.md** - Any analysis documents
+- **PLAN-SUMMARY.md** - Planning summaries
 - Temporary files
-- Draft project plans
 - Build artifacts
 - Cache files
+
+**Rule:** Only commit official documentation that belongs in the repository permanently.
+Scratch pads and planning documents stay local only!
 
 ## Critical Guidelines
 - Never transition between modes without explicit permission

@@ -27,7 +27,7 @@
     "@neuralempowerment/event-sourcing-typescript": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^24.10.9",
     "typescript": "^5.0.0",
     "ts-node": "^10.9.0",
     "rimraf": "^6.1.2"
