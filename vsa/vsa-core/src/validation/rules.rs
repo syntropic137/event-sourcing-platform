@@ -38,7 +38,8 @@ impl ValidationRuleSet {
             ContextBoundariesRule, IntegrationEventNamingRule, IntegrationEventsLocationRule,
             NoCircularDependenciesRule, NoCrossSliceImportsRule, NoDuplicateIntegrationEventsRule,
             ProjectionEventSubscriptionRule, RequireHandlerForQueryRule,
-            RequireProjectionForQueryRule, RequireSharedFolderRule, ThinAdapterRule,
+            RequireProjectionForQueryRule, RequireSharedFolderRule, RequireSliceLocationRule,
+            ThinAdapterRule,
         };
 
         let rules: Vec<Box<dyn ValidationRule>> = vec![
@@ -61,6 +62,8 @@ impl ValidationRuleSet {
             Box::new(RequireProjectionForQueryRule),
             Box::new(RequireHandlerForQueryRule),
             Box::new(ProjectionEventSubscriptionRule),
+            // Slice location rules
+            Box::new(RequireSliceLocationRule),
             // Slice isolation rules
             Box::new(NoCrossSliceImportsRule),
             Box::new(ThinAdapterRule),

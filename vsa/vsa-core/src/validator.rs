@@ -6,11 +6,13 @@ use crate::config::VsaConfig;
 use crate::error::Result;
 use crate::patterns::PatternMatcher;
 use crate::scanner::{ContextInfo, FeatureInfo, Scanner};
+use crate::validation::{EnhancedValidationReport, ValidationContext, ValidationRuleSet};
 
 /// Validator for VSA structure
 #[derive(Debug)]
 pub struct Validator {
     config: VsaConfig,
+    root: PathBuf,
     scanner: Scanner,
     pattern_matcher: PatternMatcher,
 }
@@ -21,16 +23,16 @@ impl Validator {
         let extension = config.file_extension().to_string();
         let patterns = config.patterns.clone();
         let pattern_matcher = PatternMatcher::new(patterns, extension);
-        let scanner = Scanner::new(config.clone(), root);
+        let scanner = Scanner::new(config.clone(), root.clone());
 
-        Self { config, scanner, pattern_matcher }
+        Self { config, root, scanner, pattern_matcher }
     }
 
     /// Validate the entire structure
     pub fn validate(&self) -> Result<ValidationReport> {
         let mut report = ValidationReport::default();
 
-        // Scan contexts
+        // Scan contexts (legacy validation)
         let contexts = self.scanner.scan_contexts()?;
 
         for context in &contexts {
@@ -39,6 +41,24 @@ impl Validator {
                     .errors
                     .push(ValidationError { path: context.path.clone(), message: e.to_string() });
             }
+        }
+
+        // Run enhanced validation rules
+        let rule_set = ValidationRuleSet::default_rules();
+        let ctx = ValidationContext::new(self.config.clone(), self.root.clone());
+        let mut enhanced_report = EnhancedValidationReport::default();
+
+        rule_set.validate_all(&ctx, &mut enhanced_report)?;
+
+        // Merge enhanced validation results into legacy report
+        for error in enhanced_report.errors {
+            report.errors.push(ValidationError { path: error.path, message: error.message });
+        }
+
+        for warning in enhanced_report.warnings {
+            report
+                .warnings
+                .push(ValidationWarning { path: warning.path, message: warning.message });
         }
 
         Ok(report)
