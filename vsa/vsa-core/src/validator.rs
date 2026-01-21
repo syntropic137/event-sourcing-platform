@@ -52,17 +52,13 @@ impl Validator {
 
         // Merge enhanced validation results into legacy report
         for error in enhanced_report.errors {
-            report.errors.push(ValidationError {
-                path: error.path,
-                message: error.message,
-            });
+            report.errors.push(ValidationError { path: error.path, message: error.message });
         }
 
         for warning in enhanced_report.warnings {
-            report.warnings.push(ValidationWarning {
-                path: warning.path,
-                message: warning.message,
-            });
+            report
+                .warnings
+                .push(ValidationWarning { path: warning.path, message: warning.message });
         }
 
         Ok(report)
