@@ -214,7 +214,7 @@ importers:
         version: 24.10.9
       '@types/vscode':
         specifier: ^1.80.0
-        version: 1.105.0
+        version: 1.108.1
       '@typescript-eslint/eslint-plugin':
         specifier: ^6.0.0
         version: 6.21.0(@typescript-eslint/parser@6.21.0(eslint@9.39.2(jiti@1.21.7))(typescript@5.6.3))(eslint@9.39.2(jiti@1.21.7))(typescript@5.6.3)
@@ -2502,8 +2502,8 @@ packages:
   '@types/uuid@9.0.8':
     resolution: {integrity: sha512-jg+97EGIcY9AGHJJRaaPVgetKDsrTgbRjQ5Msgjh/DQKEFl0DtyRr/VCOyD1T2R1MNeWPK/u7JoGhlDZnKBAfA==}
 
-  '@types/vscode@1.105.0':
-    resolution: {integrity: sha512-Lotk3CTFlGZN8ray4VxJE7axIyLZZETQJVWi/lYoUVQuqfRxlQhVOfoejsD2V3dVXPSbS15ov5ZyowMAzgUqcw==}
+  '@types/vscode@1.108.1':
+    resolution: {integrity: sha512-DerV0BbSzt87TbrqmZ7lRDIYaMiqvP8tmJTzW2p49ZBVtGUnGAu2RGQd1Wv4XMzEVUpaHbsemVM5nfuQJj7H6w==}
 
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
@@ -10882,7 +10882,7 @@ snapshots:
 
   '@types/uuid@9.0.8': {}
 
-  '@types/vscode@1.105.0': {}
+  '@types/vscode@1.108.1': {}
 
   '@types/ws@8.18.1':
     dependencies:
