@@ -298,15 +298,15 @@ We welcome contributions! Please see our contributing guidelines and code of con
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the Apache License 2.0 - see the LICENSE file for details.
 
 ## 🏷️ Status
 
 - ✅ **Event Store (Rust)** – Memory and Postgres backends with a production-ready gRPC surface.
 - ✅ **TypeScript SDK** – Drives all current examples; adding richer patterns iteratively.
 - 🔄 **Rust SDK** – Early alpha; core abstractions present, feature parity in progress.
-- 📋 **Python SDK** – Placeholder directory waiting for implementation.
-- 🔄 **VSA Tool** – Vertical Slice Architecture Manager in planning phase. See [vsa/README.md](vsa/README.md) for details.
+- 🔄 **Python SDK** – Beta. Core abstractions, repository pattern, projections, and gRPC integration implemented.
+- 🔄 **VSA Tool** – Beta. Core library, CLI, WASM bindings, and VSCode extension for vertical slice architecture management. See [vsa/README.md](vsa/README.md) for details.
 - ✅ **Examples** – TypeScript examples 001–006, 007 inventory, 008 observability, and 009 dashboard are runnable today.
 - 🚧 **Examples (future)** – 007 e-commerce and 008 banking are scaffolds awaiting domain logic.
 - 🚧 **Infra-as-code & docs-site** – Module scaffolding exists; provider-specific stacks and walkthroughs are being built.
