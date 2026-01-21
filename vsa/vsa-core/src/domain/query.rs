@@ -1,9 +1,10 @@
 //! Query metadata
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Metadata for a domain query
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Query {
     /// Name of the query (e.g., "GetTaskByIdQuery", "ListTasksQuery")
     pub name: String,
@@ -46,7 +47,7 @@ impl Query {
 }
 
 /// Metadata for a query field
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QueryField {
     /// Field name
     pub name: String,

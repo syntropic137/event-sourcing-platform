@@ -5,16 +5,22 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use vsa_core::{Manifest, VsaConfig};
 
-pub fn run(config_path: &Path, output: Option<PathBuf>, format: String) -> Result<()> {
-    println!("📝 Generating manifest...");
+pub fn run(
+    config_path: &Path,
+    output: Option<PathBuf>,
+    format: String,
+    include_domain: bool,
+) -> Result<()> {
+    // Output status to stderr so it doesn't interfere with piping JSON
+    eprintln!("📝 Generating manifest...");
 
     // Load configuration
     let config = VsaConfig::from_file(config_path)?;
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
     let root = config.resolve_root(config_dir);
 
-    // Generate manifest
-    let manifest = Manifest::generate(&config, root)?;
+    // Generate manifest with optional domain model
+    let manifest = Manifest::generate_with_options(&config, root, include_domain)?;
 
     // Serialize based on format
     let content = match format.as_str() {
@@ -26,7 +32,7 @@ pub fn run(config_path: &Path, output: Option<PathBuf>, format: String) -> Resul
     // Output
     if let Some(output_path) = output {
         fs::write(&output_path, &content)?;
-        println!("✅ Manifest written to: {}", output_path.display());
+        eprintln!("✅ Manifest written to: {}", output_path.display());
     } else {
         println!("{content}");
     }

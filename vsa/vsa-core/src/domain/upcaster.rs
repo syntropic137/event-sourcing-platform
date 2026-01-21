@@ -1,9 +1,10 @@
 //! Upcaster metadata
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Metadata for an event upcaster
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Upcaster {
     /// Event type this upcaster transforms (e.g., "TaskCreated")
     pub event_type: String,
