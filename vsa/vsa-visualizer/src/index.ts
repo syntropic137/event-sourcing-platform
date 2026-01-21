@@ -7,6 +7,7 @@ import { parseManifest, hasDomainData } from './manifest/parser';
 import { ManifestValidationError } from './types/manifest';
 import { OverviewGenerator } from './generators/overview-generator';
 import { AggregateGenerator } from './generators/aggregate-generator';
+import { FlowsGenerator } from './generators/flows-generator';
 import { writeFile, writeFiles, ensureDirectoryExists } from './utils/file-writer';
 
 const program = new Command();
@@ -98,6 +99,22 @@ program
       const aggregatePaths = writeFiles(aggregatePages, options.output);
       generatedFiles.push(...aggregatePaths);
 
+      // Generate Flows documentation
+      if (options.verbose) {
+        console.log('[vsa-visualizer] Detecting cross-aggregate flows...');
+      }
+
+      const flowsGenerator = new FlowsGenerator(manifest);
+      const flowsContent = flowsGenerator.generate();
+
+      if (flowsContent) {
+        const flowsPath = path.join(options.output, 'FLOWS.md');
+        writeFile(flowsPath, flowsContent);
+        generatedFiles.push(flowsPath);
+      } else if (options.verbose) {
+        console.log('[vsa-visualizer] No cross-aggregate flows detected');
+      }
+
       // Summary
       console.log('\n✅ Documentation generated successfully!');
       console.log('\n📊 Summary:');
@@ -117,8 +134,6 @@ program
       for (const filePath of generatedFiles) {
         console.log(`   - ${filePath}`);
       }
-
-      console.log('\n⚠️  Note: Flow diagrams not yet implemented (Milestone 5)');
     } catch (error) {
       if (error instanceof ManifestValidationError) {
         console.error(`\nValidation Error: ${error.message}`);

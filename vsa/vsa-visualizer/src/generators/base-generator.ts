@@ -8,8 +8,9 @@ export abstract class BaseGenerator {
 
   /**
    * Generate the markdown content for this generator
+   * @returns markdown content, or null if nothing to generate
    */
-  abstract generate(): string;
+  abstract generate(): string | null;
 
   /**
    * Get the title for the generated document
