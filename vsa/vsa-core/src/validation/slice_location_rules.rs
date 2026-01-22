@@ -56,7 +56,19 @@ impl RequireSliceLocationRule {
 
         if matches!(
             dir_name,
-            "_shared" | "domain" | "events" | "ports" | "commands" | "queries" | "aggregates" | "application" | "infrastructure" | "slices" | "tests" | "fixtures" | "__pycache__"
+            "_shared"
+                | "domain"
+                | "events"
+                | "ports"
+                | "commands"
+                | "queries"
+                | "aggregates"
+                | "application"
+                | "infrastructure"
+                | "slices"
+                | "tests"
+                | "fixtures"
+                | "__pycache__"
         ) {
             return false;
         }
@@ -128,7 +140,18 @@ impl ValidationRule for RequireSliceLocationRule {
                 // Skip reserved directories
                 if matches!(
                     feature.name.as_str(),
-                    "_shared" | "domain" | "events" | "ports" | "commands" | "queries" | "aggregates" | "application" | "infrastructure" | "tests" | "fixtures" | "__pycache__"
+                    "_shared"
+                        | "domain"
+                        | "events"
+                        | "ports"
+                        | "commands"
+                        | "queries"
+                        | "aggregates"
+                        | "application"
+                        | "infrastructure"
+                        | "tests"
+                        | "fixtures"
+                        | "__pycache__"
                 ) {
                     continue;
                 }

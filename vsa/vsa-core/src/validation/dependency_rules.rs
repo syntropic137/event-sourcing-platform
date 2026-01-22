@@ -107,9 +107,12 @@ impl DomainPurityRule {
         // Check for forbidden layers in import path
         // NOTE: domain/events/ is ALLOWED (events are part of domain in ADR-019 v2)
         // Only forbid events/ at context root (legacy structure)
-        let has_forbidden_events = normalized.contains("/events/") && !normalized.contains("/domain/events/")
+        let has_forbidden_events = normalized.contains("/events/")
+            && !normalized.contains("/domain/events/")
             || normalized.starts_with("events/") && !normalized.starts_with("domain/events/")
-            || (normalized.starts_with("events") && !normalized.starts_with("domain/events") && !normalized.contains('/'));
+            || (normalized.starts_with("events")
+                && !normalized.starts_with("domain/events")
+                && !normalized.contains('/'));
 
         has_forbidden_events
             || normalized.contains("/ports/")
@@ -159,7 +162,8 @@ impl ValidationRule for EventsIsolationRule {
                     "Domain configuration required for events isolation rule".to_string(),
                 )
             })?;
-            let events_path = context.path.join(&domain_config.path).join(&domain_config.events.path);
+            let events_path =
+                context.path.join(&domain_config.path).join(&domain_config.events.path);
             if !events_path.exists() {
                 continue;
             }
@@ -704,13 +708,17 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_vsa028_events_import_domain() {
+    fn test_vsa028_events_import_value_objects_allowed() {
         let (_temp_dir, ctx) = create_test_context();
         let context_path = create_context_structure(ctx.root.as_path(), "workflows");
 
-        // Create event file that imports from domain
-        let event_file = context_path.join("events/WorkflowCreatedEvent.py");
-        std::fs::write(&event_file, "from domain.WorkflowAggregate import WorkflowAggregate\n")
+        // Create domain/events/ structure per ADR-019 v2
+        let domain_events_path = context_path.join("domain/events");
+        std::fs::create_dir_all(&domain_events_path).unwrap();
+
+        // Events CAN import value objects (for structured data in event fields)
+        let event_file = domain_events_path.join("WorkflowCreatedEvent.py");
+        std::fs::write(&event_file, "from aef_domain.contexts.workflows._shared.value_objects.WorkflowId import WorkflowId\nfrom aef_domain.contexts.workflows._shared.value_objects.WorkflowStatus import WorkflowStatus\n")
             .unwrap();
 
         let rule = EventsIsolationRule;
@@ -718,9 +726,12 @@ mod tests {
 
         rule.validate(&ctx, &mut report).unwrap();
 
-        assert_eq!(report.errors.len(), 1);
-        assert_eq!(report.errors[0].code, "VSA028");
-        assert!(report.errors[0].message.contains("pure data structures"));
+        // Should have 0 errors - events can import value objects per ADR-019 v2
+        assert_eq!(
+            report.errors.len(),
+            0,
+            "Events should be allowed to import value objects for structured data"
+        );
     }
 
     #[test]
