@@ -13,6 +13,84 @@ A Rust-based CLI tool and VS Code extension for enforcing Vertical Slice Archite
 - ✅ Easy to test and maintain
 - ✅ **Now supports Python!** 🐍
 
+## 🏛️ The VSA Standard
+
+This tool enforces a **rigorous architectural standard** combining:
+- **Vertical Slice Architecture** - Feature-first organization
+- **Hexagonal Architecture (Ports & Adapters)** - Clean dependency boundaries
+- **Domain-Driven Design** - Bounded contexts, aggregates, events, commands
+- **Event Sourcing** - Immutable events as the source of truth
+
+### Architecture Decision Records
+
+The VSA standard is formally documented in ADRs:
+- **[ADR-019: VSA Standard Structure](../../docs/adrs/ADR-019-vsa-standard-structure.md)** - Canonical structure and naming conventions
+- **[ADR-005: Event Store Integration](../../docs/adrs/ADR-005-event-store-integration.md)** - Event sourcing patterns
+- **[ADR-006: Hook Architecture](../../docs/adrs/ADR-006-hook-architecture-agent-swarms.md)** - Cross-context communication
+- **[ADR-008: VSA Projection Architecture](../../docs/adrs/ADR-008-vsa-projection-architecture.md)** - Read model patterns
+
+### What the Validator Enforces
+
+The VSA validator implements **30+ architectural rules** across 6 categories:
+
+#### 1. Structure Rules (VSA001-VSA026)
+- ✅ Bounded contexts have required folders (`domain/`, `slices/`, `_shared/`)
+- ✅ Events in `domain/events/` (events ARE domain language)
+- ✅ Commands in `domain/commands/`
+- ✅ Aggregates in `domain/` root (high visibility)
+- ✅ Ports at context root (not under domain/)
+- ✅ Naming conventions enforced (`*Event`, `*Command`, `*Aggregate`, `*Port`)
+
+#### 2. Dependency Rules (VSA027-VSA031)
+- ✅ **Domain purity** - No external dependencies, only pure business logic
+- ✅ **Events isolation** - Pure data structures (stdlib + value objects only)
+- ✅ **Port isolation** - Only import from domain layer
+- ✅ **Application isolation** - No direct slice dependencies
+- ✅ **Slice isolation** - No cross-slice imports (use events)
+
+#### 3. Event Sourcing Rules
+- ✅ Aggregates apply events correctly
+- ✅ Event versioning patterns
+- ✅ No state mutations outside event handlers
+
+#### 4. Slice Rules
+- ✅ Each slice has required components (commands, events, handlers)
+- ✅ Test files present and properly named
+- ✅ Slice boundaries respected
+
+#### 5. Query/Projection Rules
+- ✅ Read models separated from write models (CQRS)
+- ✅ Projections subscribe to correct events
+- ✅ No business logic in projections
+
+#### 6. Integration Event Rules
+- ✅ Cross-context events in `_shared/integration-events/`
+- ✅ Single source of truth
+- ✅ Proper publisher/subscriber declarations
+
+### Key Benefits
+
+**🔒 Architectural Integrity**
+- Prevents architecture violations before code review
+- Enforces clean dependency flow: `domain ← ports ← application ← slices`
+- Maintains bounded context boundaries
+
+**📊 Enhanced Visibility**
+- **Dependency visualization** - See all architectural dependencies
+- **Structure visualization** - Generate C4 diagrams, event flows
+- **Compliance reporting** - Track architectural health over time
+
+**🚀 Scalability & Maintainability**
+- **Clear boundaries** - Teams know where code belongs
+- **Predictable structure** - New developers onboard faster
+- **Refactoring confidence** - Validator catches breaking changes
+- **Documentation as code** - Architecture manifest auto-generated
+
+**📖 Legibility**
+- **Standard naming** - `CreateOrderCommand`, `OrderCreatedEvent`, `OrderAggregate`
+- **Consistent structure** - Same layout across all contexts
+- **Self-documenting** - File names reveal purpose and layer
+
 ## 🚀 Quick Start
 
 ```bash
@@ -142,7 +220,7 @@ vsa init --language typescript --root src/contexts
 # Generate feature (with interactive prompts for fields)
 vsa generate --context orders --feature place-order
 
-# Validate structure
+# Validate structure (enforces 30+ architectural rules)
 vsa validate
 
 # Watch mode (real-time validation)
@@ -151,8 +229,75 @@ vsa validate --watch
 # List all features
 vsa list
 
-# Generate manifest
-vsa manifest
+# Generate manifest (with dependency graph)
+vsa manifest --include-dependencies
+
+# Visualize architecture
+vsa manifest --include-domain | vsa-visualizer --output ./docs/architecture
+```
+
+### Validation Output
+
+The validator provides detailed, actionable feedback:
+
+```bash
+$ vsa validate
+
+🔍 Validating VSA structure...
+
+📁 Root: src/contexts
+🗣️  Language: python
+
+❌ 3 Error(s)
+  × Domain file 'orders/domain/OrderAggregate.py' imports from forbidden layer: 'orders.ports.OrderRepository'
+    Domain must be pure - no dependencies on ports/, application/, or slices/
+    at: src/contexts/orders/domain/OrderAggregate.py
+    
+  × Slice 'place-order' imports from slice 'cancel-order' (line 42)
+    Cross-slice imports are forbidden - slices must be isolated
+    Use events for cross-slice communication
+    at: src/contexts/orders/slices/place-order/PlaceOrderHandler.py
+
+  × Aggregate 'OrderAggregate.py' is in _shared/ directory
+    As per ADR-019, aggregates should be in domain/ root for high visibility
+    at: src/contexts/orders/_shared/OrderAggregate.py
+
+⚠️  2 Warning(s)
+  ! Feature 'place-order' in context 'orders' is missing tests
+    at: src/contexts/orders/slices/place-order
+    
+✅ Validation complete: Fix 3 errors before proceeding
+```
+
+### Dependency Visualization
+
+Generate architectural diagrams automatically:
+
+```bash
+# Full architecture manifest with dependencies
+vsa manifest --include-dependencies --include-domain > architecture.json
+
+# Visualize as Mermaid diagrams
+vsa-visualizer architecture.json --output ./docs
+
+# Output:
+# - docs/c4-system-context.md      (System overview)
+# - docs/c4-containers.md           (Container view)
+# - docs/aggregate-flows.md         (Event flows per aggregate)
+# - docs/saga-orchestration.md      (Saga visualizations)
+```
+
+**Example dependency graph:**
+```mermaid
+graph TD
+    orders[orders context]
+    payments[payments context]
+    shipping[shipping context]
+    
+    orders -->|OrderPlaced| payments
+    orders -->|OrderPlaced| shipping
+    payments -->|PaymentProcessed| orders
+    shipping -->|OrderShipped| orders
 ```
 
 ## 📝 Configuration

@@ -224,7 +224,7 @@ impl ValidationRule for RequireEventsAtContextRootRule {
         for context in contexts {
             // Per ADR-019 v2: Events should be in domain/events/ (domain cohesion)
             // Events ARE domain language - they express domain facts
-            
+
             // Check for event files in slices or other wrong locations
             self.check_directory_for_misplaced_events(
                 &context.path,
@@ -1175,7 +1175,7 @@ mod tests {
     }
 
     #[test]
-    fn test_vsa021_events_in_domain() {
+    fn test_vsa021_events_in_domain_events_allowed() {
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path().to_path_buf();
 
@@ -1183,7 +1183,10 @@ mod tests {
         let domain_events_path = context_path.join("domain/events");
         fs::create_dir_all(&domain_events_path).unwrap();
 
-        // Event in domain/events/ (wrong location)
+        // Create vsa.yaml with domain/events configuration
+        fs::write(context_path.join("vsa.yaml"), "events_path: \"domain/events\"\n").unwrap();
+
+        // Event in domain/events/ per ADR-019 v2 (correct location)
         fs::write(
             domain_events_path.join("WorkflowCreatedEvent.py"),
             "class WorkflowCreatedEvent: pass",
@@ -1197,15 +1200,13 @@ mod tests {
         let rule = RequireEventsAtContextRootRule;
         rule.validate(&ctx, &mut report).unwrap();
 
-        // Should report at least 1 error for the domain/events/ folder issue
-        // Note: May report 2 errors (folder + individual file) which is acceptable
-        assert!(
-            !report.errors.is_empty(),
-            "Expected at least 1 error, got {}",
-            report.errors.len()
+        // Should have 0 errors - domain/events/ is the canonical location per ADR-019 v2
+        assert_eq!(
+            report.errors.len(),
+            0,
+            "Events in domain/events/ should be allowed per ADR-019 v2. Errors: {:?}",
+            report.errors
         );
-        assert!(report.errors.iter().any(|e| e.code == "VSA021"));
-        assert!(report.errors.iter().any(|e| e.message.contains("context root")));
     }
 
     #[test]
