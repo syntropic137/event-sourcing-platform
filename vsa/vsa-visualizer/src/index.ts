@@ -85,16 +85,18 @@ For more information, see: https://github.com/your-org/vsa
 
         // Check if domain data is present
         const hasAggregates = hasDomainData(manifest);
-        
+
         if (!hasAggregates) {
           if (options.verbose) {
-            console.log('[vsa-visualizer] Note: No domain model found (aggregates/commands/events).');
+            console.log(
+              '[vsa-visualizer] Note: No domain model found (aggregates/commands/events).'
+            );
             console.log('[vsa-visualizer] Will generate context-level documentation only.');
           }
-        } else if (options.verbose) {
-          console.log(`[vsa-visualizer] Found ${manifest.domain!.aggregates.length} aggregates`);
-          console.log(`[vsa-visualizer] Found ${manifest.domain!.commands.length} commands`);
-          console.log(`[vsa-visualizer] Found ${manifest.domain!.events.length} events`);
+        } else if (options.verbose && manifest.domain) {
+          console.log(`[vsa-visualizer] Found ${manifest.domain.aggregates.length} aggregates`);
+          console.log(`[vsa-visualizer] Found ${manifest.domain.commands.length} commands`);
+          console.log(`[vsa-visualizer] Found ${manifest.domain.events.length} events`);
         }
 
         // Ensure output directory exists
@@ -140,20 +142,26 @@ For more information, see: https://github.com/your-org/vsa
             console.log('[vsa-visualizer] No cross-aggregate flows detected');
           }
         } else if (options.verbose) {
-          console.log('[vsa-visualizer] Skipping aggregate and flow documentation (no domain data)');
+          console.log(
+            '[vsa-visualizer] Skipping aggregate and flow documentation (no domain data)'
+          );
         }
 
         // Summary
         console.log('\n✅ Documentation generated successfully!');
         console.log('\n📊 Summary:');
-        
-        if (hasAggregates) {
-          console.log(`   Aggregates: ${manifest.domain!.aggregates.length}`);
-          console.log(`   Commands:   ${manifest.domain!.commands.length}`);
-          console.log(`   Events:     ${manifest.domain!.events.length}`);
 
-          if (manifest.domain!.queries && manifest.domain!.queries.length > 0) {
-            console.log(`   Queries:    ${manifest.domain!.queries.length}`);
+        if (hasAggregates && manifest.domain) {
+          console.log(`   Aggregates: ${manifest.domain.aggregates.length}`);
+          console.log(`   Commands:   ${manifest.domain.commands.length}`);
+          console.log(`   Events:     ${manifest.domain.events.length}`);
+
+          if (manifest.domain.queries && manifest.domain.queries.length > 0) {
+            console.log(`   Queries:    ${manifest.domain.queries.length}`);
+          }
+
+          if (manifest.domain.value_objects && manifest.domain.value_objects.length > 0) {
+            console.log(`   Value Objects: ${manifest.domain.value_objects.length}`);
           }
         } else {
           console.log(`   Contexts:   ${(manifest as any).contexts?.length || 0}`);
