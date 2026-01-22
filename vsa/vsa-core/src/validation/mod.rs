@@ -1,6 +1,8 @@
 //! Enhanced validation system for VSA
 
 mod bounded_context_rules;
+mod dependency_rules;
+mod import_parser;
 mod integration_event_rules;
 mod isolation_rules;
 mod query_slice_rules;
@@ -12,6 +14,11 @@ mod suggestions;
 pub use bounded_context_rules::{
     ContextBoundariesRule, NoCircularDependenciesRule, RequireSharedFolderRule,
 };
+pub use dependency_rules::{
+    ApplicationIsolationRule, DomainPurityRule, EventsIsolationRule, 
+    PortIsolationRule, SliceIsolationRule,
+};
+pub use import_parser::{parse_imports, detect_layer, ArchitectureLayer};
 pub use integration_event_rules::{
     IntegrationEventNamingRule, IntegrationEventsLocationRule, NoDuplicateIntegrationEventsRule,
 };
