@@ -3,7 +3,10 @@
 **Status:** ✅ Accepted  
 **Date:** 2025-11-06  
 **Decision Makers:** Architecture Team  
-**Related:** Hexagonal Architecture, Vertical Slice Architecture, Feature Organization
+**Related:** Hexagonal Architecture, Vertical Slice Architecture, Feature Organization  
+**See Also:** [ADR-019: VSA Standard Structure](./ADR-019-vsa-standard-structure.md) - **Comprehensive canonical reference**
+
+> **Note:** This ADR is extended by ADR-019, which provides the complete structure standard including the relationship between slices/, ports/, application/, and infrastructure/ layers. Refer to ADR-019 for the full canonical reference.
 
 ## Context
 
