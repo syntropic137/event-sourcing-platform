@@ -24,7 +24,7 @@ pub struct ImportStatement {
 pub trait ImportParser {
     /// Parse imports from a file
     fn parse_file(&self, path: &Path) -> Result<Vec<ImportStatement>>;
-    
+
     /// Parse imports from source code
     fn parse_source(&self, source: &str) -> Vec<ImportStatement>;
 }
@@ -40,7 +40,7 @@ impl PythonImportParser {
     /// Extract module path from Python import statement
     fn extract_module(line: &str) -> Option<String> {
         let trimmed = line.trim();
-        
+
         // Handle "from X import Y" style
         if let Some(from_pos) = trimmed.find("from ") {
             let after_from = &trimmed[from_pos + 5..];
@@ -48,20 +48,17 @@ impl PythonImportParser {
                 return Some(after_from[..import_pos].trim().to_string());
             }
         }
-        
+
         // Handle "import X" style
         if let Some(import_pos) = trimmed.find("import ") {
             let after_import = &trimmed[import_pos + 7..];
             // Take first module (before comma or as)
-            let module = after_import
-                .split(&[',', ' ', '\t'][..])
-                .next()?
-                .trim();
+            let module = after_import.split(&[',', ' ', '\t'][..]).next()?.trim();
             if !module.is_empty() {
                 return Some(module.to_string());
             }
         }
-        
+
         None
     }
 
@@ -79,15 +76,15 @@ impl ImportParser for PythonImportParser {
 
     fn parse_source(&self, source: &str) -> Vec<ImportStatement> {
         let mut imports = Vec::new();
-        
+
         for (line_num, line) in source.lines().enumerate() {
             let trimmed = line.trim();
-            
+
             // Skip comments and empty lines
             if trimmed.starts_with('#') || trimmed.is_empty() {
                 continue;
             }
-            
+
             // Check for import statements
             if trimmed.starts_with("from ") || trimmed.starts_with("import ") {
                 if let Some(module) = Self::extract_module(line) {
@@ -100,7 +97,7 @@ impl ImportParser for PythonImportParser {
                 }
             }
         }
-        
+
         imports
     }
 }
@@ -116,11 +113,11 @@ impl TypeScriptImportParser {
     /// Extract module path from TypeScript import statement
     fn extract_module(line: &str) -> Option<String> {
         let trimmed = line.trim();
-        
+
         // Find the 'from' keyword
         if let Some(from_pos) = trimmed.rfind(" from ") {
             let after_from = &trimmed[from_pos + 6..].trim();
-            
+
             // Extract the module path from quotes
             if let Some(start) = after_from.find(&['\'', '"'][..]) {
                 let quote_char = after_from.chars().nth(start)?;
@@ -130,7 +127,7 @@ impl TypeScriptImportParser {
                 }
             }
         }
-        
+
         // Handle require statements: const X = require('module')
         if trimmed.contains("require(") {
             if let Some(start_pos) = trimmed.find("require(") {
@@ -144,7 +141,7 @@ impl TypeScriptImportParser {
                 }
             }
         }
-        
+
         None
     }
 
@@ -162,17 +159,20 @@ impl ImportParser for TypeScriptImportParser {
 
     fn parse_source(&self, source: &str) -> Vec<ImportStatement> {
         let mut imports = Vec::new();
-        
+
         for (line_num, line) in source.lines().enumerate() {
             let trimmed = line.trim();
-            
+
             // Skip comments and empty lines
             if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.is_empty() {
                 continue;
             }
-            
+
             // Check for import statements
-            if trimmed.starts_with("import ") || trimmed.contains(" from ") || trimmed.contains("require(") {
+            if trimmed.starts_with("import ")
+                || trimmed.contains(" from ")
+                || trimmed.contains("require(")
+            {
                 if let Some(module) = Self::extract_module(line) {
                     imports.push(ImportStatement {
                         is_relative: Self::is_relative(&module),
@@ -183,7 +183,7 @@ impl ImportParser for TypeScriptImportParser {
                 }
             }
         }
-        
+
         imports
     }
 }
@@ -199,33 +199,34 @@ impl RustImportParser {
     /// Extract module path from Rust use statement
     fn extract_module(line: &str) -> Option<String> {
         let trimmed = line.trim();
-        
+
         // Handle "use" statements
         if let Some(use_pos) = trimmed.find("use ") {
             let after_use = &trimmed[use_pos + 4..];
-            
+
             // Find the end (semicolon, as, {)
             let end_chars = &[';', '{'][..];
-            let end_pos = after_use
-                .find(|c: char| end_chars.contains(&c))
-                .unwrap_or(after_use.len());
-            
+            let end_pos =
+                after_use.find(|c: char| end_chars.contains(&c)).unwrap_or(after_use.len());
+
             // Also check for " as "
             let as_pos = after_use[..end_pos].find(" as ").unwrap_or(end_pos);
-            
+
             let module = after_use[..as_pos.min(end_pos)].trim();
-            
+
             if !module.is_empty() {
                 return Some(module.to_string());
             }
         }
-        
+
         None
     }
 
     /// Check if import is relative (starts with self, super, or crate)
     fn is_relative(module: &str) -> bool {
-        module.starts_with("self::") || module.starts_with("super::") || module.starts_with("crate::")
+        module.starts_with("self::")
+            || module.starts_with("super::")
+            || module.starts_with("crate::")
     }
 }
 
@@ -237,15 +238,15 @@ impl ImportParser for RustImportParser {
 
     fn parse_source(&self, source: &str) -> Vec<ImportStatement> {
         let mut imports = Vec::new();
-        
+
         for (line_num, line) in source.lines().enumerate() {
             let trimmed = line.trim();
-            
+
             // Skip comments and empty lines
             if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.is_empty() {
                 continue;
             }
-            
+
             // Check for use statements
             if trimmed.starts_with("use ") {
                 if let Some(module) = Self::extract_module(line) {
@@ -258,7 +259,7 @@ impl ImportParser for RustImportParser {
                 }
             }
         }
-        
+
         imports
     }
 }
@@ -266,7 +267,7 @@ impl ImportParser for RustImportParser {
 /// Get appropriate parser for a file based on extension
 pub fn get_parser(path: &Path) -> Option<Box<dyn ImportParser>> {
     let extension = path.extension()?.to_str()?;
-    
+
     match extension {
         "py" => Some(Box::new(PythonImportParser::new())),
         "ts" | "tsx" | "js" | "jsx" => Some(Box::new(TypeScriptImportParser::new())),
@@ -285,6 +286,7 @@ pub fn parse_imports(path: &Path) -> Result<Vec<ImportStatement>> {
 }
 
 /// Resolve import path relative to file location
+#[allow(dead_code)] // Reserved for future use
 pub fn resolve_import_path(
     file_path: &Path,
     import: &ImportStatement,
@@ -294,7 +296,7 @@ pub fn resolve_import_path(
         // Relative import - resolve from file's directory
         let file_dir = file_path.parent()?;
         let mut resolved = file_dir.to_path_buf();
-        
+
         // Handle Python relative imports (dots)
         if import.module.starts_with('.') {
             let dot_count = import.module.chars().take_while(|&c| c == '.').count();
@@ -309,7 +311,7 @@ pub fn resolve_import_path(
             // TypeScript/Rust relative imports
             resolved.push(&import.module);
         }
-        
+
         Some(resolved)
     } else {
         // Absolute import - resolve from context root
@@ -337,9 +339,9 @@ pub fn detect_layer(path: &Path, context_root: &Path) -> ArchitectureLayer {
         if components.is_empty() {
             return ArchitectureLayer::Unknown;
         }
-        
+
         let first_component = components[0].as_os_str().to_string_lossy();
-        
+
         match first_component.as_ref() {
             "domain" => ArchitectureLayer::Domain,
             "events" => ArchitectureLayer::Events,
@@ -367,7 +369,7 @@ mod tests {
         let parser = PythonImportParser::new();
         let source = "from domain.WorkflowAggregate import WorkflowAggregate";
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].module, "domain.WorkflowAggregate");
         assert!(!imports[0].is_relative);
@@ -378,7 +380,7 @@ mod tests {
         let parser = PythonImportParser::new();
         let source = "from ..domain import WorkflowAggregate";
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].module, "..domain");
         assert!(imports[0].is_relative);
@@ -389,7 +391,7 @@ mod tests {
         let parser = PythonImportParser::new();
         let source = "import os";
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].module, "os");
         assert!(!imports[0].is_relative);
@@ -404,7 +406,7 @@ import os
 from ..events import WorkflowCreatedEvent
 "#;
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 3);
         assert_eq!(imports[0].module, "domain.WorkflowAggregate");
         assert_eq!(imports[1].module, "os");
@@ -419,7 +421,7 @@ from ..events import WorkflowCreatedEvent
 from domain.WorkflowAggregate import WorkflowAggregate
 "#;
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].module, "domain.WorkflowAggregate");
     }
@@ -433,7 +435,7 @@ from domain.WorkflowAggregate import WorkflowAggregate
         let parser = TypeScriptImportParser::new();
         let source = "import { WorkflowAggregate } from './domain/WorkflowAggregate';";
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].module, "./domain/WorkflowAggregate");
         assert!(imports[0].is_relative);
@@ -444,7 +446,7 @@ from domain.WorkflowAggregate import WorkflowAggregate
         let parser = TypeScriptImportParser::new();
         let source = "import { Something } from '@/domain/WorkflowAggregate';";
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].module, "@/domain/WorkflowAggregate");
         assert!(!imports[0].is_relative);
@@ -455,7 +457,7 @@ from domain.WorkflowAggregate import WorkflowAggregate
         let parser = TypeScriptImportParser::new();
         let source = "const WorkflowAggregate = require('./domain/WorkflowAggregate');";
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].module, "./domain/WorkflowAggregate");
         assert!(imports[0].is_relative);
@@ -466,7 +468,7 @@ from domain.WorkflowAggregate import WorkflowAggregate
         let parser = TypeScriptImportParser::new();
         let source = "import { WorkflowAggregate } from '../domain/WorkflowAggregate';";
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].module, "../domain/WorkflowAggregate");
         assert!(imports[0].is_relative);
@@ -480,7 +482,7 @@ from domain.WorkflowAggregate import WorkflowAggregate
 import { WorkflowAggregate } from './domain/WorkflowAggregate';
 "#;
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].module, "./domain/WorkflowAggregate");
     }
@@ -494,7 +496,7 @@ import { WorkflowAggregate } from './domain/WorkflowAggregate';
         let parser = RustImportParser::new();
         let source = "use crate::domain::WorkflowAggregate;";
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].module, "crate::domain::WorkflowAggregate");
         assert!(imports[0].is_relative);
@@ -505,7 +507,7 @@ import { WorkflowAggregate } from './domain/WorkflowAggregate';
         let parser = RustImportParser::new();
         let source = "use super::domain::WorkflowAggregate;";
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].module, "super::domain::WorkflowAggregate");
         assert!(imports[0].is_relative);
@@ -516,7 +518,7 @@ import { WorkflowAggregate } from './domain/WorkflowAggregate';
         let parser = RustImportParser::new();
         let source = "use std::collections::HashMap;";
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].module, "std::collections::HashMap");
         assert!(!imports[0].is_relative);
@@ -527,7 +529,7 @@ import { WorkflowAggregate } from './domain/WorkflowAggregate';
         let parser = RustImportParser::new();
         let source = "use crate::domain::{WorkflowAggregate, WorkflowExecutionAggregate};";
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 1);
         // Module includes the :: before the braces
         assert_eq!(imports[0].module, "crate::domain::");
@@ -538,7 +540,7 @@ import { WorkflowAggregate } from './domain/WorkflowAggregate';
         let parser = RustImportParser::new();
         let source = "use crate::domain::WorkflowAggregate as WA;";
         let imports = parser.parse_source(source);
-        
+
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].module, "crate::domain::WorkflowAggregate");
     }
@@ -551,7 +553,7 @@ import { WorkflowAggregate } from './domain/WorkflowAggregate';
     fn test_detect_domain_layer() {
         let context_root = PathBuf::from("/app/contexts/workflows");
         let file_path = context_root.join("domain/WorkflowAggregate.py");
-        
+
         let layer = detect_layer(&file_path, &context_root);
         assert_eq!(layer, ArchitectureLayer::Domain);
     }
@@ -560,7 +562,7 @@ import { WorkflowAggregate } from './domain/WorkflowAggregate';
     fn test_detect_events_layer() {
         let context_root = PathBuf::from("/app/contexts/workflows");
         let file_path = context_root.join("events/WorkflowCreatedEvent.py");
-        
+
         let layer = detect_layer(&file_path, &context_root);
         assert_eq!(layer, ArchitectureLayer::Events);
     }
@@ -569,7 +571,7 @@ import { WorkflowAggregate } from './domain/WorkflowAggregate';
     fn test_detect_slices_layer() {
         let context_root = PathBuf::from("/app/contexts/workflows");
         let file_path = context_root.join("slices/create_workflow/internal/Handler.py");
-        
+
         let layer = detect_layer(&file_path, &context_root);
         assert_eq!(layer, ArchitectureLayer::Slices);
     }
