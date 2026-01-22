@@ -7,6 +7,7 @@
 //! - Events
 //! - Upcasters
 //! - Projections (read models for CQRS)
+//! - Value Objects
 
 pub mod aggregate;
 pub mod command;
@@ -14,6 +15,7 @@ pub mod event;
 pub mod projection;
 pub mod query;
 pub mod upcaster;
+pub mod value_object;
 
 pub use aggregate::{Aggregate, CommandHandler, EventHandler};
 pub use command::{Command, CommandField};
@@ -21,6 +23,7 @@ pub use event::{Event, EventField, EventVersion};
 pub use projection::Projection;
 pub use query::{Query, QueryField};
 pub use upcaster::Upcaster;
+pub use value_object::{ValueObject, ValueObjectField};
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -33,6 +36,7 @@ pub struct DomainModel {
     pub queries: Vec<Query>,
     pub events: Vec<Event>,
     pub upcasters: Vec<Upcaster>,
+    pub value_objects: Vec<ValueObject>,
     pub root_path: PathBuf,
 }
 
@@ -45,6 +49,7 @@ impl DomainModel {
             queries: Vec::new(),
             events: Vec::new(),
             upcasters: Vec::new(),
+            value_objects: Vec::new(),
             root_path,
         }
     }
@@ -56,6 +61,7 @@ impl DomainModel {
             + self.queries.len()
             + self.events.len()
             + self.upcasters.len()
+            + self.value_objects.len()
     }
 
     /// Find an aggregate by name

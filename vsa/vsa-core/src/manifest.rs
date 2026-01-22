@@ -11,7 +11,7 @@ use crate::scanner::Scanner;
 use crate::scanners::DomainScanner;
 
 /// VSA manifest schema version
-pub const MANIFEST_SCHEMA_VERSION: &str = "1.0.0";
+pub const MANIFEST_SCHEMA_VERSION: &str = "1.1.0";
 
 /// VSA manifest
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,6 +30,9 @@ pub struct ContextManifest {
     pub name: String,
     pub path: String,
     pub features: Vec<FeatureManifest>,
+    /// Infrastructure folders (repositories, buses, etc.) - NEW in v1.1.0
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub infrastructure_folders: Vec<String>,
 }
 
 /// Feature manifest entry
@@ -48,6 +51,9 @@ pub struct DomainManifest {
     pub events: Vec<crate::domain::Event>,
     pub queries: Vec<crate::domain::Query>,
     pub upcasters: Vec<crate::domain::Upcaster>,
+    /// Value objects in the domain - NEW in v1.1.0
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub value_objects: Vec<crate::domain::ValueObject>,
     pub relationships: Relationships,
 }
 
@@ -94,10 +100,14 @@ impl Manifest {
                 });
             }
 
+            // Detect infrastructure folders
+            let infrastructure_folders = Self::detect_infrastructure_folders(&context.path);
+
             context_manifests.push(ContextManifest {
                 name: context.name.clone(),
                 path: context.path.to_string_lossy().to_string(),
                 features: feature_manifests,
+                infrastructure_folders,
             });
         }
 
@@ -130,8 +140,46 @@ impl Manifest {
             events: model.events.clone(),
             queries: model.queries.clone(),
             upcasters: model.upcasters.clone(),
+            value_objects: model.value_objects.clone(),
             relationships,
         }
+    }
+
+    /// Detect infrastructure folders in a context
+    fn detect_infrastructure_folders(context_path: &PathBuf) -> Vec<String> {
+        let mut infrastructure = Vec::new();
+        
+        // Common infrastructure folders
+        let infra_candidates = vec![
+            "infrastructure",
+            "repositories",
+            "adapters",
+            "services",
+            "buses",
+        ];
+        
+        for candidate in infra_candidates {
+            let candidate_path = context_path.join(candidate);
+            if candidate_path.exists() && candidate_path.is_dir() {
+                infrastructure.push(candidate.to_string());
+            }
+        }
+        
+        // Also check infrastructure subfolders
+        let infrastructure_path = context_path.join("infrastructure");
+        if infrastructure_path.exists() && infrastructure_path.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&infrastructure_path) {
+                for entry in entries.flatten() {
+                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                        if let Some(name) = entry.file_name().to_str() {
+                            infrastructure.push(format!("infrastructure/{}", name));
+                        }
+                    }
+                }
+            }
+        }
+        
+        infrastructure
     }
 
     /// Build relationships between domain components
@@ -208,6 +256,7 @@ mod tests {
                         "ProductCreatedEvent.ts".to_string(),
                     ],
                 }],
+                infrastructure_folders: vec![],
             }],
             domain: None,
         };
@@ -255,6 +304,7 @@ mod tests {
             }],
             queries: vec![],
             upcasters: vec![],
+            value_objects: vec![],
             root_path: std::path::PathBuf::from("/test"),
         };
 
@@ -329,6 +379,7 @@ mod tests {
             events: vec![],
             queries: vec![],
             upcasters: vec![],
+            value_objects: vec![],
             root_path: std::path::PathBuf::from("/test"),
         };
 
