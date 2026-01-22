@@ -75,7 +75,8 @@ impl ValidationRule for DomainPurityRule {
                             severity: Severity::Error,
                             message: format!(
                                 "Domain file '{}' imports from forbidden layer: '{}' (line {})\n\
-                                 Domain must be pure - no dependencies on events/, ports/, application/, infrastructure/, or slices/",
+                                 Domain must be pure - no dependencies on ports/, application/, infrastructure/, or slices/\n\
+                                 (domain/events/ is allowed - events are part of domain language)",
                                 relative_path.display(),
                                 import.module,
                                 import.line_number
@@ -104,18 +105,22 @@ impl DomainPurityRule {
         let normalized = module.replace("::", "/").replace('.', "/");
 
         // Check for forbidden layers in import path
-        normalized.contains("/events/")
+        // NOTE: domain/events/ is ALLOWED (events are part of domain in ADR-019 v2)
+        // Only forbid events/ at context root (legacy structure)
+        let has_forbidden_events = normalized.contains("/events/") && !normalized.contains("/domain/events/")
+            || normalized.starts_with("events/") && !normalized.starts_with("domain/events/")
+            || (normalized.starts_with("events") && !normalized.starts_with("domain/events") && !normalized.contains('/'));
+
+        has_forbidden_events
             || normalized.contains("/ports/")
             || normalized.contains("/application/")
             || normalized.contains("/infrastructure/")
             || normalized.contains("/slices/")
-            || normalized.starts_with("events/")
             || normalized.starts_with("ports/")
             || normalized.starts_with("application/")
             || normalized.starts_with("infrastructure/")
             || normalized.starts_with("slices/")
             // Also check for module names without path separators (same-level imports)
-            || normalized.starts_with("events")
             || normalized.starts_with("ports")
             || normalized.starts_with("application")
             || normalized.starts_with("infrastructure")
@@ -148,7 +153,13 @@ impl ValidationRule for EventsIsolationRule {
         let contexts = scanner.scan_contexts()?;
 
         for context in contexts {
-            let events_path = context.path.join("events");
+            // Use configured events path from domain config (supports domain/events/)
+            let domain_config = ctx.config.domain.as_ref().ok_or_else(|| {
+                crate::error::VsaError::InvalidConfig(
+                    "Domain configuration required for events isolation rule".to_string(),
+                )
+            })?;
+            let events_path = context.path.join(&domain_config.path).join(&domain_config.events.path);
             if !events_path.exists() {
                 continue;
             }
