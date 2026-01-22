@@ -251,6 +251,11 @@ impl EventsIsolationRule {
             return true;
         }
 
+        // Pydantic (validation library commonly used in events for data validation)
+        if module.starts_with("pydantic") || module == "pydantic" {
+            return true;
+        }
+
         // Rust std
         if module.starts_with("std::") {
             return true;
