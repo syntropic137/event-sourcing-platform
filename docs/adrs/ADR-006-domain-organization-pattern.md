@@ -3,7 +3,10 @@
 **Status:** ✅ Accepted  
 **Date:** 2025-11-06  
 **Decision Makers:** Architecture Team  
-**Related:** Domain-Driven Design, Event Sourcing, Hexagonal Architecture
+**Related:** Domain-Driven Design, Event Sourcing, Hexagonal Architecture  
+**See Also:** [ADR-019: VSA Standard Structure](./ADR-019-vsa-standard-structure.md) - **Comprehensive canonical reference**
+
+> **Note:** This ADR is extended by ADR-019, which provides the complete structure standard including ports/, application/, infrastructure/, and all architectural decisions. Refer to ADR-019 for the full canonical reference.
 
 ## Context
 
