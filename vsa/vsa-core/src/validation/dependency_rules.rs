@@ -245,6 +245,12 @@ impl EventsIsolationRule {
             return true;
         }
 
+        // Value objects from same domain (events can use value objects for structured data)
+        // Pattern: aef_domain.contexts.{context}._shared.value_objects or domain.value_objects
+        if module.contains(".value_objects") || module.contains("ValueObjects") {
+            return true;
+        }
+
         // Rust std
         if module.starts_with("std::") {
             return true;
