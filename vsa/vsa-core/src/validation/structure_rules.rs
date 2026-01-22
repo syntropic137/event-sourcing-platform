@@ -1236,7 +1236,11 @@ mod tests {
 
         // Should report at least 1 error for the domain/events/ folder issue
         // Note: May report 2 errors (folder + individual file) which is acceptable
-        assert!(!report.errors.is_empty(), "Expected at least 1 error, got {}", report.errors.len());
+        assert!(
+            !report.errors.is_empty(),
+            "Expected at least 1 error, got {}",
+            report.errors.len()
+        );
         assert!(report.errors.iter().any(|e| e.code == "VSA021"));
         assert!(report.errors.iter().any(|e| e.message.contains("context root")));
     }
