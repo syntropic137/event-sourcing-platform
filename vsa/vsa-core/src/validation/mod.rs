@@ -22,8 +22,9 @@ pub use query_slice_rules::{
 pub use rules::{ValidationRule, ValidationRuleSet};
 pub use slice_location_rules::RequireSliceLocationRule;
 pub use structure_rules::{
-    RequireAggregatesInDomainRootRule, RequireCommandsInDomainRule, 
-    RequireEventsAtContextRootRule, RequirePortSuffixRule,
+    RequireAggregatesInDomainRootRule, RequireBusesInInfrastructureRule,
+    RequireCommandsInDomainRule, RequireEventsAtContextRootRule, 
+    RequirePortSuffixRule, RequirePortsInPortsFolderRule, RequireValueObjectsNamingRule,
 };
 pub use suggestions::{Suggestion, SuggestionAction};
 

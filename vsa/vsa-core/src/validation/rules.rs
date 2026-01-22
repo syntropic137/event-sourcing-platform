@@ -38,9 +38,10 @@ impl ValidationRuleSet {
             ContextBoundariesRule, IntegrationEventNamingRule, IntegrationEventsLocationRule,
             NoCircularDependenciesRule, NoCrossSliceImportsRule, NoDuplicateIntegrationEventsRule,
             ProjectionEventSubscriptionRule, RequireAggregatesInDomainRootRule, 
-            RequireCommandsInDomainRule, RequireEventsAtContextRootRule, 
-            RequireHandlerForQueryRule, RequirePortSuffixRule, RequireProjectionForQueryRule,
-            RequireSharedFolderRule, RequireSliceLocationRule, ThinAdapterRule,
+            RequireBusesInInfrastructureRule, RequireCommandsInDomainRule, 
+            RequireEventsAtContextRootRule, RequireHandlerForQueryRule, RequirePortSuffixRule, 
+            RequirePortsInPortsFolderRule, RequireProjectionForQueryRule, RequireSharedFolderRule, 
+            RequireSliceLocationRule, RequireValueObjectsNamingRule, ThinAdapterRule,
         };
 
         let rules: Vec<Box<dyn ValidationRule>> = vec![
@@ -65,11 +66,14 @@ impl ValidationRuleSet {
             Box::new(ProjectionEventSubscriptionRule),
             // Slice location rules
             Box::new(RequireSliceLocationRule),
-            // ADR-019 Structure rules (NEW)
-            Box::new(RequireCommandsInDomainRule),
-            Box::new(RequireEventsAtContextRootRule),
-            Box::new(RequireAggregatesInDomainRootRule),
-            Box::new(RequirePortSuffixRule),
+            // ADR-019 Structure rules (NEW - enforces canonical VSA structure)
+            Box::new(RequireCommandsInDomainRule),           // VSA020: Commands in domain/commands/
+            Box::new(RequireEventsAtContextRootRule),        // VSA021: Events at context root
+            Box::new(RequireAggregatesInDomainRootRule),     // VSA022: Aggregates in domain/ root
+            Box::new(RequirePortsInPortsFolderRule),         // VSA023: Ports in ports/ folder
+            Box::new(RequireBusesInInfrastructureRule),      // VSA024: Buses in infrastructure/buses/
+            Box::new(RequirePortSuffixRule),                 // VSA025: Port suffix naming
+            Box::new(RequireValueObjectsNamingRule),         // VSA026: ValueObjects naming
             // Slice isolation rules
             Box::new(NoCrossSliceImportsRule),
             Box::new(ThinAdapterRule),
