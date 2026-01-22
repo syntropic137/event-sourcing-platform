@@ -40,7 +40,8 @@ This ADR is heavily influenced by **"Understanding Event Sourcing"** by Alexey Z
 
 We adopt a **standardized folder structure** that balances:
 
-- ✅ **Alignment** with eventsourcing-book patterns (events at context root, slices with internal/)
+- ✅ **Domain cohesion** (events in `domain/events/` - they ARE domain language)
+- ✅ **Alignment** with TypeScript reference patterns (domain/commands, domain/events, slices with internal/)
 - ✅ **Explicit hexagonal boundaries** (ports/ folder for discoverability)
 - ✅ **Infrastructure clarity** (buses in infrastructure/, not application/)
 - ✅ **Framework-agnostic** approach (no assumptions about Axon/Django/etc)
@@ -49,34 +50,33 @@ We adopt a **standardized folder structure** that balances:
 
 ```
 contexts/{context-name}/
-├── domain/                          ← PURE BUSINESS LOGIC (Layer 1)
+├── domain/                          ← DOMAIN LAYER (Layer 1)
 │   ├── {Aggregate}Aggregate.*       ← Aggregates at root
 │   ├── {Name}ValueObjects.*         ← Value objects (optional)
-│   ├── commands/                    ← Commands centralized
+│   ├── commands/                    ← Commands (input to domain)
 │   │   ├── {feature}/               ← Subfolder per feature (large domains)
 │   │   │   └── {Feature}Command.*
 │   │   └── {Feature}Command.*       ← Or flat (small domains)
+│   ├── events/                      ← Events (output from domain)
+│   │   ├── {Event}Event.*           ← Current versions
+│   │   ├── versioned/               ← Historical versions
+│   │   │   └── {Event}Event.v1.*
+│   │   └── upcasters/               ← Event migrations
+│   │       └── {Event}Event_v1_v2.*
 │   └── queries/                     ← Query definitions
 │       └── Get{Resource}Query.*
 │
-├── events/                          ← EVENTS AT CONTEXT ROOT (Layer 2)
-│   ├── {Event}Event.*               ← Current versions
-│   ├── versioned/                   ← Historical versions
-│   │   └── {Event}Event.v1.*
-│   └── upcasters/                   ← Event migrations
-│       └── {Event}Event_v1_v2.*
-│
-├── ports/                           ← INTERFACES ONLY (Layer 3)
+├── ports/                           ← INTERFACES ONLY (Layer 2)
 │   ├── {Aggregate}RepositoryPort.*  ← Repository interfaces
 │   ├── CommandBusPort.*             ← Bus interfaces
 │   ├── EventBusPort.*
 │   ├── QueryBusPort.*
 │   └── {External}ServicePort.*      ← External service interfaces
 │
-├── application/                     ← APPLICATION ORCHESTRATION (Layer 4)
+├── application/                     ← APPLICATION ORCHESTRATION (Layer 3)
 │   └── {Service}Service.*           ← Orchestration services (optional)
 │
-├── infrastructure/                  ← CONCRETE IMPLEMENTATIONS (Layer 5)
+├── infrastructure/                  ← CONCRETE IMPLEMENTATIONS (Layer 4)
 │   ├── buses/                       ← Message routing
 │   │   ├── InMemoryCommandBus.*     ← Implements CommandBusPort
 │   │   ├── InMemoryEventBus.*       ← Implements EventBusPort
@@ -86,7 +86,7 @@ contexts/{context-name}/
 │   └── external/
 │       └── {External}Integration.*
 │
-└── slices/                          ← VERTICAL FEATURES (Layer 6)
+└── slices/                          ← VERTICAL FEATURES (Layer 5)
     └── {feature-name}/              ← One feature slice
         ├── internal/                ← Private implementation
         │   ├── Handler.*            ← Command/event handlers
@@ -98,23 +98,26 @@ contexts/{context-name}/
 
 ## Layer Definitions
 
-### Layer 1: Domain (Pure Business Logic)
+### Layer 1: Domain (Complete Business Logic)
 
-**Purpose:** Contains ALL business logic, completely isolated from external concerns.
+**Purpose:** Contains ALL business logic and domain language, completely isolated from external concerns.
 
 **Location:** `domain/`
 
 **Contains:**
 - **Aggregates** (`*Aggregate.*`) - Consistency boundaries at root
 - **Value Objects** (`*ValueObjects.*`) - Immutable domain values (optional)
-- **Commands** (`domain/commands/*Command.*`) - Write operations
+- **Commands** (`domain/commands/*Command.*`) - Write operations (input to domain)
+- **Events** (`domain/events/*Event.*`) - Domain facts (output from domain)
 - **Queries** (`domain/queries/*Query.*`) - Read requests
 
 **Rules:**
-- ✅ MUST be pure (no external dependencies)
-- ✅ MUST NOT import from: `events/`, `ports/`, `application/`, `infrastructure/`, `slices/`
-- ✅ CAN use framework decorators (`@aggregate`, `@command`, etc.)
-- ✅ CAN reference types from other domain entities
+- ✅ MUST be pure (no external dependencies outside domain)
+- ✅ MUST NOT import from: `ports/`, `application/`, `infrastructure/`, `slices/`
+- ✅ CAN import from other domain subfolders (commands, events, aggregates, value_objects)
+- ✅ CAN use framework decorators (`@aggregate`, `@command`, `@event`, etc.)
+- ✅ Aggregates CAN import events (required to emit them)
+- ✅ Events CAN import value objects (for structured data)
 
 **Example:**
 ```python
