@@ -2,7 +2,7 @@
  * Type definitions for VSA Manifest
  *
  * This defines the contract between vsa-cli and vsa-visualizer.
- * Schema version: 1.0.0
+ * Schema version: 1.1.0
  */
 
 export interface Manifest {
@@ -19,6 +19,7 @@ export interface DomainManifest {
   events: Event[];
   queries?: Query[];
   upcasters?: Upcaster[];
+  value_objects?: ValueObject[]; // NEW in v1.1.0
   relationships: Relationships;
 }
 
@@ -83,6 +84,23 @@ export interface Upcaster {
   event_type: string;
 }
 
+/**
+ * Value Object metadata (NEW in v1.1.0)
+ */
+export interface ValueObject {
+  name: string;
+  file_path: string;
+  fields: ValueObjectField[];
+  is_immutable: boolean;
+  line_count: number;
+}
+
+export interface ValueObjectField {
+  name: string;
+  field_type?: string;
+  is_optional: boolean;
+}
+
 export interface Relationships {
   command_to_aggregate: Record<string, string>;
   aggregate_to_events: Record<string, string[]>;
@@ -96,6 +114,7 @@ export interface BoundedContext {
   name: string;
   path: string;
   features: Feature[];
+  infrastructure_folders?: string[]; // NEW in v1.1.0
 }
 
 export interface Feature {

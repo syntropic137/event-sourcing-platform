@@ -53,6 +53,15 @@ export class OverviewGenerator extends BaseGenerator {
     );
     content += this.generateC4Context();
 
+    // Domain Layer
+    if (this.manifest.domain) {
+      content += this.section('Domain Layer', 2);
+      content += this.paragraph(
+        'The domain layer contains pure business logic with no external dependencies.'
+      );
+      content += this.generateDomainLayerOverview();
+    }
+
     // Aggregates Overview
     content += this.section('Aggregates', 2);
     content += this.paragraph(
@@ -92,7 +101,9 @@ export class OverviewGenerator extends BaseGenerator {
 
     // Context Details
     content += this.section('Context Details', 2);
-    content += this.paragraph('Detailed breakdown of each bounded context and its features/slices.');
+    content += this.paragraph(
+      'Detailed breakdown of each bounded context and its features/slices.'
+    );
     content += this.generateContextDetails();
 
     return content;
@@ -106,7 +117,7 @@ export class OverviewGenerator extends BaseGenerator {
 
     if (this.manifest.bounded_contexts && this.manifest.bounded_contexts.length > 0) {
       stats.push(`**Bounded Contexts**: ${this.manifest.bounded_contexts.length}`);
-      
+
       // Count total features across all contexts
       const totalFeatures = this.manifest.bounded_contexts.reduce(
         (sum, ctx) => sum + ctx.features.length,
@@ -123,6 +134,10 @@ export class OverviewGenerator extends BaseGenerator {
 
       if (domain.queries && domain.queries.length > 0) {
         stats.push(`**Queries**: ${domain.queries.length}`);
+      }
+
+      if (domain.value_objects && domain.value_objects.length > 0) {
+        stats.push(`**Value Objects**: ${domain.value_objects.length}`);
       }
 
       if (domain.upcasters && domain.upcasters.length > 0) {
@@ -196,21 +211,53 @@ export class OverviewGenerator extends BaseGenerator {
       content += this.section(context.name, 3);
       content += this.paragraph(`Path: \`${context.path}\``);
 
-      // List features/slices
+      // Show infrastructure folders (NEW in v1.1.0)
+      if (context.infrastructure_folders && context.infrastructure_folders.length > 0) {
+        content += this.paragraph('**Infrastructure:**');
+        const infraList = context.infrastructure_folders.map((f) => `\`${f}\``);
+        content += this.list(infraList);
+      }
+
+      // List features/slices (filter out infrastructure)
       const features = context.features
-        .filter(f => f.name !== 'domain' && f.name !== 'slices' && !f.name.endsWith('__pycache__'))
+        .filter((f) => {
+          // Filter out infrastructure folders
+          const isInfrastructure = context.infrastructure_folders?.includes(f.name);
+          return (
+            !isInfrastructure &&
+            f.name !== 'domain' &&
+            f.name !== 'slices' &&
+            f.name !== 'ports' &&
+            f.name !== 'application' &&
+            f.name !== 'events' &&
+            !f.name.endsWith('__pycache__')
+          );
+        })
         .slice(0, 10); // Limit to first 10 features
 
       if (features.length > 0) {
         content += this.paragraph('**Features/Slices:**');
-        const featureList = features.map(f => {
+        const featureList = features.map((f) => {
           const fileCount = f.files.length;
           return `\`${f.name}\` (${fileCount} files)`;
         });
         content += this.list(featureList);
 
-        if (context.features.length > features.length + 3) {
-          content += this.paragraph(`_... and ${context.features.length - features.length - 3} more features_`);
+        const totalFeatures = context.features.filter((f) => {
+          const isInfrastructure = context.infrastructure_folders?.includes(f.name);
+          return (
+            !isInfrastructure &&
+            f.name !== 'domain' &&
+            f.name !== 'slices' &&
+            f.name !== 'ports' &&
+            f.name !== 'application' &&
+            f.name !== 'events' &&
+            !f.name.endsWith('__pycache__')
+          );
+        }).length;
+
+        if (totalFeatures > features.length) {
+          content += this.paragraph(`_... and ${totalFeatures - features.length} more features_`);
         }
       }
     }
@@ -222,8 +269,12 @@ export class OverviewGenerator extends BaseGenerator {
    * Generate aggregates overview diagram
    */
   private generateAggregatesOverview(): string {
-    const aggregates = this.manifest.domain!.aggregates;
-    const relationships = this.manifest.domain!.relationships;
+    if (!this.manifest.domain) {
+      return this.paragraph('*No domain data available*');
+    }
+
+    const aggregates = this.manifest.domain.aggregates;
+    const relationships = this.manifest.domain.relationships;
 
     let diagram = `graph TB
 `;
@@ -250,7 +301,11 @@ export class OverviewGenerator extends BaseGenerator {
    * Generate event flow diagram
    */
   private generateEventFlow(): string {
-    const relationships = this.manifest.domain!.relationships;
+    if (!this.manifest.domain) {
+      return this.paragraph('*No domain data available*');
+    }
+
+    const relationships = this.manifest.domain.relationships;
 
     let diagram = `graph LR
 `;
@@ -278,10 +333,45 @@ export class OverviewGenerator extends BaseGenerator {
   }
 
   /**
+   * Generate domain layer overview (NEW in v1.1.0)
+   */
+  private generateDomainLayerOverview(): string {
+    if (!this.manifest.domain) {
+      return '';
+    }
+
+    const domain = this.manifest.domain;
+    let content = '';
+
+    // Show aggregates prominently
+    if (domain.aggregates.length > 0) {
+      content += this.section('Aggregates', 3);
+      const aggList = domain.aggregates.map((agg) => {
+        const cmdCount = agg.command_handlers.length;
+        const evtCount = agg.event_handlers.length;
+        return `**${agg.name}** - ${cmdCount} command handler(s), ${evtCount} event handler(s)`;
+      });
+      content += this.list(aggList);
+    }
+
+    // Show value objects (NEW in v1.1.0)
+    if (domain.value_objects && domain.value_objects.length > 0) {
+      content += this.section('Value Objects', 3);
+      const voList = domain.value_objects.map((vo) => {
+        const immutableBadge = vo.is_immutable ? ' 🔒' : '';
+        return `**${vo.name}**${immutableBadge} - ${vo.line_count} lines`;
+      });
+      content += this.list(voList);
+    }
+
+    return content;
+  }
+
+  /**
    * Check if system has events
    */
   private hasEvents(): boolean {
-    return this.manifest.domain!.events.length > 0;
+    return this.manifest.domain !== undefined && this.manifest.domain.events.length > 0;
   }
 
   /**

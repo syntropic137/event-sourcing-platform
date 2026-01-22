@@ -73,22 +73,30 @@ describe('CLI Integration Tests', () => {
       }).toThrow();
     });
 
-    it('should fail with manifest missing domain data', () => {
+    it('should succeed with manifest missing domain data (generates minimal docs)', () => {
       const noDomainFile = path.join(tempDir, 'no-domain.json');
       fs.writeFileSync(
         noDomainFile,
         JSON.stringify({
           version: '0.6.1-beta',
-          schema_version: '1.0.0',
+          schema_version: '1.1.0',
           generated_at: '2026-01-21T00:00:00Z',
+          bounded_contexts: [
+            {
+              name: 'TestContext',
+              path: '/app/contexts/test',
+              features: [],
+            },
+          ],
         })
       );
 
-      expect(() => {
-        execSync(`node ${cliPath} ${noDomainFile} --output ${tempDir}`, {
-          encoding: 'utf-8',
-        });
-      }).toThrow(/does not contain domain data/);
+      // Should succeed but generate minimal documentation
+      const output = execSync(`node ${cliPath} ${noDomainFile} --output ${tempDir}`, {
+        encoding: 'utf-8',
+      });
+
+      expect(output).toContain('Documentation generated successfully');
     });
 
     it('should fail with unsupported format', () => {
