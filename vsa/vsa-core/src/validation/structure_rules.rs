@@ -206,7 +206,7 @@ impl RequireEventsAtContextRootRule {
 
 impl ValidationRule for RequireEventsAtContextRootRule {
     fn name(&self) -> &str {
-        "require-events-at-context-root"
+        "require-events-in-domain"
     }
 
     fn code(&self) -> &str {
@@ -222,47 +222,10 @@ impl ValidationRule for RequireEventsAtContextRootRule {
         let contexts = scanner.scan_contexts()?;
 
         for context in contexts {
-            // Check if events are in domain/events/ (wrong location)
-            let domain_events_path = context.path.join("domain").join("events");
-            if domain_events_path.exists() && domain_events_path.is_dir() {
-                // Found domain/events/ - this is wrong
-                if let Ok(entries) = std::fs::read_dir(&domain_events_path) {
-                    let event_files: Vec<_> = entries
-                        .flatten()
-                        .filter(|e| e.path().is_file() && self.is_event_file(&e.path(), ctx))
-                        .collect();
-
-                    if !event_files.is_empty() {
-                        let events_path = context.path.join("events");
-
-                        report.errors.push(ValidationIssue {
-                            path: domain_events_path.clone(),
-                            code: self.code().to_string(),
-                            severity: Severity::Error,
-                            message: format!(
-                                "Context '{}' has events in domain/events/ directory. \
-                                 As per ADR-019, events should be at context root (events/), \
-                                 not inside domain/. Events are contracts between contexts, \
-                                 not domain implementation details.",
-                                context.name
-                            ),
-                            suggestions: vec![Suggestion::manual(format!(
-                                "Move events from domain/events/ to events/ (context root)\n\
-                                 Commands:\n\
-                                 mkdir -p {}\n\
-                                 git mv {}/* {}/\n\
-                                 rmdir {}",
-                                events_path.display(),
-                                domain_events_path.display(),
-                                events_path.display(),
-                                domain_events_path.display()
-                            ))],
-                        });
-                    }
-                }
-            }
-
-            // Also check for event files in slices or other wrong locations
+            // Per ADR-019 v2: Events should be in domain/events/ (domain cohesion)
+            // Events ARE domain language - they express domain facts
+            
+            // Check for event files in slices or other wrong locations
             self.check_directory_for_misplaced_events(
                 &context.path,
                 &context.path,
