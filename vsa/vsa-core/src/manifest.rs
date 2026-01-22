@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::VsaConfig;
 use crate::domain::DomainModel;
@@ -146,25 +146,20 @@ impl Manifest {
     }
 
     /// Detect infrastructure folders in a context
-    fn detect_infrastructure_folders(context_path: &PathBuf) -> Vec<String> {
+    fn detect_infrastructure_folders(context_path: &Path) -> Vec<String> {
         let mut infrastructure = Vec::new();
-        
+
         // Common infrastructure folders
-        let infra_candidates = vec![
-            "infrastructure",
-            "repositories",
-            "adapters",
-            "services",
-            "buses",
-        ];
-        
+        let infra_candidates =
+            vec!["infrastructure", "repositories", "adapters", "services", "buses"];
+
         for candidate in infra_candidates {
             let candidate_path = context_path.join(candidate);
             if candidate_path.exists() && candidate_path.is_dir() {
                 infrastructure.push(candidate.to_string());
             }
         }
-        
+
         // Also check infrastructure subfolders
         let infrastructure_path = context_path.join("infrastructure");
         if infrastructure_path.exists() && infrastructure_path.is_dir() {
@@ -172,13 +167,13 @@ impl Manifest {
                 for entry in entries.flatten() {
                     if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                         if let Some(name) = entry.file_name().to_str() {
-                            infrastructure.push(format!("infrastructure/{}", name));
+                            infrastructure.push(format!("infrastructure/{name}"));
                         }
                     }
                 }
             }
         }
-        
+
         infrastructure
     }
 
@@ -217,11 +212,7 @@ impl Manifest {
             }
         }
 
-        Relationships {
-            command_to_aggregate,
-            aggregate_to_events,
-            event_to_handlers,
-        }
+        Relationships { command_to_aggregate, aggregate_to_events, event_to_handlers }
     }
 
     /// Export manifest as JSON
@@ -342,39 +333,40 @@ mod tests {
         use crate::domain::*;
 
         let domain_model = DomainModel {
-            aggregates: vec![
-                Aggregate {
-                    name: "CartAggregate".to_string(),
-                    file_path: std::path::PathBuf::from("domain/CartAggregate.ts"),
-                    line_count: 200,
-                    command_handlers: vec![
-                        CommandHandler {
-                            command_type: "AddItemCommand".to_string(),
-                            method_name: "addItem".to_string(),
-                            line_number: 10,
-                            emits_events: vec!["ItemAddedEvent".to_string(), "CartCreatedEvent".to_string()],
-                        },
-                        CommandHandler {
-                            command_type: "RemoveItemCommand".to_string(),
-                            method_name: "removeItem".to_string(),
-                            line_number: 30,
-                            emits_events: vec!["ItemRemovedEvent".to_string()],
-                        },
-                    ],
-                    event_handlers: vec![
-                        EventHandler {
-                            event_type: "ItemAddedEvent".to_string(),
-                            method_name: "onItemAdded".to_string(),
-                            line_number: 50,
-                        },
-                        EventHandler {
-                            event_type: "ItemRemovedEvent".to_string(),
-                            method_name: "onItemRemoved".to_string(),
-                            line_number: 60,
-                        },
-                    ],
-                },
-            ],
+            aggregates: vec![Aggregate {
+                name: "CartAggregate".to_string(),
+                file_path: std::path::PathBuf::from("domain/CartAggregate.ts"),
+                line_count: 200,
+                command_handlers: vec![
+                    CommandHandler {
+                        command_type: "AddItemCommand".to_string(),
+                        method_name: "addItem".to_string(),
+                        line_number: 10,
+                        emits_events: vec![
+                            "ItemAddedEvent".to_string(),
+                            "CartCreatedEvent".to_string(),
+                        ],
+                    },
+                    CommandHandler {
+                        command_type: "RemoveItemCommand".to_string(),
+                        method_name: "removeItem".to_string(),
+                        line_number: 30,
+                        emits_events: vec!["ItemRemovedEvent".to_string()],
+                    },
+                ],
+                event_handlers: vec![
+                    EventHandler {
+                        event_type: "ItemAddedEvent".to_string(),
+                        method_name: "onItemAdded".to_string(),
+                        line_number: 50,
+                    },
+                    EventHandler {
+                        event_type: "ItemRemovedEvent".to_string(),
+                        method_name: "onItemRemoved".to_string(),
+                        line_number: 60,
+                    },
+                ],
+            }],
             commands: vec![],
             events: vec![],
             queries: vec![],

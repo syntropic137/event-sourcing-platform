@@ -180,7 +180,7 @@ impl DomainScanner {
 
             if path.is_file() {
                 let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                
+
                 // Check if file matches ValueObjects pattern
                 if file_name.contains("ValueObjects") {
                     if let Some(value_object) = self.parse_value_object(&path, file_name)? {
@@ -196,11 +196,7 @@ impl DomainScanner {
     /// Parse a value object file
     fn parse_value_object(&self, file_path: &Path, file_name: &str) -> Result<Option<ValueObject>> {
         // Extract value object name from file name
-        let name = file_name
-            .split('.')
-            .next()
-            .unwrap_or(file_name)
-            .to_string();
+        let name = file_name.split('.').next().unwrap_or(file_name).to_string();
 
         // Read file content to count lines
         let content = fs::read_to_string(file_path)?;

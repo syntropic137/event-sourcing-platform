@@ -8,8 +8,11 @@
 //! - Infrastructure: Can depend on everything above
 //! - Slices: Can depend on everything except other slices
 
-use super::{EnhancedValidationReport, Severity, Suggestion, ValidationContext, ValidationIssue, ValidationRule};
 use super::import_parser::parse_imports;
+use super::{
+    EnhancedValidationReport, Severity, Suggestion, ValidationContext, ValidationIssue,
+    ValidationRule,
+};
 use crate::error::Result;
 use crate::scanner::Scanner;
 use std::path::PathBuf;
@@ -51,7 +54,7 @@ impl ValidationRule for DomainPurityRule {
                 .filter(|e| e.file_type().is_file())
             {
                 let file_path = entry.path();
-                
+
                 // Parse imports
                 let imports = match parse_imports(file_path) {
                     Ok(imports) => imports,
@@ -65,7 +68,7 @@ impl ValidationRule for DomainPurityRule {
 
                     if is_forbidden {
                         let relative_path = file_path.strip_prefix(&ctx.root).unwrap_or(file_path);
-                        
+
                         report.errors.push(ValidationIssue {
                             path: file_path.to_path_buf(),
                             code: self.code().to_string(),
@@ -99,7 +102,7 @@ impl DomainPurityRule {
     /// Check if an import module targets a forbidden layer for domain
     fn is_forbidden_import(module: &str) -> bool {
         let normalized = module.replace("::", "/").replace('.', "/");
-        
+
         // Check for forbidden layers in import path
         normalized.contains("/events/")
             || normalized.contains("/ports/")
@@ -157,7 +160,7 @@ impl ValidationRule for EventsIsolationRule {
                 .filter(|e| e.file_type().is_file())
             {
                 let file_path = entry.path();
-                
+
                 // Parse imports
                 let imports = match parse_imports(file_path) {
                     Ok(imports) => imports,
@@ -169,7 +172,7 @@ impl ValidationRule for EventsIsolationRule {
                     // Allow only standard library imports (heuristic)
                     if !Self::is_stdlib_import(&import.module) {
                         let relative_path = file_path.strip_prefix(&ctx.root).unwrap_or(file_path);
-                        
+
                         report.errors.push(ValidationIssue {
                             path: file_path.to_path_buf(),
                             code: self.code().to_string(),
@@ -265,7 +268,7 @@ impl ValidationRule for PortIsolationRule {
                 .filter(|e| e.file_type().is_file())
             {
                 let file_path = entry.path();
-                
+
                 // Parse imports
                 let imports = match parse_imports(file_path) {
                     Ok(imports) => imports,
@@ -277,7 +280,7 @@ impl ValidationRule for PortIsolationRule {
                     // Ports can only import from domain/ and events/ (and stdlib)
                     if !Self::is_allowed_import(&import.module) {
                         let relative_path = file_path.strip_prefix(&ctx.root).unwrap_or(file_path);
-                        
+
                         report.errors.push(ValidationIssue {
                             path: file_path.to_path_buf(),
                             code: self.code().to_string(),
@@ -308,7 +311,7 @@ impl PortIsolationRule {
     /// Check if import is allowed for ports layer
     fn is_allowed_import(module: &str) -> bool {
         let normalized = module.replace("::", "/").replace('.', "/");
-        
+
         // Allow domain and events
         if normalized.contains("/domain/")
             || normalized.contains("/events/")
@@ -372,7 +375,7 @@ impl ValidationRule for ApplicationIsolationRule {
                 .filter(|e| e.file_type().is_file())
             {
                 let file_path = entry.path();
-                
+
                 // Parse imports
                 let imports = match parse_imports(file_path) {
                     Ok(imports) => imports,
@@ -384,7 +387,7 @@ impl ValidationRule for ApplicationIsolationRule {
                     // Application cannot import from slices/ or infrastructure/
                     if Self::is_forbidden_import(&import.module) {
                         let relative_path = file_path.strip_prefix(&ctx.root).unwrap_or(file_path);
-                        
+
                         report.errors.push(ValidationIssue {
                             path: file_path.to_path_buf(),
                             code: self.code().to_string(),
@@ -418,7 +421,7 @@ impl ApplicationIsolationRule {
     /// Check if import is forbidden for application layer
     fn is_forbidden_import(module: &str) -> bool {
         let normalized = module.replace("::", "/").replace('.', "/");
-        
+
         normalized.contains("/infrastructure/")
             || normalized.contains("/slices/")
             || normalized.starts_with("infrastructure/")
@@ -479,7 +482,7 @@ impl ValidationRule for SliceIsolationRule {
                     .filter(|e| e.file_type().is_file())
                 {
                     let file_path = entry.path();
-                    
+
                     // Parse imports
                     let imports = match parse_imports(file_path) {
                         Ok(imports) => imports,
@@ -526,7 +529,7 @@ impl SliceIsolationRule {
     /// Extract slice name from import path if it targets slices/
     fn extract_slice_name(module: &str) -> Option<String> {
         let normalized = module.replace("::", "/").replace('.', "/");
-        
+
         // Check if path contains slices/
         if let Some(slices_pos) = normalized.find("/slices/") {
             let after_slices = &normalized[slices_pos + 8..];
@@ -538,8 +541,7 @@ impl SliceIsolationRule {
         }
 
         // Check if starts with slices/
-        if normalized.starts_with("slices/") {
-            let after_slices = &normalized[7..];
+        if let Some(after_slices) = normalized.strip_prefix("slices/") {
             if let Some(next_slash) = after_slices.find('/') {
                 return Some(after_slices[..next_slash].to_string());
             } else {
@@ -598,7 +600,7 @@ mod tests {
     fn test_vsa027_domain_imports_from_ports() {
         let (_temp_dir, ctx) = create_test_context();
         let context_path = create_context_structure(ctx.root.as_path(), "workflows");
-        
+
         // Create domain file that imports from ports
         let domain_file = context_path.join("domain/WorkflowAggregate.py");
         std::fs::write(
@@ -609,9 +611,9 @@ mod tests {
 
         let rule = DomainPurityRule;
         let mut report = EnhancedValidationReport::default();
-        
+
         rule.validate(&ctx, &mut report).unwrap();
-        
+
         assert_eq!(report.errors.len(), 1);
         assert_eq!(report.errors[0].code, "VSA027");
         assert!(report.errors[0].message.contains("Domain file"));
@@ -622,7 +624,7 @@ mod tests {
     fn test_vsa027_domain_imports_from_infrastructure() {
         let (_temp_dir, ctx) = create_test_context();
         let context_path = create_context_structure(ctx.root.as_path(), "workflows");
-        
+
         // Create domain file that imports from infrastructure
         let domain_file = context_path.join("domain/WorkflowAggregate.py");
         std::fs::write(
@@ -633,9 +635,9 @@ mod tests {
 
         let rule = DomainPurityRule;
         let mut report = EnhancedValidationReport::default();
-        
+
         rule.validate(&ctx, &mut report).unwrap();
-        
+
         assert_eq!(report.errors.len(), 1);
         assert_eq!(report.errors[0].code, "VSA027");
     }
@@ -644,7 +646,7 @@ mod tests {
     fn test_vsa027_domain_pure_allowed() {
         let (_temp_dir, ctx) = create_test_context();
         let context_path = create_context_structure(ctx.root.as_path(), "workflows");
-        
+
         // Create pure domain file (no forbidden imports)
         let domain_file = context_path.join("domain/WorkflowAggregate.py");
         std::fs::write(
@@ -655,9 +657,9 @@ mod tests {
 
         let rule = DomainPurityRule;
         let mut report = EnhancedValidationReport::default();
-        
+
         rule.validate(&ctx, &mut report).unwrap();
-        
+
         assert_eq!(report.errors.len(), 0);
     }
 
@@ -669,20 +671,17 @@ mod tests {
     fn test_vsa028_events_import_domain() {
         let (_temp_dir, ctx) = create_test_context();
         let context_path = create_context_structure(ctx.root.as_path(), "workflows");
-        
+
         // Create event file that imports from domain
         let event_file = context_path.join("events/WorkflowCreatedEvent.py");
-        std::fs::write(
-            &event_file,
-            "from domain.WorkflowAggregate import WorkflowAggregate\n",
-        )
-        .unwrap();
+        std::fs::write(&event_file, "from domain.WorkflowAggregate import WorkflowAggregate\n")
+            .unwrap();
 
         let rule = EventsIsolationRule;
         let mut report = EnhancedValidationReport::default();
-        
+
         rule.validate(&ctx, &mut report).unwrap();
-        
+
         assert_eq!(report.errors.len(), 1);
         assert_eq!(report.errors[0].code, "VSA028");
         assert!(report.errors[0].message.contains("pure data structures"));
@@ -692,7 +691,7 @@ mod tests {
     fn test_vsa028_events_stdlib_allowed() {
         let (_temp_dir, ctx) = create_test_context();
         let context_path = create_context_structure(ctx.root.as_path(), "workflows");
-        
+
         // Create event file with only stdlib imports
         let event_file = context_path.join("events/WorkflowCreatedEvent.py");
         std::fs::write(
@@ -703,9 +702,9 @@ mod tests {
 
         let rule = EventsIsolationRule;
         let mut report = EnhancedValidationReport::default();
-        
+
         rule.validate(&ctx, &mut report).unwrap();
-        
+
         assert_eq!(report.errors.len(), 0);
     }
 
@@ -717,7 +716,7 @@ mod tests {
     fn test_vsa029_ports_import_infrastructure() {
         let (_temp_dir, ctx) = create_test_context();
         let context_path = create_context_structure(ctx.root.as_path(), "workflows");
-        
+
         // Create port file that imports from infrastructure
         let port_file = context_path.join("ports/WorkflowRepositoryPort.py");
         std::fs::write(
@@ -728,9 +727,9 @@ mod tests {
 
         let rule = PortIsolationRule;
         let mut report = EnhancedValidationReport::default();
-        
+
         rule.validate(&ctx, &mut report).unwrap();
-        
+
         assert_eq!(report.errors.len(), 1);
         assert_eq!(report.errors[0].code, "VSA029");
     }
@@ -739,7 +738,7 @@ mod tests {
     fn test_vsa029_ports_import_domain_allowed() {
         let (_temp_dir, ctx) = create_test_context();
         let context_path = create_context_structure(ctx.root.as_path(), "workflows");
-        
+
         // Create port file that imports from domain (allowed)
         let port_file = context_path.join("ports/WorkflowRepositoryPort.py");
         std::fs::write(
@@ -750,9 +749,9 @@ mod tests {
 
         let rule = PortIsolationRule;
         let mut report = EnhancedValidationReport::default();
-        
+
         rule.validate(&ctx, &mut report).unwrap();
-        
+
         assert_eq!(report.errors.len(), 0);
     }
 
@@ -764,7 +763,7 @@ mod tests {
     fn test_vsa030_application_imports_infrastructure() {
         let (_temp_dir, ctx) = create_test_context();
         let context_path = create_context_structure(ctx.root.as_path(), "workflows");
-        
+
         // Create application file that imports from infrastructure
         let app_file = context_path.join("application/WorkflowOrchestrator.py");
         std::fs::write(
@@ -775,9 +774,9 @@ mod tests {
 
         let rule = ApplicationIsolationRule;
         let mut report = EnhancedValidationReport::default();
-        
+
         rule.validate(&ctx, &mut report).unwrap();
-        
+
         assert_eq!(report.errors.len(), 1);
         assert_eq!(report.errors[0].code, "VSA030");
     }
@@ -786,7 +785,7 @@ mod tests {
     fn test_vsa030_application_imports_ports_allowed() {
         let (_temp_dir, ctx) = create_test_context();
         let context_path = create_context_structure(ctx.root.as_path(), "workflows");
-        
+
         // Create application file that imports from ports (allowed)
         let app_file = context_path.join("application/WorkflowOrchestrator.py");
         std::fs::write(
@@ -797,9 +796,9 @@ mod tests {
 
         let rule = ApplicationIsolationRule;
         let mut report = EnhancedValidationReport::default();
-        
+
         rule.validate(&ctx, &mut report).unwrap();
-        
+
         assert_eq!(report.errors.len(), 0);
     }
 
@@ -811,20 +810,16 @@ mod tests {
     fn test_vsa031_slice_imports_other_slice() {
         let (_temp_dir, ctx) = create_test_context();
         let context_path = create_context_structure(ctx.root.as_path(), "workflows");
-        
+
         // Create slice file that imports from another slice
         let slice1_file = context_path.join("slices/slice1/handler.py");
-        std::fs::write(
-            &slice1_file,
-            "from slices.slice2.handler import Slice2Handler\n",
-        )
-        .unwrap();
+        std::fs::write(&slice1_file, "from slices.slice2.handler import Slice2Handler\n").unwrap();
 
         let rule = SliceIsolationRule;
         let mut report = EnhancedValidationReport::default();
-        
+
         rule.validate(&ctx, &mut report).unwrap();
-        
+
         assert_eq!(report.errors.len(), 1);
         assert_eq!(report.errors[0].code, "VSA031");
         assert!(report.errors[0].message.contains("Cross-slice imports are forbidden"));
@@ -834,7 +829,7 @@ mod tests {
     fn test_vsa031_slice_imports_domain_allowed() {
         let (_temp_dir, ctx) = create_test_context();
         let context_path = create_context_structure(ctx.root.as_path(), "workflows");
-        
+
         // Create slice file that imports from domain (allowed)
         let slice1_file = context_path.join("slices/slice1/handler.py");
         std::fs::write(
@@ -845,9 +840,9 @@ mod tests {
 
         let rule = SliceIsolationRule;
         let mut report = EnhancedValidationReport::default();
-        
+
         rule.validate(&ctx, &mut report).unwrap();
-        
+
         assert_eq!(report.errors.len(), 0);
     }
 }

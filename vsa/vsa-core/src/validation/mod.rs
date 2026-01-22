@@ -15,10 +15,10 @@ pub use bounded_context_rules::{
     ContextBoundariesRule, NoCircularDependenciesRule, RequireSharedFolderRule,
 };
 pub use dependency_rules::{
-    ApplicationIsolationRule, DomainPurityRule, EventsIsolationRule, 
-    PortIsolationRule, SliceIsolationRule,
+    ApplicationIsolationRule, DomainPurityRule, EventsIsolationRule, PortIsolationRule,
+    SliceIsolationRule,
 };
-pub use import_parser::{parse_imports, detect_layer, ArchitectureLayer};
+pub use import_parser::{detect_layer, parse_imports, ArchitectureLayer};
 pub use integration_event_rules::{
     IntegrationEventNamingRule, IntegrationEventsLocationRule, NoDuplicateIntegrationEventsRule,
 };
@@ -30,8 +30,8 @@ pub use rules::{ValidationRule, ValidationRuleSet};
 pub use slice_location_rules::RequireSliceLocationRule;
 pub use structure_rules::{
     RequireAggregatesInDomainRootRule, RequireBusesInInfrastructureRule,
-    RequireCommandsInDomainRule, RequireEventsAtContextRootRule, 
-    RequirePortSuffixRule, RequirePortsInPortsFolderRule, RequireValueObjectsNamingRule,
+    RequireCommandsInDomainRule, RequireEventsAtContextRootRule, RequirePortSuffixRule,
+    RequirePortsInPortsFolderRule, RequireValueObjectsNamingRule,
 };
 pub use suggestions::{Suggestion, SuggestionAction};
 

@@ -9,10 +9,10 @@
 //! - VSA025: All ports must end with Port suffix
 //! - VSA026: Value objects should follow *ValueObjects.* pattern
 
+use super::rules::ValidationRule;
 use super::{EnhancedValidationReport, Severity, Suggestion, ValidationContext, ValidationIssue};
 use crate::error::Result;
 use crate::scanner::Scanner;
-use super::rules::ValidationRule;
 use std::path::Path;
 
 // ============================================================================
@@ -89,6 +89,7 @@ impl ValidationRule for RequireCommandsInDomainRule {
 }
 
 impl RequireCommandsInDomainRule {
+    #[allow(clippy::only_used_in_recursion)]
     fn check_directory(
         &self,
         path: &Path,
@@ -120,18 +121,20 @@ impl RequireCommandsInDomainRule {
                     self.check_directory(&entry_path, context_path, context_name, ctx, report)?;
                 } else if self.is_command_file(&entry_path, ctx) {
                     // Found a command file outside domain/commands/
-                    let relative_path = entry_path.strip_prefix(context_path)
+                    let relative_path = entry_path
+                        .strip_prefix(context_path)
                         .unwrap_or(&entry_path)
                         .to_string_lossy();
 
                     // Check if it's in domain/commands/ (allowed)
-                    if relative_path.starts_with("domain/commands/") 
-                        || relative_path.starts_with("domain\\commands\\") {
+                    if relative_path.starts_with("domain/commands/")
+                        || relative_path.starts_with("domain\\commands\\")
+                    {
                         continue;
                     }
 
-                    let suggested_path = context_path.join("domain/commands")
-                        .join(entry_path.file_name().unwrap());
+                    let suggested_path =
+                        context_path.join("domain/commands").join(entry_path.file_name().unwrap());
 
                     report.errors.push(ValidationIssue {
                         path: entry_path.clone(),
@@ -260,7 +263,13 @@ impl ValidationRule for RequireEventsAtContextRootRule {
             }
 
             // Also check for event files in slices or other wrong locations
-            self.check_directory_for_misplaced_events(&context.path, &context.path, &context.name, ctx, report)?;
+            self.check_directory_for_misplaced_events(
+                &context.path,
+                &context.path,
+                &context.name,
+                ctx,
+                report,
+            )?;
         }
 
         Ok(())
@@ -268,6 +277,7 @@ impl ValidationRule for RequireEventsAtContextRootRule {
 }
 
 impl RequireEventsAtContextRootRule {
+    #[allow(clippy::only_used_in_recursion)]
     fn check_directory_for_misplaced_events(
         &self,
         path: &Path,
@@ -303,20 +313,28 @@ impl RequireEventsAtContextRootRule {
                 let entry_path = entry.path();
 
                 if entry_path.is_dir() {
-                    self.check_directory_for_misplaced_events(&entry_path, context_path, context_name, ctx, report)?;
+                    self.check_directory_for_misplaced_events(
+                        &entry_path,
+                        context_path,
+                        context_name,
+                        ctx,
+                        report,
+                    )?;
                 } else if self.is_event_file(&entry_path, ctx) {
-                    let relative_path = entry_path.strip_prefix(context_path)
+                    let relative_path = entry_path
+                        .strip_prefix(context_path)
                         .unwrap_or(&entry_path)
                         .to_string_lossy();
 
                     // Check if in allowed location
-                    if relative_path.starts_with("events/") || relative_path.starts_with("events\\") {
+                    if relative_path.starts_with("events/") || relative_path.starts_with("events\\")
+                    {
                         continue;
                     }
 
                     // Found misplaced event
-                    let suggested_path = context_path.join("events")
-                        .join(entry_path.file_name().unwrap());
+                    let suggested_path =
+                        context_path.join("events").join(entry_path.file_name().unwrap());
 
                     report.errors.push(ValidationIssue {
                         path: entry_path.clone(),
@@ -438,7 +456,13 @@ impl ValidationRule for RequireAggregatesInDomainRootRule {
             }
 
             // Also check for aggregates in wrong locations (slices, etc.)
-            self.check_directory_for_misplaced_aggregates(&context.path, &context.path, &context.name, ctx, report)?;
+            self.check_directory_for_misplaced_aggregates(
+                &context.path,
+                &context.path,
+                &context.name,
+                ctx,
+                report,
+            )?;
         }
 
         Ok(())
@@ -446,6 +470,7 @@ impl ValidationRule for RequireAggregatesInDomainRootRule {
 }
 
 impl RequireAggregatesInDomainRootRule {
+    #[allow(clippy::only_used_in_recursion)]
     fn check_directory_for_misplaced_aggregates(
         &self,
         path: &Path,
@@ -470,10 +495,18 @@ impl RequireAggregatesInDomainRootRule {
             if let Ok(entries) = std::fs::read_dir(path) {
                 for entry in entries.flatten() {
                     let entry_path = entry.path();
-                    if entry_path.is_dir() && entry_path.file_name().unwrap() != "commands" 
-                        && entry_path.file_name().unwrap() != "queries" {
+                    if entry_path.is_dir()
+                        && entry_path.file_name().unwrap() != "commands"
+                        && entry_path.file_name().unwrap() != "queries"
+                    {
                         // Check subfolders of domain/ for misplaced aggregates
-                        self.check_subfolder_for_aggregates(&entry_path, context_path, context_name, ctx, report)?;
+                        self.check_subfolder_for_aggregates(
+                            &entry_path,
+                            context_path,
+                            context_name,
+                            ctx,
+                            report,
+                        )?;
                     }
                 }
             }
@@ -490,7 +523,13 @@ impl RequireAggregatesInDomainRootRule {
             for entry in entries.flatten() {
                 let entry_path = entry.path();
                 if entry_path.is_dir() {
-                    self.check_directory_for_misplaced_aggregates(&entry_path, context_path, context_name, ctx, report)?;
+                    self.check_directory_for_misplaced_aggregates(
+                        &entry_path,
+                        context_path,
+                        context_name,
+                        ctx,
+                        report,
+                    )?;
                 }
             }
         }
@@ -509,9 +548,10 @@ impl RequireAggregatesInDomainRootRule {
         if let Ok(entries) = std::fs::read_dir(path) {
             for entry in entries.flatten() {
                 let entry_path = entry.path();
-                
+
                 if entry_path.is_file() && self.is_aggregate_file(&entry_path, ctx) {
-                    let relative_path = entry_path.strip_prefix(context_path)
+                    let relative_path = entry_path
+                        .strip_prefix(context_path)
                         .unwrap_or(&entry_path)
                         .to_string_lossy();
 
@@ -539,7 +579,13 @@ impl RequireAggregatesInDomainRootRule {
                 }
 
                 if entry_path.is_dir() {
-                    self.check_subfolder_for_aggregates(&entry_path, context_path, context_name, ctx, report)?;
+                    self.check_subfolder_for_aggregates(
+                        &entry_path,
+                        context_path,
+                        context_name,
+                        ctx,
+                        report,
+                    )?;
                 }
             }
         }
@@ -586,12 +632,12 @@ impl RequirePortsInPortsFolderRule {
         };
 
         let ext = ctx.config.file_extension();
-        
+
         // Check file stem for Port suffix
         if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
             return file_stem.ends_with("Port") && file_name.ends_with(&format!(".{ext}"));
         }
-        
+
         false
     }
 }
@@ -623,6 +669,7 @@ impl ValidationRule for RequirePortsInPortsFolderRule {
 }
 
 impl RequirePortsInPortsFolderRule {
+    #[allow(clippy::only_used_in_recursion)]
     fn check_directory(
         &self,
         path: &Path,
@@ -654,7 +701,8 @@ impl RequirePortsInPortsFolderRule {
                     self.check_directory(&entry_path, context_path, context_name, ctx, report)?;
                 } else if self.is_port_file(&entry_path, ctx) {
                     // Found a port file outside ports/ folder
-                    let relative_path = entry_path.strip_prefix(context_path)
+                    let relative_path = entry_path
+                        .strip_prefix(context_path)
                         .unwrap_or(&entry_path)
                         .to_string_lossy();
 
@@ -732,14 +780,14 @@ impl RequireBusesInInfrastructureRule {
         };
 
         let ext = ctx.config.file_extension();
-        
+
         // Check for Bus in filename (but not Port - those are interfaces)
         if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
-            return file_stem.contains("Bus") 
-                && !file_stem.ends_with("Port") 
+            return file_stem.contains("Bus")
+                && !file_stem.ends_with("Port")
                 && file_name.ends_with(&format!(".{ext}"));
         }
-        
+
         false
     }
 }
@@ -765,7 +813,13 @@ impl ValidationRule for RequireBusesInInfrastructureRule {
             // Check specifically in application/ folder (common wrong location)
             let application_path = context.path.join("application");
             if application_path.exists() && application_path.is_dir() {
-                self.check_application_for_buses(&application_path, &context.path, &context.name, ctx, report)?;
+                self.check_application_for_buses(
+                    &application_path,
+                    &context.path,
+                    &context.name,
+                    ctx,
+                    report,
+                )?;
             }
 
             // Also check other wrong locations
@@ -788,7 +842,7 @@ impl RequireBusesInInfrastructureRule {
         if let Ok(entries) = std::fs::read_dir(application_path) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                
+
                 if path.is_file() && self.is_bus_file(&path, ctx) {
                     let infrastructure_buses_path = context_path.join("infrastructure/buses");
                     let suggested_path = infrastructure_buses_path.join(path.file_name().unwrap());
@@ -818,7 +872,13 @@ impl RequireBusesInInfrastructureRule {
                 }
 
                 if path.is_dir() {
-                    self.check_application_for_buses(&path, context_path, context_name, ctx, report)?;
+                    self.check_application_for_buses(
+                        &path,
+                        context_path,
+                        context_name,
+                        ctx,
+                        report,
+                    )?;
                 }
             }
         }
@@ -826,6 +886,7 @@ impl RequireBusesInInfrastructureRule {
         Ok(())
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn check_directory(
         &self,
         path: &Path,
@@ -844,7 +905,10 @@ impl RequireBusesInInfrastructureRule {
         };
 
         // Skip infrastructure/buses/ (correct location)
-        if dir_name == "buses" && path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("infrastructure") {
+        if dir_name == "buses"
+            && path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
+                == Some("infrastructure")
+        {
             return Ok(());
         }
 
@@ -941,11 +1005,12 @@ impl ValidationRule for RequireValueObjectsNamingRule {
                     };
 
                     // Skip aggregates, commands, events, queries
-                    if file_stem.ends_with("Aggregate") 
+                    if file_stem.ends_with("Aggregate")
                         || file_stem.ends_with("Command")
                         || file_stem.ends_with("Event")
-                        || file_stem.ends_with("Query") 
-                        || file_stem.ends_with("Port") {
+                        || file_stem.ends_with("Query")
+                        || file_stem.ends_with("Port")
+                    {
                         continue;
                     }
 
@@ -955,15 +1020,15 @@ impl ValidationRule for RequireValueObjectsNamingRule {
                     }
 
                     // Check for value object indicators without proper suffix
-                    if (file_stem.contains("Value") || file_stem.contains("VO")) 
-                        && !file_stem.ends_with("ValueObjects") {
-                        
+                    if (file_stem.contains("Value") || file_stem.contains("VO"))
+                        && !file_stem.ends_with("ValueObjects")
+                    {
                         let suggested_name = if file_stem.ends_with("s") {
-                            format!("{}Objects.{ext}", file_stem)
+                            format!("{file_stem}Objects.{ext}")
                         } else {
-                            format!("{}ValueObjects.{ext}", file_stem)
+                            format!("{file_stem}ValueObjects.{ext}")
                         };
-                        
+
                         let suggested_path = domain_path.join(&suggested_name);
 
                         report.warnings.push(ValidationIssue {
@@ -971,10 +1036,9 @@ impl ValidationRule for RequireValueObjectsNamingRule {
                             code: self.code().to_string(),
                             severity: Severity::Warning,
                             message: format!(
-                                "File '{}' in domain/ appears to contain value objects but doesn't \
+                                "File '{file_name}' in domain/ appears to contain value objects but doesn't \
                                  follow *ValueObjects naming convention. As per ADR-019, value object \
-                                 files should use *ValueObjects suffix for discoverability.",
-                                file_name
+                                 files should use *ValueObjects suffix for discoverability."
                             ),
                             suggestions: vec![Suggestion::manual(format!(
                                 "Consider renaming to {suggested_name}\n\
@@ -1079,8 +1143,7 @@ impl ValidationRule for RequirePortSuffixRule {
                                 "Port file '{}' in context '{}' does not end with 'Port' suffix. \
                                  As per ADR-019, all port interfaces must use *Port naming \
                                  for discoverability and consistency.",
-                                file_name,
-                                context.name
+                                file_name, context.name
                             ),
                             suggestions: vec![Suggestion::manual(format!(
                                 "Rename to {suggested_name}\n\
@@ -1160,8 +1223,9 @@ mod tests {
         // Event in domain/events/ (wrong location)
         fs::write(
             domain_events_path.join("WorkflowCreatedEvent.py"),
-            "class WorkflowCreatedEvent: pass"
-        ).unwrap();
+            "class WorkflowCreatedEvent: pass",
+        )
+        .unwrap();
 
         let config = create_test_config(root.clone(), "python");
         let ctx = ValidationContext::new(config, root);
@@ -1172,11 +1236,7 @@ mod tests {
 
         // Should report at least 1 error for the domain/events/ folder issue
         // Note: May report 2 errors (folder + individual file) which is acceptable
-        assert!(
-            report.errors.len() >= 1,
-            "Expected at least 1 error, got {}",
-            report.errors.len()
-        );
+        assert!(!report.errors.is_empty(), "Expected at least 1 error, got {}", report.errors.len());
         assert!(report.errors.iter().any(|e| e.code == "VSA021"));
         assert!(report.errors.iter().any(|e| e.message.contains("context root")));
     }
@@ -1191,10 +1251,8 @@ mod tests {
         fs::create_dir_all(&shared_path).unwrap();
 
         // Aggregate in _shared/ (wrong location)
-        fs::write(
-            shared_path.join("WorkflowAggregate.py"),
-            "class WorkflowAggregate: pass"
-        ).unwrap();
+        fs::write(shared_path.join("WorkflowAggregate.py"), "class WorkflowAggregate: pass")
+            .unwrap();
 
         let config = create_test_config(root.clone(), "python");
         let ctx = ValidationContext::new(config, root);
@@ -1243,8 +1301,11 @@ mod tests {
         fs::create_dir_all(&domain_path).unwrap();
 
         // Port in domain/ (wrong location)
-        fs::write(domain_path.join("WorkflowRepositoryPort.py"), "class WorkflowRepositoryPort: pass")
-            .unwrap();
+        fs::write(
+            domain_path.join("WorkflowRepositoryPort.py"),
+            "class WorkflowRepositoryPort: pass",
+        )
+        .unwrap();
 
         let config = create_test_config(root.clone(), "python");
         let ctx = ValidationContext::new(config, root);
@@ -1268,8 +1329,7 @@ mod tests {
         fs::create_dir_all(&application_path).unwrap();
 
         // Bus in application/ (wrong location)
-        fs::write(application_path.join("CommandBus.py"), "class CommandBus: pass")
-            .unwrap();
+        fs::write(application_path.join("CommandBus.py"), "class CommandBus: pass").unwrap();
 
         let config = create_test_config(root.clone(), "python");
         let ctx = ValidationContext::new(config, root);
@@ -1293,8 +1353,7 @@ mod tests {
         fs::create_dir_all(&domain_path).unwrap();
 
         // Value objects file without proper suffix (warning)
-        fs::write(domain_path.join("WorkflowValues.py"), "class WorkflowId: pass")
-            .unwrap();
+        fs::write(domain_path.join("WorkflowValues.py"), "class WorkflowId: pass").unwrap();
 
         let config = create_test_config(root.clone(), "python");
         let ctx = ValidationContext::new(config, root);
@@ -1314,7 +1373,7 @@ mod tests {
         let root = temp_dir.path().to_path_buf();
 
         let context_path = root.join("workflows");
-        
+
         // Create valid structure
         let domain_path = context_path.join("domain");
         let commands_path = domain_path.join("commands");
@@ -1333,16 +1392,22 @@ mod tests {
             .unwrap();
 
         // Command in domain/commands/ (correct)
-        fs::write(commands_path.join("CreateWorkflowCommand.py"), "class CreateWorkflowCommand: pass")
-            .unwrap();
+        fs::write(
+            commands_path.join("CreateWorkflowCommand.py"),
+            "class CreateWorkflowCommand: pass",
+        )
+        .unwrap();
 
         // Event at context root (correct)
         fs::write(events_path.join("WorkflowCreatedEvent.py"), "class WorkflowCreatedEvent: pass")
             .unwrap();
 
         // Port with Port suffix in ports/ folder (correct)
-        fs::write(ports_path.join("WorkflowRepositoryPort.py"), "class WorkflowRepositoryPort: pass")
-            .unwrap();
+        fs::write(
+            ports_path.join("WorkflowRepositoryPort.py"),
+            "class WorkflowRepositoryPort: pass",
+        )
+        .unwrap();
 
         // Bus in infrastructure/buses/ (correct)
         fs::write(buses_path.join("InMemoryCommandBus.py"), "class InMemoryCommandBus: pass")

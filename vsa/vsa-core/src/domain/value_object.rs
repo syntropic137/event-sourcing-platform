@@ -66,13 +66,11 @@ mod tests {
         let vo = ValueObject {
             name: "EmailValueObjects".to_string(),
             file_path: PathBuf::from("domain/EmailValueObjects.py"),
-            fields: vec![
-                ValueObjectField {
-                    name: "email".to_string(),
-                    field_type: Some("str".to_string()),
-                    is_optional: false,
-                },
-            ],
+            fields: vec![ValueObjectField {
+                name: "email".to_string(),
+                field_type: Some("str".to_string()),
+                is_optional: false,
+            }],
             is_immutable: true,
             line_count: 10,
         };

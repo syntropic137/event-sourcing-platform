@@ -36,12 +36,12 @@ impl ValidationRuleSet {
     pub fn default_rules() -> Self {
         use super::{
             ApplicationIsolationRule, ContextBoundariesRule, DomainPurityRule, EventsIsolationRule,
-            IntegrationEventNamingRule, IntegrationEventsLocationRule, NoCircularDependenciesRule, 
+            IntegrationEventNamingRule, IntegrationEventsLocationRule, NoCircularDependenciesRule,
             NoCrossSliceImportsRule, NoDuplicateIntegrationEventsRule, PortIsolationRule,
-            ProjectionEventSubscriptionRule, RequireAggregatesInDomainRootRule, 
-            RequireBusesInInfrastructureRule, RequireCommandsInDomainRule, 
-            RequireEventsAtContextRootRule, RequireHandlerForQueryRule, RequirePortSuffixRule, 
-            RequirePortsInPortsFolderRule, RequireProjectionForQueryRule, RequireSharedFolderRule, 
+            ProjectionEventSubscriptionRule, RequireAggregatesInDomainRootRule,
+            RequireBusesInInfrastructureRule, RequireCommandsInDomainRule,
+            RequireEventsAtContextRootRule, RequireHandlerForQueryRule, RequirePortSuffixRule,
+            RequirePortsInPortsFolderRule, RequireProjectionForQueryRule, RequireSharedFolderRule,
             RequireSliceLocationRule, RequireValueObjectsNamingRule, SliceIsolationRule,
             ThinAdapterRule,
         };
@@ -69,19 +69,19 @@ impl ValidationRuleSet {
             // Slice location rules
             Box::new(RequireSliceLocationRule),
             // ADR-019 Structure rules (enforces canonical VSA structure)
-            Box::new(RequireCommandsInDomainRule),           // VSA020: Commands in domain/commands/
-            Box::new(RequireEventsAtContextRootRule),        // VSA021: Events at context root
-            Box::new(RequireAggregatesInDomainRootRule),     // VSA022: Aggregates in domain/ root
-            Box::new(RequirePortsInPortsFolderRule),         // VSA023: Ports in ports/ folder
-            Box::new(RequireBusesInInfrastructureRule),      // VSA024: Buses in infrastructure/buses/
-            Box::new(RequirePortSuffixRule),                 // VSA025: Port suffix naming
-            Box::new(RequireValueObjectsNamingRule),         // VSA026: ValueObjects naming
+            Box::new(RequireCommandsInDomainRule), // VSA020: Commands in domain/commands/
+            Box::new(RequireEventsAtContextRootRule), // VSA021: Events at context root
+            Box::new(RequireAggregatesInDomainRootRule), // VSA022: Aggregates in domain/ root
+            Box::new(RequirePortsInPortsFolderRule), // VSA023: Ports in ports/ folder
+            Box::new(RequireBusesInInfrastructureRule), // VSA024: Buses in infrastructure/buses/
+            Box::new(RequirePortSuffixRule),       // VSA025: Port suffix naming
+            Box::new(RequireValueObjectsNamingRule), // VSA026: ValueObjects naming
             // ADR-019 Dependency rules (enforces hexagonal architecture)
-            Box::new(DomainPurityRule),                      // VSA027: Domain purity (no external deps)
-            Box::new(EventsIsolationRule),                   // VSA028: Events isolation (pure data)
-            Box::new(PortIsolationRule),                     // VSA029: Port isolation (domain/events only)
-            Box::new(ApplicationIsolationRule),              // VSA030: Application isolation (no infra/slices)
-            Box::new(SliceIsolationRule),                    // VSA031: Slice isolation (no cross-slice)
+            Box::new(DomainPurityRule), // VSA027: Domain purity (no external deps)
+            Box::new(EventsIsolationRule), // VSA028: Events isolation (pure data)
+            Box::new(PortIsolationRule), // VSA029: Port isolation (domain/events only)
+            Box::new(ApplicationIsolationRule), // VSA030: Application isolation (no infra/slices)
+            Box::new(SliceIsolationRule), // VSA031: Slice isolation (no cross-slice)
             // Slice isolation rules (legacy)
             Box::new(NoCrossSliceImportsRule),
             Box::new(ThinAdapterRule),
