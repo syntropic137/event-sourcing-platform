@@ -3,7 +3,7 @@
 //! Scans the domain/ folder to extract metadata about all domain components.
 
 use crate::config::{DomainConfig, EventVersioningConfig};
-use crate::domain::{DomainModel, Upcaster};
+use crate::domain::{DomainModel, Upcaster, ValueObject};
 use crate::error::{Result, VsaError};
 use crate::scanners::{AggregateScanner, CommandScanner, EventScanner, QueryScanner};
 use std::fs;
@@ -75,6 +75,9 @@ impl DomainScanner {
                     self.scan_upcasters(&upcasters_path, &self.config.events.versioning)?;
             }
         }
+
+        // Scan value objects
+        model.value_objects = self.scan_value_objects(&domain_path)?;
 
         Ok(model)
     }
@@ -160,6 +163,63 @@ impl DomainScanner {
         }
 
         Ok(None)
+    }
+
+    /// Scan for value objects in the domain folder
+    fn scan_value_objects(&self, domain_path: &Path) -> Result<Vec<ValueObject>> {
+        let mut value_objects = Vec::new();
+
+        if !domain_path.exists() || !domain_path.is_dir() {
+            return Ok(value_objects);
+        }
+
+        // Scan for files matching *ValueObjects.* pattern
+        for entry in fs::read_dir(domain_path)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_file() {
+                let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                
+                // Check if file matches ValueObjects pattern
+                if file_name.contains("ValueObjects") {
+                    if let Some(value_object) = self.parse_value_object(&path, file_name)? {
+                        value_objects.push(value_object);
+                    }
+                }
+            }
+        }
+
+        Ok(value_objects)
+    }
+
+    /// Parse a value object file
+    fn parse_value_object(&self, file_path: &Path, file_name: &str) -> Result<Option<ValueObject>> {
+        // Extract value object name from file name
+        let name = file_name
+            .split('.')
+            .next()
+            .unwrap_or(file_name)
+            .to_string();
+
+        // Read file content to count lines
+        let content = fs::read_to_string(file_path)?;
+        let line_count = content.lines().count();
+
+        // Check for immutability indicators (basic heuristic)
+        let is_immutable = content.contains("frozen=True")
+            || content.contains("@dataclass(frozen=True)")
+            || content.contains("readonly ")
+            || content.contains("const ")
+            || content.contains("immutable");
+
+        Ok(Some(ValueObject {
+            name,
+            file_path: file_path.to_path_buf(),
+            fields: Vec::new(), // Simple implementation - could be enhanced to parse fields
+            is_immutable,
+            line_count,
+        }))
     }
 }
 
