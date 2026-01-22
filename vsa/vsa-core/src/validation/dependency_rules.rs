@@ -161,6 +161,11 @@ impl ValidationRule for EventsIsolationRule {
             {
                 let file_path = entry.path();
 
+                // Skip __init__.py files (they need to import from same package for re-exports)
+                if file_path.file_name().and_then(|n| n.to_str()) == Some("__init__.py") {
+                    continue;
+                }
+
                 // Parse imports
                 let imports = match parse_imports(file_path) {
                     Ok(imports) => imports,
@@ -203,7 +208,7 @@ impl ValidationRule for EventsIsolationRule {
 }
 
 impl EventsIsolationRule {
-    /// Check if import is from standard library (allow these)
+    /// Check if import is from standard library or allowed framework (allow these)
     fn is_stdlib_import(module: &str) -> bool {
         // Python stdlib
         if module.starts_with("typing")
@@ -211,12 +216,21 @@ impl EventsIsolationRule {
             || module.starts_with("datetime")
             || module.starts_with("uuid")
             || module.starts_with("enum")
+            || module.starts_with("decimal")
+            || module.starts_with("__future__")
             || module == "typing"
             || module == "dataclasses"
             || module == "datetime"
             || module == "uuid"
             || module == "enum"
+            || module == "decimal"
+            || module == "__future__"
         {
+            return true;
+        }
+
+        // Event sourcing framework (required for @event decorator and DomainEvent)
+        if module.starts_with("event_sourcing") || module == "event_sourcing" {
             return true;
         }
 
