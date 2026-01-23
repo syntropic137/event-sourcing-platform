@@ -9,6 +9,10 @@ pub struct Aggregate {
     /// Name of the aggregate (e.g., "TaskAggregate", "CartAggregate")
     pub name: String,
 
+    /// Bounded context this aggregate belongs to (optional for monolithic projects)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+
     /// File path relative to project root
     pub file_path: PathBuf,
 
@@ -76,6 +80,7 @@ mod tests {
     fn create_test_aggregate() -> Aggregate {
         Aggregate {
             name: "TaskAggregate".to_string(),
+            context: None,
             file_path: PathBuf::from("domain/TaskAggregate.ts"),
             line_count: 150,
             command_handlers: vec![
@@ -135,6 +140,7 @@ mod tests {
     fn test_empty_aggregate() {
         let aggregate = Aggregate {
             name: "EmptyAggregate".to_string(),
+            context: None,
             file_path: PathBuf::from("domain/EmptyAggregate.ts"),
             line_count: 10,
             command_handlers: vec![],

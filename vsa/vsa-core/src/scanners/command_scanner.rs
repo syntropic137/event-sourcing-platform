@@ -87,6 +87,7 @@ impl<'a> CommandScanner<'a> {
         // Fields will be populated by AST parser in Milestone 4
         Ok(Some(Command {
             name,
+            context: None, // Will be set by domain scanner when scanning contexts
             file_path: file_path.to_path_buf(),
             has_aggregate_id,
             fields: Vec::new(),

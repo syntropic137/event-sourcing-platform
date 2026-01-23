@@ -127,17 +127,13 @@ describe('OverviewGenerator', () => {
       manifest.bounded_contexts = [
         {
           name: 'Orders',
-          description: 'Order management',
-          aggregates: ['OrderAggregate'],
-          publishes: ['OrderPlaced'],
-          subscribes: [],
+          path: '/app/contexts/orders',
+          features: [],
         },
         {
           name: 'Shipping',
-          description: 'Shipping management',
-          aggregates: ['ShipmentAggregate'],
-          publishes: ['ShipmentCreated'],
-          subscribes: ['OrderPlaced'],
+          path: '/app/contexts/shipping',
+          features: [],
         },
       ];
 
@@ -155,15 +151,13 @@ describe('OverviewGenerator', () => {
       manifest.bounded_contexts = [
         {
           name: 'Context1',
-          aggregates: [],
-          publishes: [],
-          subscribes: [],
+          path: '/app/contexts/context1',
+          features: [],
         },
         {
           name: 'Context2',
-          aggregates: [],
-          publishes: [],
-          subscribes: [],
+          path: '/app/contexts/context2',
+          features: [],
         },
       ];
 
@@ -178,10 +172,14 @@ describe('OverviewGenerator', () => {
       manifest.bounded_contexts = [
         {
           name: 'Orders',
-          description: 'Order management',
-          aggregates: ['OrderAggregate'],
-          publishes: ['OrderPlaced'],
-          subscribes: [],
+          path: '/app/contexts/orders',
+          features: [
+            {
+              name: 'create_order',
+              path: 'slices/create_order',
+              files: ['Handler.py', 'Command.py'],
+            },
+          ],
         },
       ];
 
@@ -189,9 +187,7 @@ describe('OverviewGenerator', () => {
       const output = generator.generate();
 
       expect(output).toContain('### Orders');
-      expect(output).toContain('Order management');
-      expect(output).toContain('**Aggregates**: OrderAggregate');
-      expect(output).toContain('**Publishes**: OrderPlaced');
+      expect(output).toContain('Path: `/app/contexts/orders`');
     });
 
     it('should generate integration events diagram', () => {
@@ -199,25 +195,27 @@ describe('OverviewGenerator', () => {
       manifest.bounded_contexts = [
         {
           name: 'Orders',
-          aggregates: ['OrderAggregate'],
-          publishes: ['OrderPlaced'],
-          subscribes: [],
+          path: '/app/contexts/orders',
+          features: [
+            {
+              name: 'create_order',
+              path: 'slices/create_order',
+              files: ['Handler.py'],
+            },
+          ],
         },
         {
           name: 'Shipping',
-          aggregates: ['ShipmentAggregate'],
-          publishes: [],
-          subscribes: ['OrderPlaced'],
+          path: '/app/contexts/shipping',
+          features: [],
         },
       ];
 
       const generator = new OverviewGenerator(manifest);
       const output = generator.generate();
 
-      expect(output).toContain('## Integration Events');
       expect(output).toContain('Orders');
       expect(output).toContain('Shipping');
-      expect(output).toContain('OrderPlaced');
     });
   });
 

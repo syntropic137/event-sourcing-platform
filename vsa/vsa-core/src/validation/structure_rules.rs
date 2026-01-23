@@ -1,0 +1,1405 @@
+//! Structure validation rules for ADR-019
+//!
+//! Validates that the codebase follows the canonical VSA structure:
+//! - VSA020: Commands must be in domain/commands/
+//! - VSA021: Events must be at context root (events/), NOT in domain/
+//! - VSA022: Aggregates must be in domain/ root, NOT in _shared/
+//! - VSA023: Ports must be in ports/ folder with *Port suffix
+//! - VSA024: Buses must be in infrastructure/buses/, NOT application/
+//! - VSA025: All ports must end with Port suffix
+//! - VSA026: Value objects should follow *ValueObjects.* pattern
+
+use super::rules::ValidationRule;
+use super::{EnhancedValidationReport, Severity, Suggestion, ValidationContext, ValidationIssue};
+use crate::error::Result;
+use crate::scanner::Scanner;
+use std::path::Path;
+
+// ============================================================================
+// VSA020: Commands must be in domain/commands/
+// ============================================================================
+
+/// VSA020: All commands must be located in domain/commands/ directory
+///
+/// This enforces centralized command organization as defined in ADR-019.
+/// Commands are domain contracts that define all write operations.
+///
+/// Invalid structure:
+/// ```
+/// contexts/workflows/
+///   └── slices/
+///       └── create_workflow/
+///           └── CreateWorkflowCommand.py  # ❌ Command in slice
+/// ```
+///
+/// Valid structure:
+/// ```
+/// contexts/workflows/
+///   ├── domain/
+///   │   └── commands/
+///   │       └── CreateWorkflowCommand.py  # ✅ Command in domain/commands/
+///   └── slices/
+///       └── create_workflow/
+///           └── internal/
+///               └── Handler.py            # ✅ Handler imports from domain
+/// ```
+pub struct RequireCommandsInDomainRule;
+
+impl RequireCommandsInDomainRule {
+    fn is_command_file(&self, path: &Path, ctx: &ValidationContext) -> bool {
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => return false,
+        };
+
+        let ext = ctx.config.file_extension();
+        file_name.ends_with(&format!("Command.{ext}"))
+    }
+}
+
+impl ValidationRule for RequireCommandsInDomainRule {
+    fn name(&self) -> &str {
+        "require-commands-in-domain"
+    }
+
+    fn code(&self) -> &str {
+        "VSA020"
+    }
+
+    fn validate(
+        &self,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        let scanner = Scanner::new(ctx.config.clone(), ctx.root.clone());
+        let contexts = scanner.scan_contexts()?;
+
+        for context in contexts {
+            // Walk all files in context, looking for *Command.* files
+            if let Ok(entries) = std::fs::read_dir(&context.path) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    self.check_directory(&path, &context.path, &context.name, ctx, report)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl RequireCommandsInDomainRule {
+    #[allow(clippy::only_used_in_recursion)]
+    fn check_directory(
+        &self,
+        path: &Path,
+        context_path: &Path,
+        context_name: &str,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        if !path.is_dir() {
+            return Ok(());
+        }
+
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => return Ok(()),
+        };
+
+        // Skip domain folder itself (we're checking other locations)
+        if dir_name == "domain" {
+            return Ok(());
+        }
+
+        // Recursively check subdirectories
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+
+                if entry_path.is_dir() {
+                    self.check_directory(&entry_path, context_path, context_name, ctx, report)?;
+                } else if self.is_command_file(&entry_path, ctx) {
+                    // Found a command file outside domain/commands/
+                    let relative_path = entry_path
+                        .strip_prefix(context_path)
+                        .unwrap_or(&entry_path)
+                        .to_string_lossy();
+
+                    // Check if it's in domain/commands/ (allowed)
+                    if relative_path.starts_with("domain/commands/")
+                        || relative_path.starts_with("domain\\commands\\")
+                    {
+                        continue;
+                    }
+
+                    let suggested_path =
+                        context_path.join("domain/commands").join(entry_path.file_name().unwrap());
+
+                    report.errors.push(ValidationIssue {
+                        path: entry_path.clone(),
+                        code: self.code().to_string(),
+                        severity: Severity::Error,
+                        message: format!(
+                            "Command file '{}' in context '{}' is not in domain/commands/ directory. \
+                             All commands should be centralized in domain/commands/ as per ADR-019 \
+                             (found at: {})",
+                            entry_path.file_name().unwrap().to_string_lossy(),
+                            context_name,
+                            relative_path
+                        ),
+                        suggestions: vec![Suggestion::manual(format!(
+                            "Move this command to domain/commands/\n\
+                             Command: git mv {} {}",
+                            entry_path.display(),
+                            suggested_path.display()
+                        ))],
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// ============================================================================
+// VSA021: Events must be in domain/events/, NOT at context root
+// ============================================================================
+
+/// VSA021: Events must be in domain/events/, NOT at context root (events/)
+///
+/// As defined in ADR-019, events are domain concepts that express domain facts
+/// and should be in the domain folder for domain cohesion, not at context root.
+///
+/// Invalid structure:
+/// ```
+/// contexts/workflows/
+///   ├── events/
+///   │   └── WorkflowCreatedEvent.py  # ❌ Events at context root
+///   └── domain/
+///       └── WorkflowAggregate.py
+/// ```
+///
+/// Valid structure:
+/// ```
+/// contexts/workflows/
+///   └── domain/
+///       ├── events/
+///       │   ├── WorkflowCreatedEvent.py      # ✅ Events in domain/events/
+///       │   ├── versioned/                   # ✅ Old versions
+///       │   └── upcasters/                   # ✅ Migrations
+///       └── WorkflowAggregate.py
+/// ```
+pub struct RequireEventsInDomainRule;
+
+impl RequireEventsInDomainRule {
+    fn is_event_file(&self, path: &Path, ctx: &ValidationContext) -> bool {
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => return false,
+        };
+
+        let ext = ctx.config.file_extension();
+        file_name.ends_with(&format!("Event.{ext}"))
+    }
+}
+
+impl ValidationRule for RequireEventsInDomainRule {
+    fn name(&self) -> &str {
+        "require-events-in-domain"
+    }
+
+    fn code(&self) -> &str {
+        "VSA021"
+    }
+
+    fn validate(
+        &self,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        let scanner = Scanner::new(ctx.config.clone(), ctx.root.clone());
+        let contexts = scanner.scan_contexts()?;
+
+        for context in contexts {
+            // Per ADR-019 v2: Events should be in domain/events/ (domain cohesion)
+            // Events ARE domain language - they express domain facts
+
+            // Check for event files in slices or other wrong locations
+            self.check_directory_for_misplaced_events(
+                &context.path,
+                &context.path,
+                &context.name,
+                ctx,
+                report,
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
+impl RequireEventsInDomainRule {
+    #[allow(clippy::only_used_in_recursion)]
+    fn check_directory_for_misplaced_events(
+        &self,
+        path: &Path,
+        context_path: &Path,
+        context_name: &str,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        if !path.is_dir() {
+            return Ok(());
+        }
+
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => return Ok(()),
+        };
+
+        // Skip allowed locations
+        // Only domain/events/ is allowed (per ADR-019: domain cohesion)
+        if path == context_path.join("domain").join("events") {
+            return Ok(());
+        }
+        if dir_name == "versioned" || dir_name == "upcasters" {
+            return Ok(());
+        }
+
+        // Recursively check subdirectories
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+
+                if entry_path.is_dir() {
+                    self.check_directory_for_misplaced_events(
+                        &entry_path,
+                        context_path,
+                        context_name,
+                        ctx,
+                        report,
+                    )?;
+                } else if self.is_event_file(&entry_path, ctx) {
+                    let relative_path = entry_path
+                        .strip_prefix(context_path)
+                        .unwrap_or(&entry_path)
+                        .to_string_lossy();
+
+                    // Check if in allowed location (domain/events/ only)
+                    if relative_path.starts_with("domain/events/")
+                        || relative_path.starts_with("domain\\events\\")
+                        || relative_path.starts_with("domain/events\\")
+                        || relative_path.starts_with("domain\\events/")
+                    {
+                        continue;
+                    }
+
+                    // Found misplaced event
+                    let suggested_path = context_path
+                        .join("domain")
+                        .join("events")
+                        .join(entry_path.file_name().unwrap());
+
+                    report.errors.push(ValidationIssue {
+                        path: entry_path.clone(),
+                        code: self.code().to_string(),
+                        severity: Severity::Error,
+                        message: format!(
+                            "Event file '{}' in context '{}' is not in domain/events/. \
+                             Per ADR-019, events should be in domain/events/ directory for domain cohesion, not in {} \
+                             (found at: {})",
+                            entry_path.file_name().unwrap().to_string_lossy(),
+                            context_name,
+                            dir_name,
+                            relative_path
+                        ),
+                        suggestions: vec![Suggestion::manual(format!(
+                            "Move this event to domain/events/\n\
+                             Command: git mv {} {}",
+                            entry_path.display(),
+                            suggested_path.display()
+                        ))],
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// ============================================================================
+// VSA022: Aggregates must be in domain/ root, NOT in _shared/
+// ============================================================================
+
+/// VSA022: Aggregates must be in domain/ root
+///
+/// As per ADR-019, aggregates should be at the domain/ root for high visibility.
+/// The _shared/ folder pattern is deprecated.
+///
+/// Invalid structure:
+/// ```
+/// contexts/workflows/
+///   └── _shared/
+///       └── WorkflowAggregate.py  # ❌ Aggregate in _shared/
+/// ```
+///
+/// Valid structure:
+/// ```
+/// contexts/workflows/
+///   └── domain/
+///       ├── WorkflowAggregate.py          # ✅ Aggregate at domain root
+///       └── WorkflowExecutionAggregate.py # ✅ Multiple aggregates OK
+/// ```
+pub struct RequireAggregatesInDomainRootRule;
+
+impl RequireAggregatesInDomainRootRule {
+    fn is_aggregate_file(&self, path: &Path, ctx: &ValidationContext) -> bool {
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => return false,
+        };
+
+        let ext = ctx.config.file_extension();
+        file_name.ends_with(&format!("Aggregate.{ext}"))
+    }
+}
+
+impl ValidationRule for RequireAggregatesInDomainRootRule {
+    fn name(&self) -> &str {
+        "require-aggregates-in-domain-root"
+    }
+
+    fn code(&self) -> &str {
+        "VSA022"
+    }
+
+    fn validate(
+        &self,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        let scanner = Scanner::new(ctx.config.clone(), ctx.root.clone());
+        let contexts = scanner.scan_contexts()?;
+
+        for context in contexts {
+            // Check for aggregates in _shared/ (wrong location)
+            let shared_path = context.path.join("_shared");
+            if shared_path.exists() && shared_path.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&shared_path) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() && self.is_aggregate_file(&path, ctx) {
+                            let domain_path = context.path.join("domain");
+                            let suggested_path = domain_path.join(path.file_name().unwrap());
+
+                            report.errors.push(ValidationIssue {
+                                path: path.clone(),
+                                code: self.code().to_string(),
+                                severity: Severity::Error,
+                                message: format!(
+                                    "Aggregate '{}' in context '{}' is in _shared/ directory. \
+                                     As per ADR-019, aggregates should be in domain/ root \
+                                     for high visibility. The _shared/ pattern is deprecated.",
+                                    path.file_name().unwrap().to_string_lossy(),
+                                    context.name
+                                ),
+                                suggestions: vec![Suggestion::manual(format!(
+                                    "Move aggregate to domain/ root\n\
+                                     Commands:\n\
+                                     mkdir -p {}\n\
+                                     git mv {} {}",
+                                    domain_path.display(),
+                                    path.display(),
+                                    suggested_path.display()
+                                ))],
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Also check for aggregates in wrong locations (slices, etc.)
+            self.check_directory_for_misplaced_aggregates(
+                &context.path,
+                &context.path,
+                &context.name,
+                ctx,
+                report,
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
+impl RequireAggregatesInDomainRootRule {
+    #[allow(clippy::only_used_in_recursion)]
+    fn check_directory_for_misplaced_aggregates(
+        &self,
+        path: &Path,
+        context_path: &Path,
+        context_name: &str,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        if !path.is_dir() {
+            return Ok(());
+        }
+
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => return Ok(()),
+        };
+
+        // Skip domain/ folder and its immediate children
+        if dir_name == "domain" {
+            // Only check if aggregates are NOT in domain root
+            // (they should be directly in domain/, not in subfolders)
+            if let Ok(entries) = std::fs::read_dir(path) {
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+                    if entry_path.is_dir()
+                        && entry_path.file_name().unwrap() != "commands"
+                        && entry_path.file_name().unwrap() != "queries"
+                    {
+                        // Check subfolders of domain/ for misplaced aggregates
+                        self.check_subfolder_for_aggregates(
+                            &entry_path,
+                            context_path,
+                            context_name,
+                            ctx,
+                            report,
+                        )?;
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        // Skip _shared as we already checked it
+        if dir_name == "_shared" {
+            return Ok(());
+        }
+
+        // Recursively check other directories
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+                if entry_path.is_dir() {
+                    self.check_directory_for_misplaced_aggregates(
+                        &entry_path,
+                        context_path,
+                        context_name,
+                        ctx,
+                        report,
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn check_subfolder_for_aggregates(
+        &self,
+        path: &Path,
+        context_path: &Path,
+        context_name: &str,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+
+                if entry_path.is_file() && self.is_aggregate_file(&entry_path, ctx) {
+                    let relative_path = entry_path
+                        .strip_prefix(context_path)
+                        .unwrap_or(&entry_path)
+                        .to_string_lossy();
+
+                    let domain_path = context_path.join("domain");
+                    let suggested_path = domain_path.join(entry_path.file_name().unwrap());
+
+                    report.errors.push(ValidationIssue {
+                        path: entry_path.clone(),
+                        code: self.code().to_string(),
+                        severity: Severity::Error,
+                        message: format!(
+                            "Aggregate '{}' in context '{}' is in a subdirectory ({}). \
+                             Aggregates should be directly in domain/ root, not in subfolders.",
+                            entry_path.file_name().unwrap().to_string_lossy(),
+                            context_name,
+                            relative_path
+                        ),
+                        suggestions: vec![Suggestion::manual(format!(
+                            "Move aggregate to domain/ root\n\
+                             Command: git mv {} {}",
+                            entry_path.display(),
+                            suggested_path.display()
+                        ))],
+                    });
+                }
+
+                if entry_path.is_dir() {
+                    self.check_subfolder_for_aggregates(
+                        &entry_path,
+                        context_path,
+                        context_name,
+                        ctx,
+                        report,
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// ============================================================================
+// VSA023: Ports must be in ports/ folder
+// ============================================================================
+
+/// VSA023: All port interfaces must be in ports/ folder
+///
+/// As per ADR-019, port interfaces define the hexagonal boundaries and
+/// should be in a dedicated ports/ folder for discoverability.
+///
+/// Invalid:
+/// ```
+/// contexts/workflows/
+///   ├── domain/
+///   │   └── WorkflowRepositoryPort.py    # ❌ Port in domain/
+///   └── infrastructure/
+///       └── CommandBusPort.py            # ❌ Port in infrastructure/
+/// ```
+///
+/// Valid:
+/// ```
+/// contexts/workflows/
+///   ├── ports/
+///   │   ├── WorkflowRepositoryPort.py    # ✅ Port in ports/
+///   │   └── CommandBusPort.py            # ✅ Port in ports/
+///   └── infrastructure/
+///       └── repositories/
+///           └── PostgresWorkflowRepository.py  # ✅ Implementation
+/// ```
+pub struct RequirePortsInPortsFolderRule;
+
+impl RequirePortsInPortsFolderRule {
+    fn is_port_file(&self, path: &Path, ctx: &ValidationContext) -> bool {
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => return false,
+        };
+
+        let ext = ctx.config.file_extension();
+
+        // Check file stem for Port suffix
+        if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
+            return file_stem.ends_with("Port") && file_name.ends_with(&format!(".{ext}"));
+        }
+
+        false
+    }
+}
+
+impl ValidationRule for RequirePortsInPortsFolderRule {
+    fn name(&self) -> &str {
+        "require-ports-in-ports-folder"
+    }
+
+    fn code(&self) -> &str {
+        "VSA023"
+    }
+
+    fn validate(
+        &self,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        let scanner = Scanner::new(ctx.config.clone(), ctx.root.clone());
+        let contexts = scanner.scan_contexts()?;
+
+        for context in contexts {
+            // Check all directories except ports/ for port files
+            self.check_directory(&context.path, &context.path, &context.name, ctx, report)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl RequirePortsInPortsFolderRule {
+    #[allow(clippy::only_used_in_recursion)]
+    fn check_directory(
+        &self,
+        path: &Path,
+        context_path: &Path,
+        context_name: &str,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        if !path.is_dir() {
+            return Ok(());
+        }
+
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => return Ok(()),
+        };
+
+        // Skip ports/ folder itself (this is the correct location)
+        if dir_name == "ports" && path == context_path.join("ports") {
+            return Ok(());
+        }
+
+        // Check files in this directory
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+
+                if entry_path.is_dir() {
+                    self.check_directory(&entry_path, context_path, context_name, ctx, report)?;
+                } else if self.is_port_file(&entry_path, ctx) {
+                    // Found a port file outside ports/ folder
+                    let relative_path = entry_path
+                        .strip_prefix(context_path)
+                        .unwrap_or(&entry_path)
+                        .to_string_lossy();
+
+                    let ports_path = context_path.join("ports");
+                    let suggested_path = ports_path.join(entry_path.file_name().unwrap());
+
+                    report.errors.push(ValidationIssue {
+                        path: entry_path.clone(),
+                        code: self.code().to_string(),
+                        severity: Severity::Error,
+                        message: format!(
+                            "Port interface '{}' in context '{}' is not in ports/ directory. \
+                             As per ADR-019, all port interfaces should be in ports/ folder \
+                             for discoverability and hexagonal boundary enforcement \
+                             (found at: {})",
+                            entry_path.file_name().unwrap().to_string_lossy(),
+                            context_name,
+                            relative_path
+                        ),
+                        suggestions: vec![Suggestion::manual(format!(
+                            "Move this port to ports/ folder\n\
+                             Commands:\n\
+                             mkdir -p {}\n\
+                             git mv {} {}",
+                            ports_path.display(),
+                            entry_path.display(),
+                            suggested_path.display()
+                        ))],
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// ============================================================================
+// VSA024: Buses must be in infrastructure/buses/
+// ============================================================================
+
+/// VSA024: Buses must be in infrastructure/buses/, NOT application/
+///
+/// As per ADR-019, buses (CommandBus, EventBus, QueryBus) are infrastructure
+/// concerns (message routing), not business orchestration.
+///
+/// Invalid:
+/// ```
+/// contexts/workflows/
+///   └── application/
+///       ├── CommandBus.py      # ❌ Bus in application/
+///       └── EventBus.py        # ❌ Bus in application/
+/// ```
+///
+/// Valid:
+/// ```
+/// contexts/workflows/
+///   ├── ports/
+///   │   ├── CommandBusPort.py              # ✅ Interface in ports/
+///   │   └── EventBusPort.py                # ✅ Interface in ports/
+///   ├── application/
+///   │   └── WorkflowSagaCoordinator.py     # ✅ Business orchestration
+///   └── infrastructure/
+///       └── buses/
+///           ├── InMemoryCommandBus.py      # ✅ Implementation
+///           └── InMemoryEventBus.py        # ✅ Implementation
+/// ```
+pub struct RequireBusesInInfrastructureRule;
+
+impl RequireBusesInInfrastructureRule {
+    fn is_bus_file(&self, path: &Path, ctx: &ValidationContext) -> bool {
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => return false,
+        };
+
+        let ext = ctx.config.file_extension();
+
+        // Check for Bus in filename (but not Port - those are interfaces)
+        if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
+            return file_stem.contains("Bus")
+                && !file_stem.ends_with("Port")
+                && file_name.ends_with(&format!(".{ext}"));
+        }
+
+        false
+    }
+}
+
+impl ValidationRule for RequireBusesInInfrastructureRule {
+    fn name(&self) -> &str {
+        "require-buses-in-infrastructure"
+    }
+
+    fn code(&self) -> &str {
+        "VSA024"
+    }
+
+    fn validate(
+        &self,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        let scanner = Scanner::new(ctx.config.clone(), ctx.root.clone());
+        let contexts = scanner.scan_contexts()?;
+
+        for context in contexts {
+            // Check specifically in application/ folder (common wrong location)
+            let application_path = context.path.join("application");
+            if application_path.exists() && application_path.is_dir() {
+                self.check_application_for_buses(
+                    &application_path,
+                    &context.path,
+                    &context.name,
+                    ctx,
+                    report,
+                )?;
+            }
+
+            // Also check other wrong locations
+            self.check_directory(&context.path, &context.path, &context.name, ctx, report)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl RequireBusesInInfrastructureRule {
+    fn check_application_for_buses(
+        &self,
+        application_path: &Path,
+        context_path: &Path,
+        context_name: &str,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        if let Ok(entries) = std::fs::read_dir(application_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+
+                if path.is_file() && self.is_bus_file(&path, ctx) {
+                    let infrastructure_buses_path = context_path.join("infrastructure/buses");
+                    let suggested_path = infrastructure_buses_path.join(path.file_name().unwrap());
+
+                    report.errors.push(ValidationIssue {
+                        path: path.clone(),
+                        code: self.code().to_string(),
+                        severity: Severity::Error,
+                        message: format!(
+                            "Bus implementation '{}' in context '{}' is in application/ directory. \
+                             As per ADR-019, buses are infrastructure concerns (message routing) \
+                             and should be in infrastructure/buses/, not application/. \
+                             Application layer is for business orchestration, not technical plumbing.",
+                            path.file_name().unwrap().to_string_lossy(),
+                            context_name
+                        ),
+                        suggestions: vec![Suggestion::manual(format!(
+                            "Move bus to infrastructure/buses/\n\
+                             Commands:\n\
+                             mkdir -p {}\n\
+                             git mv {} {}",
+                            infrastructure_buses_path.display(),
+                            path.display(),
+                            suggested_path.display()
+                        ))],
+                    });
+                }
+
+                if path.is_dir() {
+                    self.check_application_for_buses(
+                        &path,
+                        context_path,
+                        context_name,
+                        ctx,
+                        report,
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::only_used_in_recursion)]
+    fn check_directory(
+        &self,
+        path: &Path,
+        context_path: &Path,
+        context_name: &str,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        if !path.is_dir() {
+            return Ok(());
+        }
+
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => return Ok(()),
+        };
+
+        // Skip infrastructure/buses/ (correct location)
+        if dir_name == "buses"
+            && path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
+                == Some("infrastructure")
+        {
+            return Ok(());
+        }
+
+        // Skip ports/ (bus interfaces are allowed there)
+        if dir_name == "ports" {
+            return Ok(());
+        }
+
+        // Skip application/ (handled separately)
+        if dir_name == "application" && path == context_path.join("application") {
+            return Ok(());
+        }
+
+        // Check other locations
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+                if entry_path.is_dir() {
+                    self.check_directory(&entry_path, context_path, context_name, ctx, report)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// ============================================================================
+// VSA026: Value objects naming convention
+// ============================================================================
+
+/// VSA026: Value objects should follow *ValueObjects.* pattern (if in separate file)
+///
+/// As per ADR-019, complex/reusable value objects in separate files should
+/// use the *ValueObjects suffix for discoverability.
+///
+/// Invalid:
+/// ```
+/// domain/WorkflowValues.py       # ❌ Missing ValueObjects suffix
+/// domain/Values.py               # ❌ Too generic
+/// ```
+///
+/// Valid:
+/// ```
+/// domain/WorkflowValueObjects.py # ✅ Clear naming
+/// domain/WorkflowAggregate.py    # ✅ Inline value objects OK
+/// ```
+pub struct RequireValueObjectsNamingRule;
+
+impl ValidationRule for RequireValueObjectsNamingRule {
+    fn name(&self) -> &str {
+        "require-value-objects-naming"
+    }
+
+    fn code(&self) -> &str {
+        "VSA026"
+    }
+
+    fn validate(
+        &self,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        let scanner = Scanner::new(ctx.config.clone(), ctx.root.clone());
+        let contexts = scanner.scan_contexts()?;
+
+        for context in contexts {
+            let domain_path = context.path.join("domain");
+            if !domain_path.exists() || !domain_path.is_dir() {
+                continue;
+            }
+
+            // Check files in domain/ root
+            if let Ok(entries) = std::fs::read_dir(&domain_path) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_file() {
+                        continue;
+                    }
+
+                    let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                        Some(name) => name,
+                        None => continue,
+                    };
+
+                    let ext = ctx.config.file_extension();
+                    if !file_name.ends_with(&format!(".{ext}")) {
+                        continue;
+                    }
+
+                    let file_stem = match path.file_stem().and_then(|n| n.to_str()) {
+                        Some(stem) => stem,
+                        None => continue,
+                    };
+
+                    // Skip aggregates, commands, events, queries
+                    if file_stem.ends_with("Aggregate")
+                        || file_stem.ends_with("Command")
+                        || file_stem.ends_with("Event")
+                        || file_stem.ends_with("Query")
+                        || file_stem.ends_with("Port")
+                    {
+                        continue;
+                    }
+
+                    // Skip __init__, mod, etc.
+                    if file_stem.starts_with("__") || file_stem == "mod" {
+                        continue;
+                    }
+
+                    // Check for value object indicators without proper suffix
+                    if (file_stem.contains("Value") || file_stem.contains("VO"))
+                        && !file_stem.ends_with("ValueObjects")
+                    {
+                        let suggested_name = if file_stem.ends_with("s") {
+                            format!("{file_stem}Objects.{ext}")
+                        } else {
+                            format!("{file_stem}ValueObjects.{ext}")
+                        };
+
+                        let suggested_path = domain_path.join(&suggested_name);
+
+                        report.warnings.push(ValidationIssue {
+                            path: path.clone(),
+                            code: self.code().to_string(),
+                            severity: Severity::Warning,
+                            message: format!(
+                                "File '{file_name}' in domain/ appears to contain value objects but doesn't \
+                                 follow *ValueObjects naming convention. As per ADR-019, value object \
+                                 files should use *ValueObjects suffix for discoverability."
+                            ),
+                            suggestions: vec![Suggestion::manual(format!(
+                                "Consider renaming to {suggested_name}\n\
+                                 Command: git mv {} {}",
+                                path.display(),
+                                suggested_path.display()
+                            ))],
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// ============================================================================
+// VSA025: All ports must end with Port suffix
+// ============================================================================
+
+/// VSA025: All interfaces in ports/ folder must end with Port suffix
+///
+/// As per ADR-019, all port interfaces must use the *Port naming convention
+/// for discoverability and automated validation.
+///
+/// Invalid:
+/// ```
+/// ports/WorkflowRepository.py      # ❌ Missing Port suffix
+/// ports/CommandBus.py              # ❌ Missing Port suffix
+/// ```
+///
+/// Valid:
+/// ```
+/// ports/WorkflowRepositoryPort.py  # ✅ Has Port suffix
+/// ports/CommandBusPort.py          # ✅ Has Port suffix
+/// ```
+pub struct RequirePortSuffixRule;
+
+impl ValidationRule for RequirePortSuffixRule {
+    fn name(&self) -> &str {
+        "require-port-suffix"
+    }
+
+    fn code(&self) -> &str {
+        "VSA025"
+    }
+
+    fn validate(
+        &self,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        let scanner = Scanner::new(ctx.config.clone(), ctx.root.clone());
+        let contexts = scanner.scan_contexts()?;
+
+        for context in contexts {
+            let ports_path = context.path.join("ports");
+            if !ports_path.exists() || !ports_path.is_dir() {
+                continue;
+            }
+
+            // Check all files in ports/ directory
+            if let Ok(entries) = std::fs::read_dir(&ports_path) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_file() {
+                        continue;
+                    }
+
+                    let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                        Some(name) => name,
+                        None => continue,
+                    };
+
+                    let ext = ctx.config.file_extension();
+                    if !file_name.ends_with(&format!(".{ext}")) {
+                        continue;
+                    }
+
+                    // Get file stem (without extension)
+                    let file_stem = match path.file_stem().and_then(|n| n.to_str()) {
+                        Some(stem) => stem,
+                        None => continue,
+                    };
+
+                    // Skip __init__.py and similar
+                    if file_stem.starts_with("__") || file_stem == "mod" {
+                        continue;
+                    }
+
+                    // Check for Port suffix
+                    if !file_stem.ends_with("Port") {
+                        let suggested_name = format!("{file_stem}Port.{ext}");
+                        let suggested_path = ports_path.join(&suggested_name);
+
+                        report.errors.push(ValidationIssue {
+                            path: path.clone(),
+                            code: self.code().to_string(),
+                            severity: Severity::Error,
+                            message: format!(
+                                "Port file '{}' in context '{}' does not end with 'Port' suffix. \
+                                 As per ADR-019, all port interfaces must use *Port naming \
+                                 for discoverability and consistency.",
+                                file_name, context.name
+                            ),
+                            suggestions: vec![Suggestion::manual(format!(
+                                "Rename to {suggested_name}\n\
+                                 Command: git mv {} {}",
+                                path.display(),
+                                suggested_path.display()
+                            ))],
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::VsaConfig;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    fn create_test_config(root: PathBuf, language: &str) -> VsaConfig {
+        VsaConfig {
+            version: 2,
+            architecture: crate::config::ArchitectureType::HexagonalEventSourcedVsa,
+            root,
+            language: language.to_string(),
+            domain: None,
+            slices: None,
+            infrastructure: None,
+            framework: None,
+            contexts: HashMap::new(),
+            validation: crate::config::ValidationConfig::default(),
+            patterns: crate::config::PatternsConfig::default(),
+        }
+    }
+
+    #[test]
+    fn test_vsa020_command_in_slice() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        let context_path = root.join("workflows");
+        let slice_path = context_path.join("slices/create_workflow");
+        fs::create_dir_all(&slice_path).unwrap();
+
+        // Command in slice (wrong location)
+        fs::write(slice_path.join("CreateWorkflowCommand.py"), "class CreateWorkflowCommand: pass")
+            .unwrap();
+
+        let config = create_test_config(root.clone(), "python");
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = RequireCommandsInDomainRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].code, "VSA020");
+        assert!(report.errors[0].message.contains("domain/commands/"));
+    }
+
+    /// Test VSA021: Events in domain/events/ is the correct location per ADR-019
+    /// This validates that events are properly placed in the domain folder for domain cohesion
+    #[test]
+    fn test_vsa021_events_in_domain_events_correct() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        let context_path = root.join("workflows");
+        let domain_events_path = context_path.join("domain/events");
+        fs::create_dir_all(&domain_events_path).unwrap();
+
+        // Create vsa.yaml with domain/events configuration
+        fs::write(context_path.join("vsa.yaml"), "events_path: \"domain/events\"\n").unwrap();
+
+        // Event in domain/events/ per ADR-019 (correct canonical location)
+        fs::write(
+            domain_events_path.join("WorkflowCreatedEvent.py"),
+            "class WorkflowCreatedEvent: pass",
+        )
+        .unwrap();
+
+        let config = create_test_config(root.clone(), "python");
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = RequireEventsInDomainRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        // Should have 0 errors - domain/events/ is the canonical location per ADR-019
+        assert_eq!(
+            report.errors.len(),
+            0,
+            "Events in domain/events/ should be allowed per ADR-019. Errors: {:?}",
+            report.errors
+        );
+    }
+
+    #[test]
+    fn test_vsa022_aggregate_in_shared() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        let context_path = root.join("workflows");
+        let shared_path = context_path.join("_shared");
+        fs::create_dir_all(&shared_path).unwrap();
+
+        // Aggregate in _shared/ (wrong location)
+        fs::write(shared_path.join("WorkflowAggregate.py"), "class WorkflowAggregate: pass")
+            .unwrap();
+
+        let config = create_test_config(root.clone(), "python");
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = RequireAggregatesInDomainRootRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].code, "VSA022");
+        assert!(report.errors[0].message.contains("domain/ root"));
+    }
+
+    #[test]
+    fn test_vsa025_port_without_suffix() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        let context_path = root.join("workflows");
+        let ports_path = context_path.join("ports");
+        fs::create_dir_all(&ports_path).unwrap();
+
+        // Port without Port suffix (wrong naming)
+        fs::write(ports_path.join("WorkflowRepository.py"), "class WorkflowRepository: pass")
+            .unwrap();
+
+        let config = create_test_config(root.clone(), "python");
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = RequirePortSuffixRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].code, "VSA025");
+        assert!(report.errors[0].message.contains("Port"));
+    }
+
+    #[test]
+    fn test_vsa023_port_outside_ports_folder() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        let context_path = root.join("workflows");
+        let domain_path = context_path.join("domain");
+        fs::create_dir_all(&domain_path).unwrap();
+
+        // Port in domain/ (wrong location)
+        fs::write(
+            domain_path.join("WorkflowRepositoryPort.py"),
+            "class WorkflowRepositoryPort: pass",
+        )
+        .unwrap();
+
+        let config = create_test_config(root.clone(), "python");
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = RequirePortsInPortsFolderRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].code, "VSA023");
+        assert!(report.errors[0].message.contains("ports/ folder"));
+    }
+
+    #[test]
+    fn test_vsa024_bus_in_application() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        let context_path = root.join("workflows");
+        let application_path = context_path.join("application");
+        fs::create_dir_all(&application_path).unwrap();
+
+        // Bus in application/ (wrong location)
+        fs::write(application_path.join("CommandBus.py"), "class CommandBus: pass").unwrap();
+
+        let config = create_test_config(root.clone(), "python");
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = RequireBusesInInfrastructureRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].code, "VSA024");
+        assert!(report.errors[0].message.contains("infrastructure/buses/"));
+    }
+
+    #[test]
+    fn test_vsa026_value_objects_naming() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        let context_path = root.join("workflows");
+        let domain_path = context_path.join("domain");
+        fs::create_dir_all(&domain_path).unwrap();
+
+        // Value objects file without proper suffix (warning)
+        fs::write(domain_path.join("WorkflowValues.py"), "class WorkflowId: pass").unwrap();
+
+        let config = create_test_config(root.clone(), "python");
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = RequireValueObjectsNamingRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.warnings.len(), 1);
+        assert_eq!(report.warnings[0].code, "VSA026");
+        assert!(report.warnings[0].message.contains("ValueObjects"));
+    }
+
+    #[test]
+    fn test_valid_structure() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        let context_path = root.join("workflows");
+
+        // Create valid structure
+        let domain_path = context_path.join("domain");
+        let commands_path = domain_path.join("commands");
+        let events_path = domain_path.join("events");
+        let ports_path = context_path.join("ports");
+        let infrastructure_path = context_path.join("infrastructure");
+        let buses_path = infrastructure_path.join("buses");
+
+        fs::create_dir_all(&commands_path).unwrap();
+        fs::create_dir_all(&events_path).unwrap();
+        fs::create_dir_all(&ports_path).unwrap();
+        fs::create_dir_all(&buses_path).unwrap();
+
+        // Aggregate in domain root (correct)
+        fs::write(domain_path.join("WorkflowAggregate.py"), "class WorkflowAggregate: pass")
+            .unwrap();
+
+        // Command in domain/commands/ (correct)
+        fs::write(
+            commands_path.join("CreateWorkflowCommand.py"),
+            "class CreateWorkflowCommand: pass",
+        )
+        .unwrap();
+
+        // Event in domain/events/ (correct per ADR-019)
+        fs::write(events_path.join("WorkflowCreatedEvent.py"), "class WorkflowCreatedEvent: pass")
+            .unwrap();
+
+        // Port with Port suffix in ports/ folder (correct)
+        fs::write(
+            ports_path.join("WorkflowRepositoryPort.py"),
+            "class WorkflowRepositoryPort: pass",
+        )
+        .unwrap();
+
+        // Bus in infrastructure/buses/ (correct)
+        fs::write(buses_path.join("InMemoryCommandBus.py"), "class InMemoryCommandBus: pass")
+            .unwrap();
+
+        let config = create_test_config(root.clone(), "python");
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        // Run all rules
+        RequireCommandsInDomainRule.validate(&ctx, &mut report).unwrap();
+        RequireEventsInDomainRule.validate(&ctx, &mut report).unwrap();
+        RequireAggregatesInDomainRootRule.validate(&ctx, &mut report).unwrap();
+        RequirePortsInPortsFolderRule.validate(&ctx, &mut report).unwrap();
+        RequirePortSuffixRule.validate(&ctx, &mut report).unwrap();
+        RequireBusesInInfrastructureRule.validate(&ctx, &mut report).unwrap();
+        RequireValueObjectsNamingRule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.errors.len(), 0, "Valid structure should have no errors");
+        assert_eq!(report.warnings.len(), 0, "Valid structure should have no warnings");
+    }
+}

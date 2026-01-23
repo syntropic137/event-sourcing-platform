@@ -2,7 +2,20 @@
  * Type definitions for VSA Manifest
  *
  * This defines the contract between vsa-cli and vsa-visualizer.
- * Schema version: 1.0.0
+ *
+ * Schema version: 2.0.0 (supersedes 1.0.0)
+ *
+ * BREAKING CHANGES since 1.0.0:
+ * - Manifest: Renamed `contexts` field to `bounded_contexts` for clarity
+ *
+ * NEW FEATURES since 1.0.0:
+ * - DomainManifest: Added optional `value_objects` field
+ * - BoundedContext: Restructured type to model features/slices
+ * - BoundedContext: Added optional `infrastructure_folders` field
+ *
+ * When upgrading from schema 1.0.0 to 2.0.0, ensure producers and
+ * consumers of the manifest are updated to use the new `bounded_contexts`
+ * field name instead of `contexts`.
  */
 
 export interface Manifest {
@@ -19,6 +32,7 @@ export interface DomainManifest {
   events: Event[];
   queries?: Query[];
   upcasters?: Upcaster[];
+  value_objects?: ValueObject[]; // NEW in v2.0.0
   relationships: Relationships;
 }
 
@@ -83,18 +97,43 @@ export interface Upcaster {
   event_type: string;
 }
 
+/**
+ * Value Object metadata (NEW in v2.0.0)
+ */
+export interface ValueObject {
+  name: string;
+  file_path: string;
+  fields: ValueObjectField[];
+  is_immutable: boolean;
+  line_count: number;
+}
+
+export interface ValueObjectField {
+  name: string;
+  field_type?: string;
+  is_optional: boolean;
+}
+
 export interface Relationships {
   command_to_aggregate: Record<string, string>;
   aggregate_to_events: Record<string, string[]>;
   event_to_handlers: Record<string, string[]>;
 }
 
+/**
+ * Bounded Context with features/slices
+ */
 export interface BoundedContext {
   name: string;
-  description?: string;
-  aggregates: string[];
-  publishes: string[];
-  subscribes: string[];
+  path: string;
+  features: Feature[];
+  infrastructure_folders?: string[]; // NEW in v2.0.0
+}
+
+export interface Feature {
+  name: string;
+  path: string;
+  files: string[];
 }
 
 /**

@@ -5,3 +5,4 @@ packages:
   - docs-site
   - vsa/examples/*-ts
   - vsa/vscode-extension
+  - vsa/vsa-visualizer
