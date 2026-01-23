@@ -6,12 +6,45 @@ import { getContextCount } from '../manifest/parser';
  * Generates OVERVIEW.md with system-level diagrams
  */
 export class OverviewGenerator extends BaseGenerator {
+  /** Maximum number of features to display per context in overview */
+  private readonly MAX_DISPLAYED_FEATURES = 10;
+
+  /** Folder names to exclude when listing features (infrastructure/organizational folders) */
+  private readonly EXCLUDED_FEATURE_FOLDERS = [
+    'domain',
+    'slices',
+    'ports',
+    'application',
+    'events',
+    '__pycache__',
+  ];
+
   constructor(manifest: Manifest) {
     super(manifest);
   }
 
   protected getTitle(): string {
     return 'System Overview';
+  }
+
+  /**
+   * Filter features to exclude infrastructure and organizational folders
+   * @param features - Array of features to filter
+   * @param infrastructureFolders - Optional array of context-specific infrastructure folders
+   * @returns Filtered array of features
+   */
+  private filterFeatureFolders(
+    features: Array<{ name: string; path: string; files: string[] }>,
+    infrastructureFolders?: string[]
+  ): Array<{ name: string; path: string; files: string[] }> {
+    return features.filter((f) => {
+      const isInfrastructure = infrastructureFolders?.includes(f.name);
+      return (
+        !isInfrastructure &&
+        !this.EXCLUDED_FEATURE_FOLDERS.includes(f.name) &&
+        !f.name.endsWith('__pycache__')
+      );
+    });
   }
 
   /**
@@ -24,7 +57,7 @@ export class OverviewGenerator extends BaseGenerator {
     // Add description
     content += this.paragraph(
       'This document provides a high-level overview of the system architecture, ' +
-        'including bounded contexts, aggregates, and their relationships.'
+      'including bounded contexts, aggregates, and their relationships.'
     );
 
     // Generate statistics
@@ -52,6 +85,15 @@ export class OverviewGenerator extends BaseGenerator {
       'High-level view of the system and its interactions with external actors.'
     );
     content += this.generateC4Context();
+
+    // Domain Layer
+    if (this.manifest.domain) {
+      content += this.section('Domain Layer', 2);
+      content += this.paragraph(
+        'The domain layer contains pure business logic with no external dependencies.'
+      );
+      content += this.generateDomainLayerOverview();
+    }
 
     // Aggregates Overview
     content += this.section('Aggregates', 2);
@@ -92,14 +134,10 @@ export class OverviewGenerator extends BaseGenerator {
 
     // Context Details
     content += this.section('Context Details', 2);
+    content += this.paragraph(
+      'Detailed breakdown of each bounded context and its features/slices.'
+    );
     content += this.generateContextDetails();
-
-    // Integration Events
-    if (this.hasIntegrationEvents()) {
-      content += this.section('Integration Events', 2);
-      content += this.paragraph('Events published and consumed across bounded context boundaries.');
-      content += this.generateIntegrationEvents();
-    }
 
     return content;
   }
@@ -108,23 +146,36 @@ export class OverviewGenerator extends BaseGenerator {
    * Generate statistics summary
    */
   private generateStatistics(): string {
-    const domain = this.manifest.domain!;
-    const stats = [
-      `**Aggregates**: ${domain.aggregates.length}`,
-      `**Commands**: ${domain.commands.length}`,
-      `**Events**: ${domain.events.length}`,
-    ];
-
-    if (domain.queries && domain.queries.length > 0) {
-      stats.push(`**Queries**: ${domain.queries.length}`);
-    }
-
-    if (domain.upcasters && domain.upcasters.length > 0) {
-      stats.push(`**Upcasters**: ${domain.upcasters.length}`);
-    }
+    const stats = [];
 
     if (this.manifest.bounded_contexts && this.manifest.bounded_contexts.length > 0) {
       stats.push(`**Bounded Contexts**: ${this.manifest.bounded_contexts.length}`);
+
+      // Count total features across all contexts
+      const totalFeatures = this.manifest.bounded_contexts.reduce(
+        (sum, ctx) => sum + ctx.features.length,
+        0
+      );
+      stats.push(`**Total Features/Slices**: ${totalFeatures}`);
+    }
+
+    if (this.manifest.domain) {
+      const domain = this.manifest.domain;
+      stats.push(`**Aggregates**: ${domain.aggregates.length}`);
+      stats.push(`**Commands**: ${domain.commands.length}`);
+      stats.push(`**Events**: ${domain.events.length}`);
+
+      if (domain.queries && domain.queries.length > 0) {
+        stats.push(`**Queries**: ${domain.queries.length}`);
+      }
+
+      if (domain.value_objects && domain.value_objects.length > 0) {
+        stats.push(`**Value Objects**: ${domain.value_objects.length}`);
+      }
+
+      if (domain.upcasters && domain.upcasters.length > 0) {
+        stats.push(`**Upcasters**: ${domain.upcasters.length}`);
+      }
     }
 
     let content = this.section('Statistics', 2);
@@ -170,31 +221,14 @@ export class OverviewGenerator extends BaseGenerator {
     // Add each bounded context as a container
     for (const context of contexts) {
       const contextId = this.sanitizeId(context.name);
-      const aggCount = context.aggregates.length;
-      diagram += `    Container(${contextId}, "${context.name} Context", "Bounded Context", "${aggCount} aggregate(s)")\n`;
+      const featureCount = context.features.length;
+      diagram += `    Container(${contextId}, "${context.name}", "Bounded Context", "${featureCount} feature(s)")\n`;
     }
 
     diagram += `  }\n\n`;
 
     // Add relationships
     diagram += `  Rel(user, ${this.sanitizeId(contexts[0].name)}, "Uses")\n`;
-
-    // Add integration event relationships
-    for (const context of contexts) {
-      if (context.publishes && context.publishes.length > 0) {
-        for (const subscriber of contexts) {
-          if (subscriber.name === context.name) continue;
-
-          const hasSubscription = subscriber.subscribes?.some((event) =>
-            context.publishes.includes(event)
-          );
-
-          if (hasSubscription) {
-            diagram += `  Rel(${this.sanitizeId(context.name)}, ${this.sanitizeId(subscriber.name)}, "Publishes events")\n`;
-          }
-        }
-      }
-    }
 
     return this.wrapMermaid(diagram);
   }
@@ -208,18 +242,36 @@ export class OverviewGenerator extends BaseGenerator {
 
     for (const context of contexts) {
       content += this.section(context.name, 3);
+      content += this.paragraph(`Path: \`${context.path}\``);
 
-      if (context.description) {
-        content += this.paragraph(context.description);
+      // Show infrastructure folders (NEW in v2.0.0)
+      if (context.infrastructure_folders && context.infrastructure_folders.length > 0) {
+        content += this.paragraph('**Infrastructure:**');
+        const infraList = context.infrastructure_folders.map((f) => `\`${f}\``);
+        content += this.list(infraList);
       }
 
-      const details = [
-        `**Aggregates**: ${context.aggregates.join(', ') || 'None'}`,
-        `**Publishes**: ${context.publishes?.join(', ') || 'None'}`,
-        `**Subscribes**: ${context.subscribes?.join(', ') || 'None'}`,
-      ];
+      // List features/slices (filter out infrastructure)
+      const allFilteredFeatures = this.filterFeatureFolders(
+        context.features,
+        context.infrastructure_folders
+      );
+      const features = allFilteredFeatures.slice(0, this.MAX_DISPLAYED_FEATURES);
 
-      content += this.list(details);
+      if (features.length > 0) {
+        content += this.paragraph('**Features/Slices:**');
+        const featureList = features.map((f) => {
+          const fileCount = f.files.length;
+          return `\`${f.name}\` (${fileCount} files)`;
+        });
+        content += this.list(featureList);
+
+        const totalFeatures = allFilteredFeatures.length;
+
+        if (totalFeatures > features.length) {
+          content += this.paragraph(`_... and ${totalFeatures - features.length} more features_`);
+        }
+      }
     }
 
     return content;
@@ -229,8 +281,12 @@ export class OverviewGenerator extends BaseGenerator {
    * Generate aggregates overview diagram
    */
   private generateAggregatesOverview(): string {
-    const aggregates = this.manifest.domain!.aggregates;
-    const relationships = this.manifest.domain!.relationships;
+    if (!this.manifest.domain) {
+      return this.paragraph('*No domain data available*');
+    }
+
+    const aggregates = this.manifest.domain.aggregates;
+    const relationships = this.manifest.domain.relationships;
 
     let diagram = `graph TB
 `;
@@ -257,7 +313,11 @@ export class OverviewGenerator extends BaseGenerator {
    * Generate event flow diagram
    */
   private generateEventFlow(): string {
-    const relationships = this.manifest.domain!.relationships;
+    if (!this.manifest.domain) {
+      return this.paragraph('*No domain data available*');
+    }
+
+    const relationships = this.manifest.domain.relationships;
 
     let diagram = `graph LR
 `;
@@ -285,54 +345,45 @@ export class OverviewGenerator extends BaseGenerator {
   }
 
   /**
-   * Generate integration events diagram
+   * Generate domain layer overview (NEW in v2.0.0)
    */
-  private generateIntegrationEvents(): string {
-    const contexts = this.manifest.bounded_contexts!;
-
-    let diagram = `graph TB
-`;
-
-    for (const context of contexts) {
-      const contextId = this.sanitizeId(context.name);
-
-      // Show published events
-      if (context.publishes) {
-        for (const event of context.publishes) {
-          const eventId = this.sanitizeId(event);
-          diagram += `    ${contextId}[${context.name}] -->|publishes| ${eventId}((${event}))\n`;
-
-          // Find subscribers
-          for (const subscriber of contexts) {
-            if (subscriber.name !== context.name && subscriber.subscribes?.includes(event)) {
-              const subscriberId = this.sanitizeId(subscriber.name);
-              diagram += `    ${eventId} -->|subscribes| ${subscriberId}[${subscriber.name}]\n`;
-            }
-          }
-        }
-      }
+  private generateDomainLayerOverview(): string {
+    if (!this.manifest.domain) {
+      return '';
     }
 
-    return this.wrapMermaid(diagram);
+    const domain = this.manifest.domain;
+    let content = '';
+
+    // Show aggregates prominently
+    if (domain.aggregates.length > 0) {
+      content += this.section('Aggregates', 3);
+      const aggList = domain.aggregates.map((agg) => {
+        const cmdCount = agg.command_handlers.length;
+        const evtCount = agg.event_handlers.length;
+        return `**${agg.name}** - ${cmdCount} command handler(s), ${evtCount} event handler(s)`;
+      });
+      content += this.list(aggList);
+    }
+
+    // Show value objects (NEW in v2.0.0)
+    if (domain.value_objects && domain.value_objects.length > 0) {
+      content += this.section('Value Objects', 3);
+      const voList = domain.value_objects.map((vo) => {
+        const immutableBadge = vo.is_immutable ? ' 🔒' : '';
+        return `**${vo.name}**${immutableBadge} - ${vo.line_count} lines`;
+      });
+      content += this.list(voList);
+    }
+
+    return content;
   }
 
   /**
    * Check if system has events
    */
   private hasEvents(): boolean {
-    return this.manifest.domain!.events.length > 0;
-  }
-
-  /**
-   * Check if system has integration events
-   */
-  private hasIntegrationEvents(): boolean {
-    if (!this.manifest.bounded_contexts) return false;
-
-    return this.manifest.bounded_contexts.some(
-      (ctx) =>
-        (ctx.publishes && ctx.publishes.length > 0) || (ctx.subscribes && ctx.subscribes.length > 0)
-    );
+    return this.manifest.domain !== undefined && this.manifest.domain.events.length > 0;
   }
 
   /**

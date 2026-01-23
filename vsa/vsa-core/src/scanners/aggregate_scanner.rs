@@ -87,6 +87,7 @@ impl<'a> AggregateScanner<'a> {
         // Handlers will be populated by AST parser in Milestone 4
         Ok(Some(Aggregate {
             name,
+            context: None, // Will be set by domain scanner when scanning contexts
             file_path: file_path.to_path_buf(),
             line_count,
             command_handlers: Vec::new(),

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::VsaConfig;
 use crate::domain::DomainModel;
@@ -11,7 +11,7 @@ use crate::scanner::Scanner;
 use crate::scanners::DomainScanner;
 
 /// VSA manifest schema version
-pub const MANIFEST_SCHEMA_VERSION: &str = "1.0.0";
+pub const MANIFEST_SCHEMA_VERSION: &str = "2.0.0";
 
 /// VSA manifest
 #[derive(Debug, Serialize, Deserialize)]
@@ -19,7 +19,7 @@ pub struct Manifest {
     pub version: String,
     pub schema_version: String,
     pub generated_at: String,
-    pub contexts: Vec<ContextManifest>,
+    pub bounded_contexts: Vec<ContextManifest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain: Option<DomainManifest>,
 }
@@ -30,6 +30,9 @@ pub struct ContextManifest {
     pub name: String,
     pub path: String,
     pub features: Vec<FeatureManifest>,
+    /// Infrastructure folders (repositories, buses, etc.) - NEW in v2.0.0
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub infrastructure_folders: Vec<String>,
 }
 
 /// Feature manifest entry
@@ -48,6 +51,9 @@ pub struct DomainManifest {
     pub events: Vec<crate::domain::Event>,
     pub queries: Vec<crate::domain::Query>,
     pub upcasters: Vec<crate::domain::Upcaster>,
+    /// Value objects in the domain - NEW in v2.0.0
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub value_objects: Vec<crate::domain::ValueObject>,
     pub relationships: Relationships,
 }
 
@@ -79,7 +85,7 @@ impl Manifest {
 
         let mut context_manifests = Vec::new();
 
-        for context in contexts {
+        for context in &contexts {
             let features = scanner.scan_features(&context.path)?;
             let mut feature_manifests = Vec::new();
 
@@ -94,18 +100,31 @@ impl Manifest {
                 });
             }
 
+            // Detect infrastructure folders
+            let infrastructure_folders = Self::detect_infrastructure_folders(&context.path);
+
             context_manifests.push(ContextManifest {
                 name: context.name.clone(),
                 path: context.path.to_string_lossy().to_string(),
                 features: feature_manifests,
+                infrastructure_folders,
             });
         }
 
         // Optionally scan domain model
         let domain = if include_domain && config.domain.is_some() {
             let domain_config = config.domain.as_ref().unwrap();
-            let domain_scanner = DomainScanner::new(domain_config.clone(), root);
-            let domain_model = domain_scanner.scan()?;
+            let domain_scanner = DomainScanner::new(domain_config.clone(), root.clone());
+
+            // Determine if we should use multi-context scanning
+            let domain_model = if !contexts.is_empty() {
+                // Multi-context architecture: scan each context's domain folder
+                Self::scan_multi_context_domain(&domain_scanner, &contexts)?
+            } else {
+                // Monolithic architecture: scan single domain folder at root
+                domain_scanner.scan()?
+            };
+
             Some(Self::build_domain_manifest(&domain_model))
         } else {
             None
@@ -115,9 +134,40 @@ impl Manifest {
             version: crate::VERSION.to_string(),
             schema_version: MANIFEST_SCHEMA_VERSION.to_string(),
             generated_at: chrono::Utc::now().to_rfc3339(),
-            contexts: context_manifests,
+            bounded_contexts: context_manifests,
             domain,
         })
+    }
+
+    /// Scan domain models across multiple bounded contexts and merge them
+    fn scan_multi_context_domain(
+        domain_scanner: &DomainScanner,
+        contexts: &[crate::scanner::ContextInfo],
+    ) -> Result<DomainModel> {
+        // Try scanning root domain first (backward compatible)
+        let root_domain_path = domain_scanner.root.join(&domain_scanner.config.path);
+        let mut merged_model = if root_domain_path.exists() {
+            domain_scanner.scan()?
+        } else {
+            DomainModel::new(root_domain_path)
+        };
+
+        // Scan each bounded context's domain folder
+        for context in contexts {
+            let context_domain_path = context.path.join(&domain_scanner.config.path);
+
+            // Only scan if the context has a domain folder
+            if context_domain_path.exists() {
+                let context_model = domain_scanner.scan_context(&context.path, &context.name)?;
+
+                // Only merge if the context model has components
+                if context_model.component_count() > 0 {
+                    merged_model.merge(context_model);
+                }
+            }
+        }
+
+        Ok(merged_model)
     }
 
     /// Build domain manifest from domain model
@@ -130,8 +180,41 @@ impl Manifest {
             events: model.events.clone(),
             queries: model.queries.clone(),
             upcasters: model.upcasters.clone(),
+            value_objects: model.value_objects.clone(),
             relationships,
         }
+    }
+
+    /// Detect infrastructure folders in a context
+    fn detect_infrastructure_folders(context_path: &Path) -> Vec<String> {
+        let mut infrastructure = Vec::new();
+
+        // Common infrastructure folders
+        let infra_candidates =
+            vec!["infrastructure", "repositories", "adapters", "services", "buses"];
+
+        for candidate in infra_candidates {
+            let candidate_path = context_path.join(candidate);
+            if candidate_path.exists() && candidate_path.is_dir() {
+                infrastructure.push(candidate.to_string());
+            }
+        }
+
+        // Also check infrastructure subfolders
+        let infrastructure_path = context_path.join("infrastructure");
+        if infrastructure_path.exists() && infrastructure_path.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&infrastructure_path) {
+                for entry in entries.flatten() {
+                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                        if let Some(name) = entry.file_name().to_str() {
+                            infrastructure.push(format!("infrastructure/{name}"));
+                        }
+                    }
+                }
+            }
+        }
+
+        infrastructure
     }
 
     /// Build relationships between domain components
@@ -169,11 +252,7 @@ impl Manifest {
             }
         }
 
-        Relationships {
-            command_to_aggregate,
-            aggregate_to_events,
-            event_to_handlers,
-        }
+        Relationships { command_to_aggregate, aggregate_to_events, event_to_handlers }
     }
 
     /// Export manifest as JSON
@@ -197,7 +276,7 @@ mod tests {
             version: "0.1.0".to_string(),
             schema_version: MANIFEST_SCHEMA_VERSION.to_string(),
             generated_at: "2025-11-05T00:00:00Z".to_string(),
-            contexts: vec![ContextManifest {
+            bounded_contexts: vec![ContextManifest {
                 name: "warehouse".to_string(),
                 path: "/path/to/warehouse".to_string(),
                 features: vec![FeatureManifest {
@@ -208,6 +287,7 @@ mod tests {
                         "ProductCreatedEvent.ts".to_string(),
                     ],
                 }],
+                infrastructure_folders: vec![],
             }],
             domain: None,
         };
@@ -225,6 +305,7 @@ mod tests {
         let domain_model = DomainModel {
             aggregates: vec![Aggregate {
                 name: "TaskAggregate".to_string(),
+                context: None,
                 file_path: std::path::PathBuf::from("domain/TaskAggregate.ts"),
                 line_count: 100,
                 command_handlers: vec![CommandHandler {
@@ -241,12 +322,14 @@ mod tests {
             }],
             commands: vec![Command {
                 name: "CreateTaskCommand".to_string(),
+                context: None,
                 file_path: std::path::PathBuf::from("domain/commands/CreateTaskCommand.ts"),
                 has_aggregate_id: true,
                 fields: vec![],
             }],
             events: vec![Event {
                 name: "TaskCreatedEvent".to_string(),
+                context: None,
                 event_type: "TaskCreated".to_string(),
                 version: EventVersion::Simple("v1".to_string()),
                 file_path: std::path::PathBuf::from("domain/events/TaskCreatedEvent.ts"),
@@ -255,6 +338,7 @@ mod tests {
             }],
             queries: vec![],
             upcasters: vec![],
+            value_objects: vec![],
             root_path: std::path::PathBuf::from("/test"),
         };
 
@@ -292,43 +376,46 @@ mod tests {
         use crate::domain::*;
 
         let domain_model = DomainModel {
-            aggregates: vec![
-                Aggregate {
-                    name: "CartAggregate".to_string(),
-                    file_path: std::path::PathBuf::from("domain/CartAggregate.ts"),
-                    line_count: 200,
-                    command_handlers: vec![
-                        CommandHandler {
-                            command_type: "AddItemCommand".to_string(),
-                            method_name: "addItem".to_string(),
-                            line_number: 10,
-                            emits_events: vec!["ItemAddedEvent".to_string(), "CartCreatedEvent".to_string()],
-                        },
-                        CommandHandler {
-                            command_type: "RemoveItemCommand".to_string(),
-                            method_name: "removeItem".to_string(),
-                            line_number: 30,
-                            emits_events: vec!["ItemRemovedEvent".to_string()],
-                        },
-                    ],
-                    event_handlers: vec![
-                        EventHandler {
-                            event_type: "ItemAddedEvent".to_string(),
-                            method_name: "onItemAdded".to_string(),
-                            line_number: 50,
-                        },
-                        EventHandler {
-                            event_type: "ItemRemovedEvent".to_string(),
-                            method_name: "onItemRemoved".to_string(),
-                            line_number: 60,
-                        },
-                    ],
-                },
-            ],
+            aggregates: vec![Aggregate {
+                name: "CartAggregate".to_string(),
+                context: None,
+                file_path: std::path::PathBuf::from("domain/CartAggregate.ts"),
+                line_count: 200,
+                command_handlers: vec![
+                    CommandHandler {
+                        command_type: "AddItemCommand".to_string(),
+                        method_name: "addItem".to_string(),
+                        line_number: 10,
+                        emits_events: vec![
+                            "ItemAddedEvent".to_string(),
+                            "CartCreatedEvent".to_string(),
+                        ],
+                    },
+                    CommandHandler {
+                        command_type: "RemoveItemCommand".to_string(),
+                        method_name: "removeItem".to_string(),
+                        line_number: 30,
+                        emits_events: vec!["ItemRemovedEvent".to_string()],
+                    },
+                ],
+                event_handlers: vec![
+                    EventHandler {
+                        event_type: "ItemAddedEvent".to_string(),
+                        method_name: "onItemAdded".to_string(),
+                        line_number: 50,
+                    },
+                    EventHandler {
+                        event_type: "ItemRemovedEvent".to_string(),
+                        method_name: "onItemRemoved".to_string(),
+                        line_number: 60,
+                    },
+                ],
+            }],
             commands: vec![],
             events: vec![],
             queries: vec![],
             upcasters: vec![],
+            value_objects: vec![],
             root_path: std::path::PathBuf::from("/test"),
         };
 

@@ -10,6 +10,23 @@ use crate::scanner::Scanner;
 use super::rules::ValidationRule;
 use std::path::Path;
 
+/// Reserved directory names that should not be treated as slices
+/// These are infrastructure, organizational, or special-purpose directories
+const RESERVED_DIRECTORY_NAMES: &[&str] = &[
+    "_shared",
+    "domain",
+    "events",
+    "ports",
+    "commands",
+    "queries",
+    "aggregates",
+    "application",
+    "infrastructure",
+    "tests",
+    "fixtures",
+    "__pycache__",
+];
+
 /// VSA015: All slices must be located in slices/ directory
 ///
 /// This rule enforces that command and query slices are organized under
@@ -54,10 +71,8 @@ impl RequireSliceLocationRule {
             None => return false,
         };
 
-        if matches!(
-            dir_name,
-            "_shared" | "domain" | "ports" | "slices" | "tests" | "fixtures" | "__pycache__"
-        ) {
+        // Skip slices directory itself and other reserved directories
+        if dir_name == "slices" || RESERVED_DIRECTORY_NAMES.contains(&dir_name) {
             return false;
         }
 
@@ -110,21 +125,23 @@ impl ValidationRule for RequireSliceLocationRule {
             let features = scanner.scan_features(&context.path)?;
 
             for feature in features {
-                // Check if this feature is NOT in the slices/ directory
-                let relative_path_str = feature.relative_path.to_string_lossy();
+                // Check if this feature is in the slices/ directory relative to THIS context
+                // Strip context path to get path relative to context root
+                let relative_to_context = feature
+                    .path
+                    .strip_prefix(&context.path)
+                    .unwrap_or(&feature.path)
+                    .to_string_lossy();
 
-                // Skip if already in slices/ directory
-                if relative_path_str.starts_with("slices/")
-                    || relative_path_str.starts_with("slices\\")
+                // Skip if already in slices/ directory (relative to context)
+                if relative_to_context.starts_with("slices/")
+                    || relative_to_context.starts_with("slices\\")
                 {
                     continue;
                 }
 
                 // Skip reserved directories
-                if matches!(
-                    feature.name.as_str(),
-                    "_shared" | "domain" | "ports" | "tests" | "fixtures" | "__pycache__"
-                ) {
+                if RESERVED_DIRECTORY_NAMES.contains(&feature.name.as_str()) {
                     continue;
                 }
 
@@ -141,7 +158,7 @@ impl ValidationRule for RequireSliceLocationRule {
                             "Slice '{}' in context '{}' is not located in slices/ directory. \
                              All command and query slices should be organized under slices/ \
                              (found at: {})",
-                            feature.name, context.name, relative_path_str
+                            feature.name, context.name, relative_to_context
                         ),
                         suggestions: vec![Suggestion::manual(format!(
                             "Move this slice to slices/{}/\n\

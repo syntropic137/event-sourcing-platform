@@ -1,6 +1,6 @@
 {
   "name": "@vsa/visualizer",
-  "version": "0.1.0",
+  "version": "0.7.0",
   "description": "Generate architecture diagrams from VSA projects",
   "main": "dist/index.js",
   "bin": {

@@ -112,6 +112,7 @@ impl<'a> EventScanner<'a> {
         // Fields will be populated by AST parser in Milestone 4
         Ok(Some(Event {
             name,
+            context: None, // Will be set by domain scanner when scanning contexts
             event_type,
             version,
             file_path: file_path.to_path_buf(),

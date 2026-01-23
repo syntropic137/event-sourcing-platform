@@ -75,6 +75,7 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 | [ADR-016](./ADR-016-projection-failure-handling.md) | Projection Failure Handling | 📋 Proposed | DLQ, retry policies, and error handling for projections |
 | [ADR-017](./ADR-017-observability-conventions.md) | Observability Conventions | ✅ Accepted | Tracing, metrics, and logging standards |
 | [ADR-018](./ADR-018-renovate-bot-adoption.md) | Renovate Bot Adoption | 📋 Proposed | Migration from Dependabot to Renovate for dependency management |
+| [ADR-019](./ADR-019-vsa-standard-structure.md) | **VSA Standard Structure** | ✅ Accepted | **CANONICAL reference for all VSA applications - comprehensive structure standard** |
 
 ---
 
@@ -547,6 +548,7 @@ vsa validate --config vsa.yaml
 | 2025-11-06 | 1.0.0 | Initial ADR index created |
 | 2025-12-02 | 1.1.0 | Added ADR-011: ts-proto v1 retention decision |
 | 2025-12-10 | 1.2.0 | Added ADR-014: Projection checkpoint architecture for reliable event processing |
+| 2025-01-22 | 2.0.0 | **Added ADR-019: Comprehensive VSA Standard Structure (canonical reference)** |
 
 ---
 

@@ -9,6 +9,10 @@ pub struct Event {
     /// Name of the event class (e.g., "TaskCreatedEvent")
     pub name: String,
 
+    /// Bounded context this event belongs to (optional for monolithic projects)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+
     /// Event type identifier (e.g., "TaskCreated")
     pub event_type: String,
 
@@ -126,6 +130,7 @@ mod tests {
     fn create_test_event_v1() -> Event {
         Event {
             name: "TaskCreatedEvent".to_string(),
+            context: None,
             event_type: "TaskCreated".to_string(),
             version: EventVersion::Simple("v1".to_string()),
             file_path: PathBuf::from("domain/events/TaskCreatedEvent.ts"),
@@ -150,6 +155,7 @@ mod tests {
     fn create_test_event_v2() -> Event {
         Event {
             name: "TaskCreatedEvent".to_string(),
+            context: None,
             event_type: "TaskCreated".to_string(),
             version: EventVersion::Simple("v2".to_string()),
             file_path: PathBuf::from("domain/events/_versioned/TaskCreatedEvent.v2.ts"),
@@ -214,6 +220,7 @@ mod tests {
 
         let semver_event = Event {
             name: "TaskCreatedEvent".to_string(),
+            context: None,
             event_type: "TaskCreated".to_string(),
             version: EventVersion::Semver(2, 1, 0),
             file_path: PathBuf::from("domain/events/TaskCreatedEvent.ts"),
@@ -248,6 +255,7 @@ mod tests {
 
         let event_without_decorator = Event {
             name: "TaskCreatedEvent".to_string(),
+            context: None,
             event_type: "TaskCreated".to_string(),
             version: EventVersion::Simple("v1".to_string()),
             file_path: PathBuf::from("domain/events/TaskCreatedEvent.ts"),

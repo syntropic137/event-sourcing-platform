@@ -98,9 +98,17 @@ function validateDomain(domain: unknown): void {
 
 /**
  * Check if manifest supports domain visualization
+ *
+ * Note: Domain data is optional. If not present, visualizer can still
+ * generate context-level diagrams from bounded_contexts or contexts.
  */
 export function hasDomainData(manifest: Manifest): boolean {
-  return manifest.domain !== undefined && manifest.domain.aggregates.length > 0;
+  return (
+    manifest.domain !== undefined &&
+    (manifest.domain.aggregates.length > 0 ||
+      manifest.domain.commands.length > 0 ||
+      manifest.domain.events.length > 0)
+  );
 }
 
 /**
