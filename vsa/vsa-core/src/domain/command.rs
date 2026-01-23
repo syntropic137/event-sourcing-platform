@@ -9,6 +9,10 @@ pub struct Command {
     /// Name of the command (e.g., "CreateTaskCommand")
     pub name: String,
 
+    /// Bounded context this command belongs to (optional for monolithic projects)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+
     /// File path relative to project root
     pub file_path: PathBuf,
 
@@ -59,6 +63,7 @@ mod tests {
     fn create_test_command() -> Command {
         Command {
             name: "CreateTaskCommand".to_string(),
+            context: None,
             file_path: PathBuf::from("domain/commands/CreateTaskCommand.ts"),
             has_aggregate_id: true,
             fields: vec![
@@ -120,6 +125,7 @@ mod tests {
 
         let command_without_id = Command {
             name: "SomeCommand".to_string(),
+            context: None,
             file_path: PathBuf::from("domain/commands/SomeCommand.ts"),
             has_aggregate_id: false,
             fields: vec![],

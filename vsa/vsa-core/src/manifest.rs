@@ -85,7 +85,7 @@ impl Manifest {
 
         let mut context_manifests = Vec::new();
 
-        for context in contexts {
+        for context in &contexts {
             let features = scanner.scan_features(&context.path)?;
             let mut feature_manifests = Vec::new();
 
@@ -114,8 +114,17 @@ impl Manifest {
         // Optionally scan domain model
         let domain = if include_domain && config.domain.is_some() {
             let domain_config = config.domain.as_ref().unwrap();
-            let domain_scanner = DomainScanner::new(domain_config.clone(), root);
-            let domain_model = domain_scanner.scan()?;
+            let domain_scanner = DomainScanner::new(domain_config.clone(), root.clone());
+
+            // Determine if we should use multi-context scanning
+            let domain_model = if !contexts.is_empty() {
+                // Multi-context architecture: scan each context's domain folder
+                Self::scan_multi_context_domain(&domain_scanner, &contexts)?
+            } else {
+                // Monolithic architecture: scan single domain folder at root
+                domain_scanner.scan()?
+            };
+
             Some(Self::build_domain_manifest(&domain_model))
         } else {
             None
@@ -128,6 +137,37 @@ impl Manifest {
             bounded_contexts: context_manifests,
             domain,
         })
+    }
+
+    /// Scan domain models across multiple bounded contexts and merge them
+    fn scan_multi_context_domain(
+        domain_scanner: &DomainScanner,
+        contexts: &[crate::scanner::ContextInfo],
+    ) -> Result<DomainModel> {
+        // Try scanning root domain first (backward compatible)
+        let root_domain_path = domain_scanner.root.join(&domain_scanner.config.path);
+        let mut merged_model = if root_domain_path.exists() {
+            domain_scanner.scan()?
+        } else {
+            DomainModel::new(root_domain_path)
+        };
+
+        // Scan each bounded context's domain folder
+        for context in contexts {
+            let context_domain_path = context.path.join(&domain_scanner.config.path);
+
+            // Only scan if the context has a domain folder
+            if context_domain_path.exists() {
+                let context_model = domain_scanner.scan_context(&context.path, &context.name)?;
+
+                // Only merge if the context model has components
+                if context_model.component_count() > 0 {
+                    merged_model.merge(context_model);
+                }
+            }
+        }
+
+        Ok(merged_model)
     }
 
     /// Build domain manifest from domain model
@@ -265,6 +305,7 @@ mod tests {
         let domain_model = DomainModel {
             aggregates: vec![Aggregate {
                 name: "TaskAggregate".to_string(),
+                context: None,
                 file_path: std::path::PathBuf::from("domain/TaskAggregate.ts"),
                 line_count: 100,
                 command_handlers: vec![CommandHandler {
@@ -281,12 +322,14 @@ mod tests {
             }],
             commands: vec![Command {
                 name: "CreateTaskCommand".to_string(),
+                context: None,
                 file_path: std::path::PathBuf::from("domain/commands/CreateTaskCommand.ts"),
                 has_aggregate_id: true,
                 fields: vec![],
             }],
             events: vec![Event {
                 name: "TaskCreatedEvent".to_string(),
+                context: None,
                 event_type: "TaskCreated".to_string(),
                 version: EventVersion::Simple("v1".to_string()),
                 file_path: std::path::PathBuf::from("domain/events/TaskCreatedEvent.ts"),
@@ -335,6 +378,7 @@ mod tests {
         let domain_model = DomainModel {
             aggregates: vec![Aggregate {
                 name: "CartAggregate".to_string(),
+                context: None,
                 file_path: std::path::PathBuf::from("domain/CartAggregate.ts"),
                 line_count: 200,
                 command_handlers: vec![
