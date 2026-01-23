@@ -159,7 +159,7 @@ impl ValidationRule for EventsIsolationRule {
             // Use configured events path from domain config (supports domain/events/)
             let domain_config = ctx.config.domain.as_ref().ok_or_else(|| {
                 crate::error::VsaError::InvalidConfig(
-                    "Domain configuration required for events isolation rule".to_string(),
+                    "Missing domain configuration in vsa.yaml. Events isolation rule requires domain.path and domain.events.path to be configured.".to_string(),
                 )
             })?;
             let events_path =

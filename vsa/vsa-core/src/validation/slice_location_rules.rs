@@ -10,6 +10,23 @@ use crate::scanner::Scanner;
 use super::rules::ValidationRule;
 use std::path::Path;
 
+/// Reserved directory names that should not be treated as slices
+/// These are infrastructure, organizational, or special-purpose directories
+const RESERVED_DIRECTORY_NAMES: &[&str] = &[
+    "_shared",
+    "domain",
+    "events",
+    "ports",
+    "commands",
+    "queries",
+    "aggregates",
+    "application",
+    "infrastructure",
+    "tests",
+    "fixtures",
+    "__pycache__",
+];
+
 /// VSA015: All slices must be located in slices/ directory
 ///
 /// This rule enforces that command and query slices are organized under
@@ -54,22 +71,8 @@ impl RequireSliceLocationRule {
             None => return false,
         };
 
-        if matches!(
-            dir_name,
-            "_shared"
-                | "domain"
-                | "events"
-                | "ports"
-                | "commands"
-                | "queries"
-                | "aggregates"
-                | "application"
-                | "infrastructure"
-                | "slices"
-                | "tests"
-                | "fixtures"
-                | "__pycache__"
-        ) {
+        // Skip slices directory itself and other reserved directories
+        if dir_name == "slices" || RESERVED_DIRECTORY_NAMES.contains(&dir_name) {
             return false;
         }
 
@@ -138,21 +141,7 @@ impl ValidationRule for RequireSliceLocationRule {
                 }
 
                 // Skip reserved directories
-                if matches!(
-                    feature.name.as_str(),
-                    "_shared"
-                        | "domain"
-                        | "events"
-                        | "ports"
-                        | "commands"
-                        | "queries"
-                        | "aggregates"
-                        | "application"
-                        | "infrastructure"
-                        | "tests"
-                        | "fixtures"
-                        | "__pycache__"
-                ) {
+                if RESERVED_DIRECTORY_NAMES.contains(&feature.name.as_str()) {
                     continue;
                 }
 
