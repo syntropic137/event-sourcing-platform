@@ -79,7 +79,7 @@ describe('CLI Integration Tests', () => {
         noDomainFile,
         JSON.stringify({
           version: '0.6.1-beta',
-          schema_version: '1.1.0',
+          schema_version: '2.0.0',
           generated_at: '2026-01-21T00:00:00Z',
           bounded_contexts: [
             {

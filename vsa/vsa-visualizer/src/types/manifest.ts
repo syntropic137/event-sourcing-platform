@@ -32,7 +32,7 @@ export interface DomainManifest {
   events: Event[];
   queries?: Query[];
   upcasters?: Upcaster[];
-  value_objects?: ValueObject[]; // NEW in v1.1.0
+  value_objects?: ValueObject[]; // NEW in v2.0.0
   relationships: Relationships;
 }
 
@@ -98,7 +98,7 @@ export interface Upcaster {
 }
 
 /**
- * Value Object metadata (NEW in v1.1.0)
+ * Value Object metadata (NEW in v2.0.0)
  */
 export interface ValueObject {
   name: string;
@@ -127,7 +127,7 @@ export interface BoundedContext {
   name: string;
   path: string;
   features: Feature[];
-  infrastructure_folders?: string[]; // NEW in v1.1.0
+  infrastructure_folders?: string[]; // NEW in v2.0.0
 }
 
 export interface Feature {

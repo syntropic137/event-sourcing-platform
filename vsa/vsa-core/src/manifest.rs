@@ -30,7 +30,7 @@ pub struct ContextManifest {
     pub name: String,
     pub path: String,
     pub features: Vec<FeatureManifest>,
-    /// Infrastructure folders (repositories, buses, etc.) - NEW in v1.1.0
+    /// Infrastructure folders (repositories, buses, etc.) - NEW in v2.0.0
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub infrastructure_folders: Vec<String>,
 }
@@ -51,7 +51,7 @@ pub struct DomainManifest {
     pub events: Vec<crate::domain::Event>,
     pub queries: Vec<crate::domain::Query>,
     pub upcasters: Vec<crate::domain::Upcaster>,
-    /// Value objects in the domain - NEW in v1.1.0
+    /// Value objects in the domain - NEW in v2.0.0
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub value_objects: Vec<crate::domain::ValueObject>,
     pub relationships: Relationships,

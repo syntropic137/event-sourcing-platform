@@ -148,7 +148,7 @@ class WorkflowAggregate(AggregateRoot):
 
 **Purpose:** Events are the **public API** of the write side, the **contract** between bounded contexts, and the **bridge** between write and read sides (CQRS).
 
-**Location:** `events/` **at context root** (preferred) or `domain/events/` (legacy support for backward compatibility)
+**Location:** `domain/events/` (**ONLY correct location** - events are part of domain layer)
 
 **Contains:**
 - **Current Events** (`*Event.*`) - Latest versions
@@ -161,12 +161,12 @@ class WorkflowAggregate(AggregateRoot):
 - ✅ MUST NOT import from ANYTHING (pure data)
 - ✅ MUST use past tense naming (`WorkflowCreatedEvent`)
 
-**Rationale for Context Root:**
-1. **Events are contracts**, not implementation details
-2. **Events outlive** any specific domain implementation
-3. **Integration events** are more discoverable here
-4. **Separates** immutable history from mutable domain logic
-5. **Matches reference** (eventsourcing-book places events at context root)
+**Rationale for Domain Location:**
+1. **Events are domain concepts**, part of the ubiquitous language
+2. **Domain cohesion** - events, aggregates, and commands form the domain model
+3. **Isolation** - domain folder has clear dependency rules (no imports from infrastructure/application)
+4. **Validation** - easier to enforce that events are pure and have no dependencies
+5. **Organization** - keeps all domain objects together in the domain layer
 
 **Example:**
 ```python
@@ -1083,9 +1083,9 @@ This ADR **extends and consolidates** the above ADRs into one comprehensive refe
 
 ### Key Decisions Made
 
-1. **Events at context root** (NOT `domain/events/`)
-   - Reason: Events are contracts, not implementation
-   - Source: eventsourcing-book pattern
+1. **Events in `domain/events/`** (NOT at context root)
+   - Reason: Events are domain concepts, domain cohesion, validation isolation
+   - Rationale: Events, aggregates, and commands form the unified domain model
 
 2. **Explicit `ports/` folder** (deviation from reference)
    - Reason: Framework-agnostic, discoverability, validation
