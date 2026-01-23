@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 /// Scanner for the domain layer
 pub struct DomainScanner {
-    config: DomainConfig,
-    root: PathBuf,
+    pub(crate) config: DomainConfig,
+    pub(crate) root: PathBuf,
 }
 
 impl DomainScanner {
@@ -21,13 +21,38 @@ impl DomainScanner {
         Self { config, root }
     }
 
-    /// Scan the domain folder and extract all metadata
+    /// Scan the domain folder and extract all metadata (monolithic mode)
     pub fn scan(&self) -> Result<DomainModel> {
         let domain_path = self.root.join(&self.config.path);
+        self.scan_domain_at_path(&domain_path, None)
+    }
 
+    /// Scan a domain folder within a bounded context
+    ///
+    /// This method is used for multi-context architectures where each bounded context
+    /// has its own domain folder. The context name is tagged on all discovered objects.
+    ///
+    /// # Arguments
+    /// * `context_path` - Path to the bounded context directory
+    /// * `context_name` - Name of the context (e.g., "workspaces", "artifacts")
+    pub fn scan_context(&self, context_path: &Path, context_name: &str) -> Result<DomainModel> {
+        let domain_path = context_path.join(&self.config.path);
+        self.scan_domain_at_path(&domain_path, Some(context_name.to_string()))
+    }
+
+    /// Internal method to scan a domain folder at a specific path
+    ///
+    /// # Arguments
+    /// * `domain_path` - Path to the domain folder
+    /// * `context` - Optional context name to tag all objects with
+    fn scan_domain_at_path(
+        &self,
+        domain_path: &Path,
+        context: Option<String>,
+    ) -> Result<DomainModel> {
         // Check if domain path exists
         if !domain_path.exists() {
-            return Ok(DomainModel::new(domain_path));
+            return Ok(DomainModel::new(domain_path.to_path_buf()));
         }
 
         if !domain_path.is_dir() {
@@ -37,17 +62,31 @@ impl DomainScanner {
             )));
         }
 
-        let mut model = DomainModel::new(domain_path.clone());
+        let mut model = DomainModel::new(domain_path.to_path_buf());
 
         // Scan aggregates
-        let aggregate_scanner = AggregateScanner::new(&self.config.aggregates, &domain_path);
+        let aggregate_scanner = AggregateScanner::new(&self.config.aggregates, domain_path);
         model.aggregates = aggregate_scanner.scan()?;
+
+        // Tag aggregates with context
+        if let Some(ref ctx) = context {
+            for aggregate in &mut model.aggregates {
+                aggregate.context = Some(ctx.clone());
+            }
+        }
 
         // Scan commands
         let commands_path = domain_path.join(&self.config.commands.path);
         if commands_path.exists() {
             let command_scanner = CommandScanner::new(&self.config.commands, &commands_path);
             model.commands = command_scanner.scan()?;
+
+            // Tag commands with context
+            if let Some(ref ctx) = context {
+                for command in &mut model.commands {
+                    command.context = Some(ctx.clone());
+                }
+            }
         }
 
         // Scan queries
@@ -55,6 +94,7 @@ impl DomainScanner {
         if queries_path.exists() {
             let query_scanner = QueryScanner::new(&self.config.queries, &queries_path);
             model.queries = query_scanner.scan()?;
+            // Note: Queries don't have context field yet, may add in future
         }
 
         // Scan events
@@ -62,6 +102,13 @@ impl DomainScanner {
         if events_path.exists() {
             let event_scanner = EventScanner::new(&self.config.events, &events_path);
             model.events = event_scanner.scan()?;
+
+            // Tag events with context
+            if let Some(ref ctx) = context {
+                for event in &mut model.events {
+                    event.context = Some(ctx.clone());
+                }
+            }
         }
 
         // Scan upcasters
@@ -77,7 +124,7 @@ impl DomainScanner {
         }
 
         // Scan value objects
-        model.value_objects = self.scan_value_objects(&domain_path)?;
+        model.value_objects = self.scan_value_objects(domain_path)?;
 
         Ok(model)
     }
@@ -378,5 +425,84 @@ mod tests {
                 || !model.events.is_empty()
                 || !model.upcasters.is_empty()
         );
+    }
+
+    #[test]
+    fn test_scan_context_tags_objects() {
+        let temp_dir = TempDir::new().unwrap();
+        let context_path = temp_dir.path().join("contexts/workspaces");
+        let domain_path = context_path.join("domain");
+
+        // Create domain structure within context
+        fs::create_dir_all(&domain_path).unwrap();
+        fs::create_dir_all(domain_path.join("commands")).unwrap();
+        fs::create_dir_all(domain_path.join("events")).unwrap();
+
+        // Create test files
+        fs::write(domain_path.join("WorkspaceAggregate.py"), "# WorkspaceAggregate").unwrap();
+        fs::write(
+            domain_path.join("commands/CreateWorkspaceCommand.py"),
+            "# CreateWorkspaceCommand",
+        )
+        .unwrap();
+        fs::write(domain_path.join("events/WorkspaceCreatedEvent.py"), "# WorkspaceCreatedEvent")
+            .unwrap();
+
+        let config = create_test_domain_config();
+        let scanner = DomainScanner::new(config, temp_dir.path().to_path_buf());
+
+        let model = scanner.scan_context(&context_path, "workspaces").unwrap();
+
+        // Verify aggregates are tagged with context
+        assert!(!model.aggregates.is_empty());
+        for aggregate in &model.aggregates {
+            assert_eq!(aggregate.context, Some("workspaces".to_string()));
+        }
+
+        // Verify commands are tagged with context
+        assert!(!model.commands.is_empty());
+        for command in &model.commands {
+            assert_eq!(command.context, Some("workspaces".to_string()));
+        }
+
+        // Verify events are tagged with context
+        assert!(!model.events.is_empty());
+        for event in &model.events {
+            assert_eq!(event.context, Some("workspaces".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_scan_context_nonexistent_domain() {
+        let temp_dir = TempDir::new().unwrap();
+        let context_path = temp_dir.path().join("contexts/orders");
+
+        let config = create_test_domain_config();
+        let scanner = DomainScanner::new(config, temp_dir.path().to_path_buf());
+
+        // Should return empty model, not error
+        let model = scanner.scan_context(&context_path, "orders").unwrap();
+        assert_eq!(model.component_count(), 0);
+    }
+
+    #[test]
+    fn test_scan_monolithic_no_context_tags() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+        let domain_path = root.join("domain");
+
+        // Create domain structure
+        fs::create_dir_all(&domain_path).unwrap();
+        fs::write(domain_path.join("TaskAggregate.ts"), "// TaskAggregate").unwrap();
+
+        let config = create_test_domain_config();
+        let scanner = DomainScanner::new(config, root);
+
+        let model = scanner.scan().unwrap();
+
+        // Monolithic scan should NOT tag with context
+        if !model.aggregates.is_empty() {
+            assert_eq!(model.aggregates[0].context, None);
+        }
     }
 }
