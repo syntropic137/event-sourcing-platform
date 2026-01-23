@@ -105,8 +105,9 @@ impl DomainPurityRule {
         let normalized = module.replace("::", "/").replace('.', "/");
 
         // Check for forbidden layers in import path
-        // NOTE: domain/events/ is ALLOWED (events are part of domain in ADR-019 v2)
-        // Only forbid events/ at context root (legacy structure)
+        // Per ADR-019: Events should be in domain/events/ (domain cohesion)
+        // Context-root events/ is an old pattern and should not be used
+        // Logic: Allow domain/events/, forbid context-root events/
         let has_forbidden_events = normalized.contains("/events/")
             && !normalized.contains("/domain/events/")
             || normalized.starts_with("events/") && !normalized.starts_with("domain/events/")
@@ -157,11 +158,11 @@ impl ValidationRule for EventsIsolationRule {
 
         for context in contexts {
             // Use configured events path from domain config (supports domain/events/)
-            let domain_config = ctx.config.domain.as_ref().ok_or_else(|| {
-                crate::error::VsaError::InvalidConfig(
-                    "Missing domain configuration in vsa.yaml. Events isolation rule requires domain.path and domain.events.path to be configured.".to_string(),
-                )
-            })?;
+            // Skip validation if domain config is not present (domain is optional)
+            let domain_config = match ctx.config.domain.as_ref() {
+                Some(config) => config,
+                None => continue, // Skip validation for contexts without domain config
+            };
             let events_path =
                 context.path.join(&domain_config.path).join(&domain_config.events.path);
             if !events_path.exists() {

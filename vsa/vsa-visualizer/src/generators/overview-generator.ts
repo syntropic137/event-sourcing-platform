@@ -244,7 +244,7 @@ export class OverviewGenerator extends BaseGenerator {
       content += this.section(context.name, 3);
       content += this.paragraph(`Path: \`${context.path}\``);
 
-      // Show infrastructure folders (NEW in v1.1.0)
+      // Show infrastructure folders (NEW in v2.0.0)
       if (context.infrastructure_folders && context.infrastructure_folders.length > 0) {
         content += this.paragraph('**Infrastructure:**');
         const infraList = context.infrastructure_folders.map((f) => `\`${f}\``);
@@ -345,7 +345,7 @@ export class OverviewGenerator extends BaseGenerator {
   }
 
   /**
-   * Generate domain layer overview (NEW in v1.1.0)
+   * Generate domain layer overview (NEW in v2.0.0)
    */
   private generateDomainLayerOverview(): string {
     if (!this.manifest.domain) {
@@ -366,7 +366,7 @@ export class OverviewGenerator extends BaseGenerator {
       content += this.list(aggList);
     }
 
-    // Show value objects (NEW in v1.1.0)
+    // Show value objects (NEW in v2.0.0)
     if (domain.value_objects && domain.value_objects.length > 0) {
       content += this.section('Value Objects', 3);
       const voList = domain.value_objects.map((vo) => {

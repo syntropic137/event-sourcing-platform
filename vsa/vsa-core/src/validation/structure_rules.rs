@@ -164,30 +164,31 @@ impl RequireCommandsInDomainRule {
 }
 
 // ============================================================================
-// VSA021: Events must be at context root (events/), NOT in domain/
+// VSA021: Events must be in domain/events/, NOT at context root
 // ============================================================================
 
-/// VSA021: Events must be at context root (events/), NOT in domain/events/
+/// VSA021: Events must be in domain/events/, NOT at context root (events/)
 ///
-/// As defined in ADR-019, events are immutable contracts between bounded contexts
-/// and should be at the context root, not inside the domain folder.
+/// As defined in ADR-019, events are domain concepts that express domain facts
+/// and should be in the domain folder for domain cohesion, not at context root.
 ///
 /// Invalid structure:
 /// ```
 /// contexts/workflows/
+///   ├── events/
+///   │   └── WorkflowCreatedEvent.py  # ❌ Events at context root
 ///   └── domain/
-///       └── events/
-///           └── WorkflowCreatedEvent.py  # ❌ Events in domain/
+///       └── WorkflowAggregate.py
 /// ```
 ///
 /// Valid structure:
 /// ```
 /// contexts/workflows/
-///   ├── events/
-///   │   ├── WorkflowCreatedEvent.py      # ✅ Events at context root
-///   │   ├── versioned/                   # ✅ Old versions
-///   │   └── upcasters/                   # ✅ Migrations
 ///   └── domain/
+///       ├── events/
+///       │   ├── WorkflowCreatedEvent.py      # ✅ Events in domain/events/
+///       │   ├── versioned/                   # ✅ Old versions
+///       │   └── upcasters/                   # ✅ Migrations
 ///       └── WorkflowAggregate.py
 /// ```
 pub struct RequireEventsAtContextRootRule;
@@ -259,14 +260,11 @@ impl RequireEventsAtContextRootRule {
         };
 
         // Skip allowed locations
-        if dir_name == "events" && path == context_path.join("events") {
+        // Only domain/events/ is allowed (per ADR-019: domain cohesion)
+        if path == context_path.join("domain").join("events") {
             return Ok(());
         }
         if dir_name == "versioned" || dir_name == "upcasters" {
-            return Ok(());
-        }
-        // Skip domain/events/ as it's handled separately in the main validate function
-        if path == context_path.join("domain").join("events") {
             return Ok(());
         }
 
@@ -289,23 +287,28 @@ impl RequireEventsAtContextRootRule {
                         .unwrap_or(&entry_path)
                         .to_string_lossy();
 
-                    // Check if in allowed location
-                    if relative_path.starts_with("events/") || relative_path.starts_with("events\\")
+                    // Check if in allowed location (domain/events/ only)
+                    if relative_path.starts_with("domain/events/")
+                        || relative_path.starts_with("domain\\events\\")
+                        || relative_path.starts_with("domain/events\\")
+                        || relative_path.starts_with("domain\\events/")
                     {
                         continue;
                     }
 
                     // Found misplaced event
-                    let suggested_path =
-                        context_path.join("events").join(entry_path.file_name().unwrap());
+                    let suggested_path = context_path
+                        .join("domain")
+                        .join("events")
+                        .join(entry_path.file_name().unwrap());
 
                     report.errors.push(ValidationIssue {
                         path: entry_path.clone(),
                         code: self.code().to_string(),
                         severity: Severity::Error,
                         message: format!(
-                            "Event file '{}' in context '{}' is not at context root (events/). \
-                             Events should be in events/ directory at context root, not in {} \
+                            "Event file '{}' in context '{}' is not in domain/events/. \
+                             Per ADR-019, events should be in domain/events/ directory for domain cohesion, not in {} \
                              (found at: {})",
                             entry_path.file_name().unwrap().to_string_lossy(),
                             context_name,
@@ -313,7 +316,7 @@ impl RequireEventsAtContextRootRule {
                             relative_path
                         ),
                         suggestions: vec![Suggestion::manual(format!(
-                            "Move this event to events/ at context root\n\
+                            "Move this event to domain/events/\n\
                              Command: git mv {} {}",
                             entry_path.display(),
                             suggested_path.display()
@@ -1174,10 +1177,10 @@ mod tests {
         assert!(report.errors[0].message.contains("domain/commands/"));
     }
 
-    /// Test that events in domain/events/ are allowed for backward compatibility
-    /// when explicitly configured in vsa.yaml with events_path: "domain/events"
+    /// Test VSA021: Events in domain/events/ is the correct location per ADR-019
+    /// This validates that events are properly placed in the domain folder for domain cohesion
     #[test]
-    fn test_vsa021_events_in_domain_events_allowed() {
+    fn test_vsa021_events_in_domain_events_correct() {
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path().to_path_buf();
 
@@ -1188,7 +1191,7 @@ mod tests {
         // Create vsa.yaml with domain/events configuration
         fs::write(context_path.join("vsa.yaml"), "events_path: \"domain/events\"\n").unwrap();
 
-        // Event in domain/events/ per ADR-019 v2 (correct location)
+        // Event in domain/events/ per ADR-019 (correct canonical location)
         fs::write(
             domain_events_path.join("WorkflowCreatedEvent.py"),
             "class WorkflowCreatedEvent: pass",
@@ -1202,11 +1205,11 @@ mod tests {
         let rule = RequireEventsAtContextRootRule;
         rule.validate(&ctx, &mut report).unwrap();
 
-        // Should have 0 errors - domain/events/ is the canonical location per ADR-019 v2
+        // Should have 0 errors - domain/events/ is the canonical location per ADR-019
         assert_eq!(
             report.errors.len(),
             0,
-            "Events in domain/events/ should be allowed per ADR-019 v2. Errors: {:?}",
+            "Events in domain/events/ should be allowed per ADR-019. Errors: {:?}",
             report.errors
         );
     }
@@ -1347,7 +1350,7 @@ mod tests {
         // Create valid structure
         let domain_path = context_path.join("domain");
         let commands_path = domain_path.join("commands");
-        let events_path = context_path.join("events");
+        let events_path = domain_path.join("events");
         let ports_path = context_path.join("ports");
         let infrastructure_path = context_path.join("infrastructure");
         let buses_path = infrastructure_path.join("buses");
@@ -1368,7 +1371,7 @@ mod tests {
         )
         .unwrap();
 
-        // Event at context root (correct)
+        // Event in domain/events/ (correct per ADR-019)
         fs::write(events_path.join("WorkflowCreatedEvent.py"), "class WorkflowCreatedEvent: pass")
             .unwrap();
 
