@@ -191,9 +191,9 @@ impl RequireCommandsInDomainRule {
 ///       │   └── upcasters/                   # ✅ Migrations
 ///       └── WorkflowAggregate.py
 /// ```
-pub struct RequireEventsAtContextRootRule;
+pub struct RequireEventsInDomainRule;
 
-impl RequireEventsAtContextRootRule {
+impl RequireEventsInDomainRule {
     fn is_event_file(&self, path: &Path, ctx: &ValidationContext) -> bool {
         let file_name = match path.file_name().and_then(|n| n.to_str()) {
             Some(name) => name,
@@ -205,7 +205,7 @@ impl RequireEventsAtContextRootRule {
     }
 }
 
-impl ValidationRule for RequireEventsAtContextRootRule {
+impl ValidationRule for RequireEventsInDomainRule {
     fn name(&self) -> &str {
         "require-events-in-domain"
     }
@@ -240,7 +240,7 @@ impl ValidationRule for RequireEventsAtContextRootRule {
     }
 }
 
-impl RequireEventsAtContextRootRule {
+impl RequireEventsInDomainRule {
     #[allow(clippy::only_used_in_recursion)]
     fn check_directory_for_misplaced_events(
         &self,
@@ -1202,7 +1202,7 @@ mod tests {
         let ctx = ValidationContext::new(config, root);
         let mut report = EnhancedValidationReport::default();
 
-        let rule = RequireEventsAtContextRootRule;
+        let rule = RequireEventsInDomainRule;
         rule.validate(&ctx, &mut report).unwrap();
 
         // Should have 0 errors - domain/events/ is the canonical location per ADR-019
@@ -1392,7 +1392,7 @@ mod tests {
 
         // Run all rules
         RequireCommandsInDomainRule.validate(&ctx, &mut report).unwrap();
-        RequireEventsAtContextRootRule.validate(&ctx, &mut report).unwrap();
+        RequireEventsInDomainRule.validate(&ctx, &mut report).unwrap();
         RequireAggregatesInDomainRootRule.validate(&ctx, &mut report).unwrap();
         RequirePortsInPortsFolderRule.validate(&ctx, &mut report).unwrap();
         RequirePortSuffixRule.validate(&ctx, &mut report).unwrap();

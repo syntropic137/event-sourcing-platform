@@ -40,7 +40,7 @@ impl ValidationRuleSet {
             NoCrossSliceImportsRule, NoDuplicateIntegrationEventsRule, PortIsolationRule,
             ProjectionEventSubscriptionRule, RequireAggregatesInDomainRootRule,
             RequireBusesInInfrastructureRule, RequireCommandsInDomainRule,
-            RequireEventsAtContextRootRule, RequireHandlerForQueryRule, RequirePortSuffixRule,
+            RequireEventsInDomainRule, RequireHandlerForQueryRule, RequirePortSuffixRule,
             RequirePortsInPortsFolderRule, RequireProjectionForQueryRule, RequireSharedFolderRule,
             RequireSliceLocationRule, RequireValueObjectsNamingRule, SliceIsolationRule,
             ThinAdapterRule,
@@ -70,7 +70,7 @@ impl ValidationRuleSet {
             Box::new(RequireSliceLocationRule),
             // ADR-019 Structure rules (enforces canonical VSA structure)
             Box::new(RequireCommandsInDomainRule), // VSA020: Commands in domain/commands/
-            Box::new(RequireEventsAtContextRootRule), // VSA021: Events at context root
+            Box::new(RequireEventsInDomainRule),   // VSA021: Events in domain/events/
             Box::new(RequireAggregatesInDomainRootRule), // VSA022: Aggregates in domain/ root
             Box::new(RequirePortsInPortsFolderRule), // VSA023: Ports in ports/ folder
             Box::new(RequireBusesInInfrastructureRule), // VSA024: Buses in infrastructure/buses/

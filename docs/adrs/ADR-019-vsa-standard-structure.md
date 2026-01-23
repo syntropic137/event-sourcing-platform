@@ -1027,7 +1027,7 @@ Run 'vsa validate --fix' to auto-fix structure issues.
 
 | Aspect | Reference | This ADR | Rationale |
 |--------|-----------|----------|-----------|
-| **Events Location** | `events/` (context root) | ✅ `events/` (context root) | Matches - events are contracts |
+| **Events Location** | `events/` (context root) | ✅ `domain/events/` | **Deviation** - events under `domain/` for domain cohesion |
 | **Commands Location** | `domain/commands/{feature}/` | ✅ `domain/commands/` | Matches - supports subfolders |
 | **Aggregates Location** | `domain/` root | ✅ `domain/` root | Matches - high visibility |
 | **Slice Structure** | `{feature}/internal/` | ✅ `slices/{feature}/internal/` | Extended - added slices/ container |
@@ -1109,19 +1109,25 @@ This ADR **extends and consolidates** the above ADRs into one comprehensive refe
 
 ### Alternatives Considered
 
-**Alternative 1: Events in `domain/events/`**
-- ✅ Keeps all domain concepts together
-- ❌ Events are contracts, not domain implementation
-- ❌ Doesn't match reference implementation
-- **Rejected:** Events at context root is canonical pattern
+**Alternative 1: Events at context root (`events/`)**
+- ✅ Matches reference implementation pattern
+- ❌ Separates events from domain concepts
+- ❌ Events are domain facts, belong in domain layer
+- **Rejected:** Events should be in `domain/events/` for domain cohesion
 
-**Alternative 2: No `ports/` folder (colocated interfaces)**
+**Alternative 2 (ACCEPTED): Events in `domain/events/`**
+- ✅ Keeps all domain concepts together (aggregates, commands, events)
+- ✅ Domain cohesion - events express domain facts
+- ✅ Clearer isolation boundaries for validation
+- **Accepted:** Events in `domain/events/` is canonical pattern
+
+**Alternative 3: No `ports/` folder (colocated interfaces)**
 - ✅ Less folders, matches reference
 - ❌ Harder to discover all contracts
 - ❌ Harder to validate hexagonal boundaries
 - **Rejected:** Explicit ports better for framework-agnostic approach
 
-**Alternative 3: Buses in `application/`**
+**Alternative 4: Buses in `application/`**
 - ✅ Simpler (one less layer)
 - ❌ Mixes business orchestration with technical plumbing
 - ❌ Buses are infrastructure concern

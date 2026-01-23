@@ -57,7 +57,7 @@ export class OverviewGenerator extends BaseGenerator {
     // Add description
     content += this.paragraph(
       'This document provides a high-level overview of the system architecture, ' +
-        'including bounded contexts, aggregates, and their relationships.'
+      'including bounded contexts, aggregates, and their relationships.'
     );
 
     // Generate statistics
