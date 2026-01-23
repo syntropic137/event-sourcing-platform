@@ -6,12 +6,45 @@ import { getContextCount } from '../manifest/parser';
  * Generates OVERVIEW.md with system-level diagrams
  */
 export class OverviewGenerator extends BaseGenerator {
+  /** Maximum number of features to display per context in overview */
+  private readonly MAX_DISPLAYED_FEATURES = 10;
+
+  /** Folder names to exclude when listing features (infrastructure/organizational folders) */
+  private readonly EXCLUDED_FEATURE_FOLDERS = [
+    'domain',
+    'slices',
+    'ports',
+    'application',
+    'events',
+    '__pycache__',
+  ];
+
   constructor(manifest: Manifest) {
     super(manifest);
   }
 
   protected getTitle(): string {
     return 'System Overview';
+  }
+
+  /**
+   * Filter features to exclude infrastructure and organizational folders
+   * @param features - Array of features to filter
+   * @param infrastructureFolders - Optional array of context-specific infrastructure folders
+   * @returns Filtered array of features
+   */
+  private filterFeatureFolders(
+    features: Array<{ name: string; path: string; files: string[] }>,
+    infrastructureFolders?: string[]
+  ): Array<{ name: string; path: string; files: string[] }> {
+    return features.filter((f) => {
+      const isInfrastructure = infrastructureFolders?.includes(f.name);
+      return (
+        !isInfrastructure &&
+        !this.EXCLUDED_FEATURE_FOLDERS.includes(f.name) &&
+        !f.name.endsWith('__pycache__')
+      );
+    });
   }
 
   /**
@@ -219,21 +252,11 @@ export class OverviewGenerator extends BaseGenerator {
       }
 
       // List features/slices (filter out infrastructure)
-      const features = context.features
-        .filter((f) => {
-          // Filter out infrastructure folders
-          const isInfrastructure = context.infrastructure_folders?.includes(f.name);
-          return (
-            !isInfrastructure &&
-            f.name !== 'domain' &&
-            f.name !== 'slices' &&
-            f.name !== 'ports' &&
-            f.name !== 'application' &&
-            f.name !== 'events' &&
-            !f.name.endsWith('__pycache__')
-          );
-        })
-        .slice(0, 10); // Limit to first 10 features
+      const allFilteredFeatures = this.filterFeatureFolders(
+        context.features,
+        context.infrastructure_folders
+      );
+      const features = allFilteredFeatures.slice(0, this.MAX_DISPLAYED_FEATURES);
 
       if (features.length > 0) {
         content += this.paragraph('**Features/Slices:**');
@@ -243,18 +266,7 @@ export class OverviewGenerator extends BaseGenerator {
         });
         content += this.list(featureList);
 
-        const totalFeatures = context.features.filter((f) => {
-          const isInfrastructure = context.infrastructure_folders?.includes(f.name);
-          return (
-            !isInfrastructure &&
-            f.name !== 'domain' &&
-            f.name !== 'slices' &&
-            f.name !== 'ports' &&
-            f.name !== 'application' &&
-            f.name !== 'events' &&
-            !f.name.endsWith('__pycache__')
-          );
-        }).length;
+        const totalFeatures = allFilteredFeatures.length;
 
         if (totalFeatures > features.length) {
           content += this.paragraph(`_... and ${totalFeatures - features.length} more features_`);

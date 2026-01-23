@@ -2,7 +2,20 @@
  * Type definitions for VSA Manifest
  *
  * This defines the contract between vsa-cli and vsa-visualizer.
- * Schema version: 1.1.0
+ *
+ * Schema version: 2.0.0 (supersedes 1.0.0)
+ *
+ * BREAKING CHANGES since 1.0.0:
+ * - Manifest: Renamed `contexts` field to `bounded_contexts` for clarity
+ *
+ * NEW FEATURES since 1.0.0:
+ * - DomainManifest: Added optional `value_objects` field
+ * - BoundedContext: Restructured type to model features/slices
+ * - BoundedContext: Added optional `infrastructure_folders` field
+ *
+ * When upgrading from schema 1.0.0 to 2.0.0, ensure producers and
+ * consumers of the manifest are updated to use the new `bounded_contexts`
+ * field name instead of `contexts`.
  */
 
 export interface Manifest {

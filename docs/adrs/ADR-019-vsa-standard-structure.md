@@ -148,7 +148,7 @@ class WorkflowAggregate(AggregateRoot):
 
 **Purpose:** Events are the **public API** of the write side, the **contract** between bounded contexts, and the **bridge** between write and read sides (CQRS).
 
-**Location:** `events/` **at context root** (NOT `domain/events/`)
+**Location:** `events/` **at context root** (preferred) or `domain/events/` (legacy support for backward compatibility)
 
 **Contains:**
 - **Current Events** (`*Event.*`) - Latest versions

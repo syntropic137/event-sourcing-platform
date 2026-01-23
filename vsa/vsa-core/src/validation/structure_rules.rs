@@ -1174,6 +1174,8 @@ mod tests {
         assert!(report.errors[0].message.contains("domain/commands/"));
     }
 
+    /// Test that events in domain/events/ are allowed for backward compatibility
+    /// when explicitly configured in vsa.yaml with events_path: "domain/events"
     #[test]
     fn test_vsa021_events_in_domain_events_allowed() {
         let temp_dir = TempDir::new().unwrap();

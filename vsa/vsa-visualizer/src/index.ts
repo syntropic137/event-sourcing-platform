@@ -164,7 +164,7 @@ For more information, see: https://github.com/your-org/vsa
             console.log(`   Value Objects: ${manifest.domain.value_objects.length}`);
           }
         } else {
-          console.log(`   Contexts:   ${(manifest as any).contexts?.length || 0}`);
+          console.log(`   Contexts:   ${manifest.bounded_contexts?.length || 0}`);
           console.log(`   (Domain model not detected)`);
         }
 
