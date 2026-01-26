@@ -2,21 +2,23 @@
 
 > **Generate beautiful architecture diagrams from VSA projects**
 
-[![Tests](https://img.shields.io/badge/tests-91%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-116%20passing-brightgreen)]()
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue)]()
 [![License](https://img.shields.io/badge/license-MIT-green)]()
 
-VSA Visualizer is a command-line tool that automatically generates comprehensive architecture documentation with Mermaid diagrams from VSA (Vertical Slice Architecture) projects.
+VSA Visualizer is a command-line tool that automatically generates comprehensive architecture documentation with both Mermaid and SVG diagrams from VSA (Vertical Slice Architecture) projects.
 
 ## ✨ Features
 
 - 📊 **C4 Architecture Diagrams** - System context, containers, and components
+- 🏗️ **SVG Architecture Diagrams** - Professional, GitHub-renderable architecture visualizations
+- 🔄 **CQRS Pattern Visualization** - Commands → Events → Projections flow diagrams
 - 🔄 **Event Flow Visualization** - See how events flow through your system
 - 📦 **Aggregate Documentation** - Detailed pages for each aggregate
 - 🔗 **Cross-Aggregate Flows** - Visualize sagas and process managers
-- 🎨 **Mermaid Diagrams** - Beautiful, version-controllable diagrams
+- 🎨 **Multiple Output Formats** - Mermaid (markdown) and SVG (images)
 - 🚀 **CLI Integration** - Pipe directly from `vsa manifest`
-- ✅ **Fully Tested** - 91 tests with comprehensive coverage
+- ✅ **Fully Tested** - 116 tests with comprehensive coverage
 
 ## 📦 Installation
 
@@ -54,10 +56,16 @@ vsa manifest --include-domain | vsa-visualizer --output ./docs/architecture
 ### With Options
 
 ```bash
+# Generate Mermaid diagrams (default)
 vsa-visualizer manifest.json \
   --output ./docs/arch \
   --format mermaid \
   --verbose
+
+# Generate SVG architecture diagram
+vsa-visualizer manifest.json \
+  --format svg \
+  --output ./docs
 ```
 
 ## 📖 Usage
@@ -73,10 +81,32 @@ Arguments:
 Options:
   -V, --version        output the version number
   -o, --output <dir>   Output directory (default: "docs/architecture")
-  -f, --format <type>  Output format (currently only "mermaid") (default: "mermaid")
+  -f, --format <type>  Output format: "mermaid" or "svg" (default: "mermaid")
   -v, --verbose        Enable verbose logging (default: false)
   -h, --help           display help for command
 ```
+
+### Output Formats
+
+#### Mermaid (default)
+Generates markdown files with Mermaid diagrams:
+- `OVERVIEW.md` - C4 context diagram
+- `FLOWS.md` - Event flow diagrams
+- `aggregates/*.md` - Per-aggregate documentation
+
+#### SVG
+Generates a single SVG architecture diagram:
+- `ARCHITECTURE.svg` - Complete system architecture including:
+  - Bounded contexts grid layout
+  - CQRS pattern layer (Commands → Events → Projections)
+  - Infrastructure components
+  - Package ecosystem
+
+**Perfect for:**
+- README.md embedding
+- GitHub documentation
+- VS Code markdown preview
+- Presentation slides
 
 ### Examples
 
@@ -147,20 +177,28 @@ vsa manifest --include-domain > manifest.json
 ```json
 {
   "version": "0.6.1-beta",
-  "schema_version": "1.0.0",
-  "generated_at": "2026-01-21T00:00:00Z",
+  "schema_version": "2.1.0",
+  "generated_at": "2026-01-26T00:00:00Z",
   "domain": {
     "aggregates": [...],
     "commands": [...],
     "events": [...],
+    "projections": [...],     // NEW in v2.1.0 - for CQRS visualization
     "relationships": {
       "command_to_aggregate": {},
       "aggregate_to_events": {},
-      "event_to_handlers": {}
+      "event_to_handlers": {},
+      "event_to_projections": {},      // NEW in v2.1.0
+      "projection_to_read_model": {}   // NEW in v2.1.0
     }
   }
 }
 ```
+
+**Schema v2.1.0 Features:**
+- Projection metadata for CQRS visualization
+- Event-to-projection relationship mapping
+- Projection-to-read-model mapping
 
 See [Manifest Schema](#manifest-schema) for full details.
 
