@@ -372,9 +372,8 @@ describe('ArchitectureSvgGenerator', () => {
       // Check basic XML structure
       const openTags = (svg.match(/<[^/][^>]*>/g) || []).length;
       const closeTags = (svg.match(/<\/[^>]+>/g) || []).length;
-      const selfClosing = (svg.match(/<[^>]+\/>/g) || []).length;
 
-      // Self-closing tags count as both open and close
+      // Basic sanity checks
       expect(openTags).toBeGreaterThan(0);
       expect(closeTags).toBeGreaterThan(0);
 

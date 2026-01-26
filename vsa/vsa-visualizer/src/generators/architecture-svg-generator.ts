@@ -11,7 +11,7 @@
 
 import { BaseGenerator } from './base-generator';
 import { Manifest, BoundedContext, Feature } from '../types/manifest';
-import { SvgBuilder, Point, Dimensions, ArchitectureColors } from '../utils/svg-builder';
+import { SvgBuilder, Point, ArchitectureColors } from '../utils/svg-builder';
 
 interface GridLayout {
   cols: number;
@@ -94,12 +94,12 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     }
     
     // 3. Domain contexts (main section)
-    currentY = this.renderContextsLayer(svg, currentY);
-    currentY += this.SECTION_MARGIN * 2;
+    const contextsEndY = this.renderContextsLayer(svg, currentY);
+    const infraStartY = contextsEndY + this.SECTION_MARGIN * 2;
     
     // 4. Infrastructure layer (if configured)
     if (this.layerConfig.infrastructure && this.layerConfig.infrastructure.length > 0) {
-      currentY = this.renderInfrastructureLayer(svg, currentY);
+      this.renderInfrastructureLayer(svg, infraStartY);
     }
     
     // 5. Ecosystem sidebar (right side)

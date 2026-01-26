@@ -116,9 +116,10 @@ export class SvgBuilder {
     
     const filter = shadow ? ' filter="url(#shadow)"' : '';
     
-    const rect = `<rect x="${pos.x}" y="${pos.y}" width="${dims.width}" height="${dims.height}" ` +
-                 `fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" ` +
-                 `rx="${rx}" opacity="${opacity}"${filter}/>`;
+    const rect =
+      `<rect x="${pos.x}" y="${pos.y}" width="${dims.width}" height="${dims.height}" ` +
+      `fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" ` +
+      `rx="${rx}" opacity="${opacity}"${filter}/>`;
     
     this.elements.push(rect);
     return this;
@@ -144,9 +145,10 @@ export class SvgBuilder {
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&apos;');
     
-    const text = `<text x="${pos.x}" y="${pos.y}" ` +
-                 `font-size="${fontSize}" font-weight="${fontWeight}" ` +
-                 `font-family="${fontFamily}" fill="${fill}" text-anchor="${textAnchor}">${escapedContent}</text>`;
+    const text =
+      `<text x="${pos.x}" y="${pos.y}" ` +
+      `font-size="${fontSize}" font-weight="${fontWeight}" ` +
+      `font-family="${fontFamily}" fill="${fill}" text-anchor="${textAnchor}">${escapedContent}</text>`;
     
     this.elements.push(text);
     return this;
@@ -209,7 +211,7 @@ export class GroupBuilder {
   rect(pos: Point, dims: Dimensions, style: RectStyle = {}): this {
     const builder = new SvgBuilder(0, 0);
     builder.rect(pos, dims, style);
-    const element = builder['elements'][0].replace(/^  /, '');
+    const element = builder['elements'][0].replace(/^ {2}/, '');
     this.elements.push(`    ${element}`);
     return this;
   }
@@ -220,7 +222,7 @@ export class GroupBuilder {
   text(pos: Point, content: string, style: TextStyle = {}): this {
     const builder = new SvgBuilder(0, 0);
     builder.text(pos, content, style);
-    const element = builder['elements'][0].replace(/^  /, '');
+    const element = builder['elements'][0].replace(/^ {2}/, '');
     this.elements.push(`    ${element}`);
     return this;
   }
