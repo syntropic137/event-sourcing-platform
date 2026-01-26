@@ -67,7 +67,7 @@ impl<'a> ProjectionScanner<'a> {
         Ok(())
     }
 
-    /// Check if a file name matches the projection pattern (*Projection.*)
+    /// Check if a file name matches the projection pattern (*Projection.* or projection.*)
     fn matches_pattern(&self, file_name: &str) -> bool {
         // Remove extension first
         let name_without_ext = file_name
@@ -77,18 +77,19 @@ impl<'a> ProjectionScanner<'a> {
             .or_else(|| file_name.strip_suffix(".rs"))
             .unwrap_or(file_name);
 
-        // Check if it ends with "Projection"
-        name_without_ext.ends_with("Projection")
+        // Check if it ends with "Projection" (e.g., WorkflowListProjection.py)
+        // OR if it's exactly named "projection" (e.g., projection.py)
+        name_without_ext.ends_with("Projection") || name_without_ext == "projection"
     }
 
     /// Parse projection metadata from a file
     fn parse_projection(&self, file_path: &Path, file_name: &str) -> Result<Option<Projection>> {
-        // Extract projection name from file name
-        let name = self.extract_projection_name(file_name)?;
-
-        // Read file content to extract subscribed events
+        // Read file content to extract projection class name and metadata
         let content = fs::read_to_string(file_path)?;
         let line_count = content.lines().count();
+
+        // Extract projection name from file name or class name in content
+        let name = self.extract_projection_name_from_content(&content, file_name)?;
 
         // Extract subscribed events from content
         let subscribed_events = self.extract_subscribed_events(&content);
@@ -101,12 +102,20 @@ impl<'a> ProjectionScanner<'a> {
             file_path: file_path.to_path_buf(),
             subscribed_events,
             read_model,
+            context: None, // Will be set by DomainScanner if in a context
             line_count,
         }))
     }
 
-    /// Extract projection name from file name
-    fn extract_projection_name(&self, file_name: &str) -> Result<String> {
+    /// Extract projection name from file content or file name
+    ///
+    /// For files named generically (e.g., projection.py), extract class name from content.
+    /// For files named specifically (e.g., WorkflowListProjection.py), use file name.
+    fn extract_projection_name_from_content(
+        &self,
+        content: &str,
+        file_name: &str,
+    ) -> Result<String> {
         // Remove file extension
         let name_without_ext = file_name
             .strip_suffix(".ts")
@@ -115,6 +124,22 @@ impl<'a> ProjectionScanner<'a> {
             .or_else(|| file_name.strip_suffix(".rs"))
             .unwrap_or(file_name);
 
+        // If file is generically named (e.g., "projection"), extract class name from content
+        if name_without_ext == "projection" {
+            // Look for class definition ending in "Projection"
+            // Matches: class WorkflowListProjection, export class OrderProjection
+            let class_pattern = Regex::new(r"(?:class|export\s+class)\s+(\w+Projection)").unwrap();
+            if let Some(cap) = class_pattern.captures(content) {
+                if let Some(class_name) = cap.get(1) {
+                    return Ok(class_name.as_str().to_string());
+                }
+            }
+
+            // Fallback: use "Projection" if no class found
+            return Ok("Projection".to_string());
+        }
+
+        // Otherwise use file name
         Ok(name_without_ext.to_string())
     }
 
@@ -365,13 +390,27 @@ class WorkflowDetailProjection:
         let config = create_test_config();
         let scanner = ProjectionScanner::new(Some(&config), root);
 
+        // Test with specifically named files (use file name)
         assert_eq!(
-            scanner.extract_projection_name("WorkflowListProjection.py").unwrap(),
+            scanner.extract_projection_name_from_content("", "WorkflowListProjection.py").unwrap(),
             "WorkflowListProjection"
         );
         assert_eq!(
-            scanner.extract_projection_name("CartItemsProjection.ts").unwrap(),
+            scanner.extract_projection_name_from_content("", "CartItemsProjection.ts").unwrap(),
             "CartItemsProjection"
+        );
+
+        // Test with generically named file (extract from content)
+        let py_content = "class WorkflowDetailProjection:\n    pass";
+        assert_eq!(
+            scanner.extract_projection_name_from_content(py_content, "projection.py").unwrap(),
+            "WorkflowDetailProjection"
+        );
+
+        let ts_content = "export class OrderListProjection {\n}";
+        assert_eq!(
+            scanner.extract_projection_name_from_content(ts_content, "projection.ts").unwrap(),
+            "OrderListProjection"
         );
     }
 
@@ -383,12 +422,19 @@ class WorkflowDetailProjection:
         let config = create_test_config();
         let scanner = ProjectionScanner::new(Some(&config), root);
 
+        // Specifically named projections
         assert!(scanner.matches_pattern("WorkflowListProjection.py"));
         assert!(scanner.matches_pattern("CartItemsProjection.ts"));
         assert!(scanner.matches_pattern("OrderProjection.rs"));
+
+        // Generically named projections (NEW)
+        assert!(scanner.matches_pattern("projection.py"));
+        assert!(scanner.matches_pattern("projection.ts"));
+        assert!(scanner.matches_pattern("projection.rs"));
+
+        // Non-projection files
         assert!(!scanner.matches_pattern("WorkflowHandler.py"));
         assert!(!scanner.matches_pattern("WorkflowQuery.ts"));
-        assert!(!scanner.matches_pattern("projection.py")); // lowercase doesn't match
     }
 
     #[test]
