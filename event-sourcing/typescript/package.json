@@ -67,7 +67,7 @@
         "@grpc/proto-loader": "^0.8.0",
         "long": "^5.2.3",
         "uuid": "^11.0.3",
-        "zod": "^4.1.13"
+        "zod": "^4.3.6"
     },
     "devDependencies": {
         "@eslint/js": "^9.39.1",
