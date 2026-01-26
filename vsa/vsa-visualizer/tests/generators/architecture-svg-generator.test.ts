@@ -412,4 +412,148 @@ describe('ArchitectureSvgGenerator', () => {
       expect(svg).toContain('aef-adapters');
     });
   });
+
+  describe('CQRS layer', () => {
+    it('should render CQRS layer when domain data is present', () => {
+      const manifestWithDomain: Manifest = {
+        version: '0.1.0',
+        schema_version: '2.1.0',
+        generated_at: '2026-01-26T00:00:00Z',
+        bounded_contexts: [],
+        domain: {
+          aggregates: [],
+          commands: [
+            { name: 'CreateOrderCommand', file_path: 'commands/CreateOrder.ts', has_aggregate_id: true, fields: [] },
+            { name: 'CancelOrderCommand', file_path: 'commands/CancelOrder.ts', has_aggregate_id: true, fields: [] }
+          ],
+          events: [
+            { name: 'OrderCreatedEvent', event_type: 'OrderCreated', version: 'v1', file_path: 'events/OrderCreated.ts', emitted_by: [], handled_by: [], fields: [], decorator_present: true },
+            { name: 'OrderCancelledEvent', event_type: 'OrderCancelled', version: 'v1', file_path: 'events/OrderCancelled.ts', emitted_by: [], handled_by: [], fields: [], decorator_present: true }
+          ],
+          projections: [
+            { name: 'OrderListProjection', file_path: 'projections/OrderList.ts', subscribed_events: ['OrderCreatedEvent'], read_model: 'OrderSummary', line_count: 50 }
+          ],
+          relationships: {
+            command_to_aggregate: {},
+            aggregate_to_events: {},
+            event_to_handlers: {}
+          }
+        }
+      };
+
+      const generator = new ArchitectureSvgGenerator(manifestWithDomain);
+      const svg = generator.generate();
+
+      // Check CQRS layer is present
+      expect(svg).toContain('CQRS Pattern');
+      expect(svg).toContain('Commands');
+      expect(svg).toContain('Events');
+      expect(svg).toContain('Projections');
+      
+      // Check counts
+      expect(svg).toContain('2 total'); // Commands count
+      expect(svg).toContain('1 total'); // Projections count
+    });
+
+    it('should not render CQRS layer when no domain data', () => {
+      const generator = new ArchitectureSvgGenerator(minimalManifest);
+      const svg = generator.generate();
+
+      expect(svg).not.toContain('CQRS Pattern');
+      expect(svg).not.toContain('Commands');
+      expect(svg).not.toContain('Events');
+      expect(svg).not.toContain('Projections');
+    });
+
+    it('should handle CQRS layer with zero projections', () => {
+      const manifestWithoutProjections: Manifest = {
+        version: '0.1.0',
+        schema_version: '2.1.0',
+        generated_at: '2026-01-26T00:00:00Z',
+        bounded_contexts: [],
+        domain: {
+          aggregates: [],
+          commands: [
+            { name: 'CreateTaskCommand', file_path: 'commands/CreateTask.ts', has_aggregate_id: true, fields: [] }
+          ],
+          events: [
+            { name: 'TaskCreatedEvent', event_type: 'TaskCreated', version: 'v1', file_path: 'events/TaskCreated.ts', emitted_by: [], handled_by: [], fields: [], decorator_present: true }
+          ],
+          projections: [],
+          relationships: {
+            command_to_aggregate: {},
+            aggregate_to_events: {},
+            event_to_handlers: {}
+          }
+        }
+      };
+
+      const generator = new ArchitectureSvgGenerator(manifestWithoutProjections);
+      const svg = generator.generate();
+
+      // CQRS layer should still render, but with 0 projections
+      expect(svg).toContain('CQRS Pattern');
+      expect(svg).toContain('Projections');
+      expect(svg).toContain('0 total'); // Zero projections
+    });
+
+    it('should show correct CQRS colors for each box', () => {
+      const manifestWithDomain: Manifest = {
+        version: '0.1.0',
+        schema_version: '2.1.0',
+        generated_at: '2026-01-26T00:00:00Z',
+        bounded_contexts: [],
+        domain: {
+          aggregates: [],
+          commands: [{ name: 'TestCommand', file_path: 'commands/Test.ts', has_aggregate_id: true, fields: [] }],
+          events: [{ name: 'TestEvent', event_type: 'Test', version: 'v1', file_path: 'events/Test.ts', emitted_by: [], handled_by: [], fields: [], decorator_present: true }],
+          projections: [{ name: 'TestProjection', file_path: 'projections/Test.ts', subscribed_events: ['TestEvent'], line_count: 30 }],
+          relationships: {
+            command_to_aggregate: {},
+            aggregate_to_events: {},
+            event_to_handlers: {}
+          }
+        }
+      };
+
+      const generator = new ArchitectureSvgGenerator(manifestWithDomain);
+      const svg = generator.generate();
+
+      // Check for CQRS colors (command: blue, event: orange, projection: green)
+      expect(svg).toContain('fill="#e3f2fd"'); // Command box (blue)
+      expect(svg).toContain('stroke="#1976d2"');
+      expect(svg).toContain('fill="#fff3e0"'); // Event box (orange)
+      expect(svg).toContain('stroke="#f57c00"');
+      expect(svg).toContain('fill="#e8f5e9"'); // Projection box (green)
+      expect(svg).toContain('stroke="#388e3c"');
+    });
+
+    it('should include arrows between CQRS boxes', () => {
+      const manifestWithDomain: Manifest = {
+        version: '0.1.0',
+        schema_version: '2.1.0',
+        generated_at: '2026-01-26T00:00:00Z',
+        bounded_contexts: [],
+        domain: {
+          aggregates: [],
+          commands: [{ name: 'TestCommand', file_path: 'commands/Test.ts', has_aggregate_id: true, fields: [] }],
+          events: [{ name: 'TestEvent', event_type: 'Test', version: 'v1', file_path: 'events/Test.ts', emitted_by: [], handled_by: [], fields: [], decorator_present: true }],
+          projections: [{ name: 'TestProjection', file_path: 'projections/Test.ts', subscribed_events: ['TestEvent'], line_count: 30 }],
+          relationships: {
+            command_to_aggregate: {},
+            aggregate_to_events: {},
+            event_to_handlers: {}
+          }
+        }
+      };
+
+      const generator = new ArchitectureSvgGenerator(manifestWithDomain);
+      const svg = generator.generate();
+
+      // Check for arrow elements (lines and polygons for arrow heads)
+      expect(svg).toContain('<line');
+      expect(svg).toContain('<polygon'); // Arrow heads
+      expect(svg).toContain('fill="#666666"'); // Arrow color
+    });
+  });
 });

@@ -30,7 +30,7 @@ interface LayerConfig {
 export class ArchitectureSvgGenerator extends BaseGenerator {
   // Canvas dimensions
   private readonly CANVAS_WIDTH = 1400;
-  private readonly CANVAS_HEIGHT = 1000;
+  private readonly BASE_CANVAS_HEIGHT = 1000;
   
   // Layout constants
   private readonly PADDING = 40;
@@ -38,6 +38,8 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
   private readonly MAX_COLS = 3;
   private readonly CONTEXT_CELL_HEIGHT = 180;
   private readonly SIDEBAR_WIDTH = 280;
+  private readonly CQRS_LAYER_HEIGHT = 200;
+  private readonly CQRS_BOX_HEIGHT = 120;
   
   // Typography
   private readonly FONT_HEADER = 'Arial, Helvetica, sans-serif';
@@ -48,6 +50,13 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
   
   // Color scheme
   private readonly colors = ArchitectureColors;
+  
+  // CQRS colors
+  private readonly CQRS_COLORS = {
+    command: { fill: '#e3f2fd', stroke: '#1976d2' },
+    event: { fill: '#fff3e0', stroke: '#f57c00' },
+    projection: { fill: '#e8f5e9', stroke: '#388e3c' },
+  };
   
   private layerConfig: LayerConfig = {};
   
@@ -66,10 +75,25 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
   }
   
   /**
+   * Calculate required canvas height based on layers to be rendered
+   */
+  private calculateCanvasHeight(): number {
+    let height = this.BASE_CANVAS_HEIGHT;
+    
+    // Add extra height for CQRS layer if it will be rendered
+    if (this.shouldRenderCqrsLayer()) {
+      height += this.CQRS_LAYER_HEIGHT;
+    }
+    
+    return height;
+  }
+  
+  /**
    * Generate the SVG diagram
    */
   generate(): string {
-    const svg = new SvgBuilder(this.CANVAS_WIDTH, this.CANVAS_HEIGHT);
+    const canvasHeight = this.calculateCanvasHeight();
+    const svg = new SvgBuilder(this.CANVAS_WIDTH, canvasHeight);
     
     // Add shadow filter
     svg.addShadowFilter();
@@ -95,14 +119,20 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     
     // 3. Domain contexts (main section)
     const contextsEndY = this.renderContextsLayer(svg, currentY);
-    const infraStartY = contextsEndY + this.SECTION_MARGIN * 2;
+    let infraStartY = contextsEndY + this.SECTION_MARGIN * 2;
     
-    // 4. Infrastructure layer (if configured)
+    // 4. CQRS Pattern layer (if domain data available)
+    if (this.shouldRenderCqrsLayer()) {
+      infraStartY = this.renderCqrsLayer(svg, infraStartY);
+      infraStartY += this.SECTION_MARGIN * 2;
+    }
+    
+    // 5. Infrastructure layer (if configured)
     if (this.layerConfig.infrastructure && this.layerConfig.infrastructure.length > 0) {
       this.renderInfrastructureLayer(svg, infraStartY);
     }
     
-    // 5. Ecosystem sidebar (right side)
+    // 6. Ecosystem sidebar (right side)
     this.renderEcosystemSidebar(svg);
     
     return svg.build();
@@ -566,5 +596,157 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
         { name: 'MinIO', description: 'Artifacts' }
       ];
     }
+  }
+  
+  /**
+   * Check if CQRS layer should be rendered (if domain data is available)
+   */
+  private shouldRenderCqrsLayer(): boolean {
+    return !!(
+      this.manifest.domain &&
+      (this.manifest.domain.commands.length > 0 ||
+       this.manifest.domain.events.length > 0 ||
+       (this.manifest.domain.projections && this.manifest.domain.projections.length > 0))
+    );
+  }
+  
+  /**
+   * Render CQRS Pattern layer showing Commands → Events → Projections
+   */
+  private renderCqrsLayer(svg: SvgBuilder, startY: number): number {
+    const availableWidth = this.CANVAS_WIDTH - this.SIDEBAR_WIDTH - (this.PADDING * 2);
+    const boxWidth = (availableWidth - 40) / 3; // 3 boxes with spacing
+    const boxHeight = this.CQRS_BOX_HEIGHT;
+    const boxY = startY + 60;
+    const spacing = 20;
+    
+    // Section title
+    svg.text(
+      { x: this.PADDING, y: startY + 30 },
+      'CQRS Pattern',
+      {
+        fontSize: this.FONT_SIZE_SECTION,
+        fontWeight: 'bold',
+        fontFamily: this.FONT_HEADER,
+        fill: this.colors.text.primary
+      }
+    );
+    
+    const domain = this.manifest.domain!;
+    const commandCount = domain.commands.length;
+    const eventCount = domain.events.length;
+    const projectionCount = domain.projections?.length || 0;
+    
+    // Calculate box positions
+    const commandX = this.PADDING;
+    const eventX = commandX + boxWidth + spacing;
+    const projectionX = eventX + boxWidth + spacing;
+    
+    // Commands box
+    this.renderCqrsBox(
+      svg,
+      { x: commandX, y: boxY },
+      { width: boxWidth, height: boxHeight },
+      'Commands',
+      commandCount,
+      this.CQRS_COLORS.command
+    );
+    
+    // Events box
+    this.renderCqrsBox(
+      svg,
+      { x: eventX, y: boxY },
+      { width: boxWidth, height: boxHeight },
+      'Events',
+      eventCount,
+      this.CQRS_COLORS.event
+    );
+    
+    // Projections box
+    this.renderCqrsBox(
+      svg,
+      { x: projectionX, y: boxY },
+      { width: boxWidth, height: boxHeight },
+      'Projections',
+      projectionCount,
+      this.CQRS_COLORS.projection
+    );
+    
+    // Arrows
+    const arrowY = boxY + boxHeight / 2;
+    const arrowColor = '#666666';
+    
+    // Command → Event arrow
+    svg.line(
+      { x: commandX + boxWidth, y: arrowY },
+      { x: eventX, y: arrowY },
+      arrowColor,
+      2
+    );
+    this.renderArrowHead(svg, { x: eventX - 5, y: arrowY }, arrowColor);
+    
+    // Event → Projection arrow
+    svg.line(
+      { x: eventX + boxWidth, y: arrowY },
+      { x: projectionX, y: arrowY },
+      arrowColor,
+      2
+    );
+    this.renderArrowHead(svg, { x: projectionX - 5, y: arrowY }, arrowColor);
+    
+    return startY + this.CQRS_LAYER_HEIGHT;
+  }
+  
+  /**
+   * Render a single CQRS box (Command, Event, or Projection)
+   */
+  private renderCqrsBox(
+    svg: SvgBuilder,
+    pos: Point,
+    dims: { width: number; height: number },
+    label: string,
+    count: number,
+    colors: { fill: string; stroke: string }
+  ): void {
+    // Box
+    svg.rect(pos, dims, {
+      fill: colors.fill,
+      stroke: colors.stroke,
+      strokeWidth: 2,
+      rx: 8
+    });
+    
+    // Label
+    svg.text(
+      { x: pos.x + 20, y: pos.y + 35 },
+      label,
+      {
+        fontSize: 18,
+        fontWeight: 'bold',
+        fontFamily: this.FONT_HEADER,
+        fill: this.colors.text.primary
+      }
+    );
+    
+    // Count
+    svg.text(
+      { x: pos.x + 20, y: pos.y + 65 },
+      `${count} total`,
+      {
+        fontSize: 14,
+        fontFamily: this.FONT_HEADER,
+        fill: '#666666'
+      }
+    );
+  }
+  
+  /**
+   * Render an arrow head
+   */
+  private renderArrowHead(svg: SvgBuilder, pos: Point, color: string): void {
+    const size = 8;
+    svg._addElement(
+      `<polygon points="${pos.x},${pos.y} ${pos.x - size},${pos.y - size / 2} ${pos.x - size},${pos.y + size / 2}" fill="${color}" />`
+    );
   }
 }
