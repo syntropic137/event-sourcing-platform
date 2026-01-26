@@ -34,7 +34,7 @@
   "devDependencies": {
     "typescript": "^5.9.3",
     "@types/node": "^24.10.9",
-    "ts-proto": "^1.172.0",
+    "ts-proto": "^2.11.1",
     "tsx": "^4.21.0"
   }
 }
