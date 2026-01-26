@@ -35,6 +35,7 @@ pub struct DomainModel {
     pub commands: Vec<Command>,
     pub queries: Vec<Query>,
     pub events: Vec<Event>,
+    pub projections: Vec<Projection>,
     pub upcasters: Vec<Upcaster>,
     pub value_objects: Vec<ValueObject>,
     pub root_path: PathBuf,
@@ -48,6 +49,7 @@ impl DomainModel {
             commands: Vec::new(),
             queries: Vec::new(),
             events: Vec::new(),
+            projections: Vec::new(),
             upcasters: Vec::new(),
             value_objects: Vec::new(),
             root_path,
@@ -60,6 +62,7 @@ impl DomainModel {
             + self.commands.len()
             + self.queries.len()
             + self.events.len()
+            + self.projections.len()
             + self.upcasters.len()
             + self.value_objects.len()
     }
@@ -102,6 +105,7 @@ impl DomainModel {
         self.commands.extend(other.commands);
         self.queries.extend(other.queries);
         self.events.extend(other.events);
+        self.projections.extend(other.projections);
         self.upcasters.extend(other.upcasters);
         self.value_objects.extend(other.value_objects);
     }
