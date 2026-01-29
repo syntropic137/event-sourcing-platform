@@ -7,7 +7,7 @@
  * See: ADR-015 ES Test Kit Architecture
  */
 
-import { scenario, ScenarioAssertionError } from '@neuralempowerment/event-sourcing-typescript/testing';
+import { scenario } from '@neuralempowerment/event-sourcing-typescript/testing';
 import { OrderAggregate, OrderStatus } from '../src/domain/OrderAggregate';
 import { SubmitOrderCommand } from '../src/domain/commands/SubmitOrderCommand';
 import { CancelOrderCommand } from '../src/domain/commands/CancelOrderCommand';

@@ -19,7 +19,6 @@ import { ScenarioAssertionError } from './errors';
 export class ResultValidator<TAggregate extends AggregateRoot<DomainEvent>> {
   private readonly aggregate: TAggregate;
   private readonly error: Error | undefined;
-  private validated = false;
 
   constructor(aggregate: TAggregate, error: Error | undefined) {
     this.aggregate = aggregate;
@@ -30,8 +29,6 @@ export class ResultValidator<TAggregate extends AggregateRoot<DomainEvent>> {
    * Assert command executed successfully (no exception thrown)
    */
   expectSuccessfulHandlerExecution(): this {
-    this.validated = true;
-
     if (this.error) {
       throw new ScenarioAssertionError(
         `Expected successful execution but got error: ${this.error.name}: ${this.error.message}`

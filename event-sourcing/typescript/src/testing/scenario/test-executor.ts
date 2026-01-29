@@ -89,7 +89,8 @@ export class TestExecutor<TAggregate extends AggregateRoot<DomainEvent>> {
       (eventAny.id as string) ??
       (eventAny.orderId as string) ??
       (eventAny.accountId as string) ??
-      (eventAny.customerId as string)
+      (eventAny.customerId as string) ??
+      (eventAny.cartId as string)
     );
   }
 

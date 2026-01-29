@@ -322,15 +322,15 @@ describe('Scenario Testing (Given-When-Then)', () => {
       }).toThrow(ScenarioAssertionError);
     });
 
-    it('should fail when expecting wrong exception type', () => {
-      expect(() => {
-        scenario(CartAggregate)
-          .given([
-            new CartCreatedEvent('cart-1'),
-          ])
-          .when(new SubmitCartCommand('cart-1'))
-          .expectException(Error); // Generic Error, not BusinessRuleViolationError
-      }).not.toThrow(); // BusinessRuleViolationError IS an Error, so this passes
+    it('should pass when expecting base Error type (BusinessRuleViolationError extends Error)', () => {
+      // This passes because BusinessRuleViolationError is an instance of Error
+      // No expect().toThrow() wrapper needed - the scenario itself validates
+      scenario(CartAggregate)
+        .given([
+          new CartCreatedEvent('cart-1'),
+        ])
+        .when(new SubmitCartCommand('cart-1'))
+        .expectException(Error); // Generic Error matches because BusinessRuleViolationError extends Error
     });
 
     it('should fail when exception message does not match', () => {

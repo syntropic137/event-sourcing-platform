@@ -350,8 +350,8 @@ event-sourcing/typescript/src/testing/
 │   ├── aggregate-scenario.ts   # Main scenario class
 │   ├── test-executor.ts        # When phase (execute command)
 │   ├── result-validator.ts     # Then phase (assertions)
-│   └── matchers/               # Event matching utilities
-│       └── event-matchers.ts
+│   └── errors/                 # Scenario-specific errors
+│       └── scenario-errors.ts
 ├── fixtures/
 │   ├── test-fixture.ts         # Load/save fixtures
 │   ├── fixture-types.ts        # TypeScript types for fixtures
@@ -480,14 +480,14 @@ Property testing requires `fast-check` as a peer dependency. Basic testing works
 
 ## Implementation Plan
 
-### Phase 0: Given-When-Then Scenario Testing (Priority)
-- [ ] TypeScript `scenario()` implementation
-- [ ] TypeScript `AggregateScenario`, `TestExecutor`, `ResultValidator` classes
-- [ ] TypeScript event matchers
-- [ ] Python `scenario()` implementation  
-- [ ] Python `AggregateScenario`, `TestExecutor`, `ResultValidator` classes
-- [ ] Python event matchers
-- [ ] Tests for both implementations
+### Phase 0: Given-When-Then Scenario Testing (Priority) ✅
+- [x] TypeScript `scenario()` implementation
+- [x] TypeScript `AggregateScenario`, `TestExecutor`, `ResultValidator` classes
+- [ ] TypeScript event matchers (future enhancement)
+- [x] Python `scenario()` implementation  
+- [x] Python `AggregateScenario`, `TestExecutor`, `ResultValidator` classes
+- [ ] Python event matchers (future enhancement)
+- [x] Tests for both implementations
 - [ ] Documentation and examples
 
 ### Phase 1: Core Replay Testing

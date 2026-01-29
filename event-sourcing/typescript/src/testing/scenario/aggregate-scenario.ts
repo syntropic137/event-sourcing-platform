@@ -150,7 +150,7 @@ export class AggregateScenario<TAggregate extends AggregateRoot<DomainEvent>> {
  *
  * @example
  * ```typescript
- * import { scenario } from '@neurale/event-sourcing/testing';
+ * import { scenario } from '@neuralempowerment/event-sourcing-typescript/testing';
  *
  * // Happy path
  * scenario(OrderAggregate)
