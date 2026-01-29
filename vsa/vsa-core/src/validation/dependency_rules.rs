@@ -21,7 +21,8 @@ use std::path::PathBuf;
 // VSA027: Domain Purity Rule
 // ============================================================================
 
-/// Rule: Domain layer must not import from events, ports, application, infrastructure, or slices
+/// Rule: Domain layer must not import from ports, application, infrastructure, or slices
+/// Domain CAN import from domain/events/ since events are part of the domain layer
 pub struct DomainPurityRule;
 
 impl ValidationRule for DomainPurityRule {
@@ -740,8 +741,10 @@ mod tests {
         let (_temp_dir, ctx) = create_test_context();
         let context_path = create_context_structure(ctx.root.as_path(), "workflows");
 
-        // Create event file with only stdlib imports
-        let event_file = context_path.join("events/WorkflowCreatedEvent.py");
+        // Create domain/events/ structure per ADR-019 and event file with only stdlib imports
+        let domain_events_path = context_path.join("domain/events");
+        std::fs::create_dir_all(&domain_events_path).unwrap();
+        let event_file = domain_events_path.join("WorkflowCreatedEvent.py");
         std::fs::write(
             &event_file,
             "from typing import Optional\nfrom dataclasses import dataclass\nfrom datetime import datetime\n",

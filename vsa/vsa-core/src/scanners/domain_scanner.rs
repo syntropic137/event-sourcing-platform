@@ -129,8 +129,9 @@ impl DomainScanner {
         model.value_objects = self.scan_value_objects(domain_path)?;
 
         // Scan projections
-        // Projections are typically in query slices, so we scan from the context root
-        // to find all projection files across slices
+        // TODO: Consider restricting scan scope to slices/ or queries/ subtree to reduce
+        // false positives and improve performance. Current implementation scans from context
+        // root which can be overly broad for large codebases.
         let context_path = domain_path.parent().unwrap_or(domain_path);
         let projection_scanner = ProjectionScanner::new(None, context_path);
         model.projections = projection_scanner.scan()?;
