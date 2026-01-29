@@ -10,7 +10,8 @@
     "clean": "rimraf dist",
     "setup": "npm install && npm run build",
     "run": "npm run dev",
-    "validate": "vsa validate"
+    "validate": "vsa validate",
+    "test": "jest"
   },
   "author": "Event Sourcing Platform Team",
   "license": "MIT",
@@ -18,9 +19,12 @@
     "@neuralempowerment/event-sourcing-typescript": "workspace:*"
   },
   "devDependencies": {
+    "@types/jest": "^29.5.0",
     "@types/node": "^24.10.9",
-    "typescript": "^5.0.0",
+    "jest": "^29.7.0",
+    "rimraf": "^6.1.2",
+    "ts-jest": "^29.1.0",
     "ts-node": "^10.9.0",
-    "rimraf": "^6.1.2"
+    "typescript": "^5.0.0"
   }
 }
