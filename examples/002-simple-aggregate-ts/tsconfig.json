@@ -5,15 +5,21 @@
     "moduleResolution": "node",
     "lib": ["ES2022"],
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": ".",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "declaration": false,
     "sourceMap": true,
     "experimentalDecorators": true,
-    "emitDecoratorMetadata": true
+    "emitDecoratorMetadata": true,
+    "noImplicitAny": false,
+    "baseUrl": ".",
+    "paths": {
+      "@neuralempowerment/event-sourcing-typescript": ["../../event-sourcing/typescript/dist/index"],
+      "@neuralempowerment/event-sourcing-typescript/testing": ["../../event-sourcing/typescript/dist/testing/index"]
+    }
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*", "tests/**/*"]
 }
 

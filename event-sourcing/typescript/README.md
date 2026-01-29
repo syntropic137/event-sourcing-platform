@@ -249,6 +249,75 @@ See the [examples directory](../../examples/) for complete working examples:
 - **[004-cqrs-patterns-ts](../../examples/004-cqrs-patterns-ts)** - CQRS with projections
 - **[010-observability-ts](../../examples/010-observability-ts)** - Logging and observability patterns
 
+## ES Test Kit - Testing Your Aggregates
+
+The SDK includes a comprehensive testing toolkit for event-sourced applications. The primary tool is **Given-When-Then scenario testing** for testing aggregate command handlers.
+
+### Quick Example
+
+```typescript
+import { scenario } from '@neuralempowerment/event-sourcing-typescript/testing';
+
+describe('BankAccountAggregate', () => {
+  it('should emit MoneyDeposited when depositing money', () => {
+    scenario(BankAccountAggregate)
+      .givenNoPriorActivity()
+      .when(new DepositMoneyCommand('account-1', 100))
+      .expectEvents([
+        new MoneyDepositedEvent('account-1', 100),
+      ]);
+  });
+
+  it('should reject negative deposits', () => {
+    scenario(BankAccountAggregate)
+      .givenNoPriorActivity()
+      .when(new DepositMoneyCommand('account-1', -50))
+      .expectException(Error)
+      .expectExceptionMessage('Amount must be positive');
+  });
+
+  it('should accumulate balance correctly', () => {
+    scenario(BankAccountAggregate)
+      .given([
+        new MoneyDepositedEvent('account-1', 100),
+        new MoneyDepositedEvent('account-1', 50),
+      ])
+      .when(new DepositMoneyCommand('account-1', 25))
+      .expectState((aggregate) => {
+        expect(aggregate.getBalance()).toBe(175);
+      });
+  });
+});
+```
+
+### Available Testing Tools
+
+| Tool | Purpose | Import |
+|------|---------|--------|
+| `scenario()` | Given-When-Then command testing | `@.../testing` |
+| `ReplayTester` | Verify state from event replay | `@.../testing` |
+| `InvariantChecker` | Verify business rules hold | `@.../testing` |
+| `ProjectionTester` | Test projection correctness | `@.../testing` |
+| `loadFixture()` | Load reusable test data | `@.../testing` |
+
+### Scenario API Reference
+
+| Method | Description |
+|--------|-------------|
+| `.given([events])` | Set up prior events |
+| `.givenNoPriorActivity()` | Start with fresh aggregate |
+| `.givenCommands([commands])` | Set up via commands |
+| `.when(command)` | Execute command under test |
+| `.expectEvents([events])` | Assert specific events emitted |
+| `.expectNoEvents()` | Assert no events emitted |
+| `.expectException(ErrorClass)` | Assert exception type thrown |
+| `.expectExceptionMessage(msg)` | Assert exception message |
+| `.expectState(callback)` | Assert aggregate state |
+
+For comprehensive documentation, see:
+- **[ES Testing Guide](../../docs-site/docs/event-sourcing/testing/index.md)** - Complete testing documentation
+- **[Scenario Testing API](../../docs-site/docs/event-sourcing/testing/scenario-testing.md)** - Given-When-Then reference
+
 ## Documentation
 
 - **[Migration Guide](../../MIGRATION-GUIDE.md)** - Migrate from old patterns
