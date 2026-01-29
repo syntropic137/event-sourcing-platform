@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from event_sourcing.core.event import DomainEvent
 from event_sourcing.testing.scenario.errors import ScenarioAssertionError
@@ -35,7 +35,6 @@ class ResultValidator(Generic[TAggregate]):
     ) -> None:
         self._aggregate = aggregate
         self._error = error
-        self._validated = False
 
     def expect_successful_handler_execution(self) -> ResultValidator[TAggregate]:
         """
@@ -44,8 +43,6 @@ class ResultValidator(Generic[TAggregate]):
         Returns:
             self for chaining
         """
-        self._validated = True
-
         if self._error:
             raise ScenarioAssertionError(
                 f"Expected successful execution but got error: "
