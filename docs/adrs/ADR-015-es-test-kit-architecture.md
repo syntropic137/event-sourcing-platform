@@ -1,11 +1,38 @@
 # ADR-015: ES Test Kit Architecture
 
-**Status:** 📋 Proposed  
-**Date:** 2025-12-19  
+**Status:** ✅ Accepted  
+**Date:** 2025-12-19 (Updated: 2026-01-28)  
 **Decision Makers:** Platform Team  
 **Related:** ADR-004 (Command Handlers), ADR-014 (Projection Checkpoints)
 
 ## Context
+
+### Why ES Applications Need Specialized Testing
+
+Event Sourcing applications have fundamentally different testing needs than traditional CRUD apps:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                 CRUD vs EVENT SOURCING TESTING                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  CRUD Application              Event Sourcing Application               │
+│  ─────────────────             ──────────────────────────               │
+│                                                                         │
+│  ✓ Check database rows         ✗ State is derived from events          │
+│  ✓ Mock repositories           ✗ History sequence matters              │
+│  ✓ Simple state assertions     ✗ Invariants must hold always           │
+│  ✓ Unit test services          ✗ Must test command → event flow        │
+│  ✓ Integration test APIs       ✗ Must verify projections are correct   │
+│                                                                         │
+│  Testing Focus:                Testing Focus:                           │
+│  • Does it save correctly?     • Does this command produce right events?│
+│  • Does it query correctly?    • Does replay produce correct state?     │
+│                                • Do invariants hold after every event?  │
+│                                • Are projections deterministic?         │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ### The Problem
 
@@ -16,6 +43,7 @@ Event Sourcing applications require specialized testing patterns that differ fro
 3. **Invariants must hold** — Business rules must be true after every event
 4. **Projections must be deterministic** — Same events = same read model
 5. **Replay must work** — Aggregates must rehydrate correctly
+6. **Command behavior matters** — Commands must produce correct events
 
 Currently, the platform provides:
 - Basic Jest tests in examples
@@ -23,6 +51,7 @@ Currently, the platform provides:
 - Examples that serve as living documentation
 
 What's missing:
+- **Given-When-Then testing harness** for command-focused aggregate testing
 - Reusable testing harness for common patterns
 - Golden replay fixtures (known events → expected state)
 - Invariant testing framework
@@ -30,18 +59,104 @@ What's missing:
 
 ### Requirements
 
-1. **Golden Replays** — Load events from fixtures, replay, assert state
-2. **Invariant Testing** — Define aggregate invariants, verify after each event
-3. **Property Testing** — Generate random command sequences, verify invariants hold
-4. **Projection Testing** — Verify projections are deterministic across rebuilds
-5. **Minimal Boilerplate** — Tests should be concise and readable
-6. **Framework Agnostic** — Work with Jest, Vitest, Mocha, etc.
+1. **Given-When-Then Testing** — Test aggregates with: given events → when command → expect events/exception
+2. **Golden Replays** — Load events from fixtures, replay, assert state
+3. **Invariant Testing** — Define aggregate invariants, verify after each event
+4. **Property Testing** — Generate random command sequences, verify invariants hold
+5. **Projection Testing** — Verify projections are deterministic across rebuilds
+6. **Minimal Boilerplate** — Tests should be concise and readable
+7. **Framework Agnostic** — Work with Jest, Vitest, pytest, Mocha, etc.
+8. **Multi-Language** — Consistent API across TypeScript and Python
 
 ## Decision
 
 We will create a **test kit module** that provides:
 
-### 1. Golden Replay Testing
+### 1. Given-When-Then Scenario Testing (NEW)
+
+The `scenario()` function provides a fluent API for testing aggregate behavior using the **Given-When-Then** pattern, inspired by Axon Framework's `AggregateTestFixture`.
+
+**Design Principles:**
+- **Readability First** — Tests are "written by AI, read by humans"
+- **Fluent API** — Chainable methods with good IDE autocomplete
+- **Formatter-Friendly** — Structure creates readability (no reliance on blank lines)
+- **Explicit Errors** — Typed exception expectations
+
+#### TypeScript
+
+```typescript
+import { scenario } from '@neurale/event-sourcing/testing';
+
+// Happy path: command produces events
+scenario(OrderAggregate)
+  .given([
+    new CartCreatedEvent('order-1'),
+    new ItemAddedEvent('order-1', 'item-1', 29.99),
+  ])
+  .when(new SubmitCartCommand('order-1'))
+  .expectEvents([
+    new CartSubmittedEvent('order-1', 29.99),
+  ]);
+
+// Error path: business rule violation
+scenario(OrderAggregate)
+  .givenNoPriorActivity()
+  .when(new SubmitCartCommand('order-1'))
+  .expectException(BusinessRuleViolationError)
+  .expectExceptionMessage('Cannot submit empty cart');
+
+// Verify aggregate state after command
+scenario(OrderAggregate)
+  .given([
+    new CartCreatedEvent('order-1'),
+  ])
+  .when(new AddItemCommand('order-1', 'item-1', 29.99))
+  .expectState((state) => {
+    expect(state.itemCount).toBe(1);
+  });
+```
+
+#### Python
+
+```python
+from event_sourcing.testing import scenario
+
+# Happy path: command produces events
+scenario(OrderAggregate) \
+    .given([
+        CartCreatedEvent(aggregate_id='order-1'),
+        ItemAddedEvent(aggregate_id='order-1', item_id='item-1', price=29.99),
+    ]) \
+    .when(SubmitCartCommand(aggregate_id='order-1')) \
+    .expect_events([
+        CartSubmittedEvent(aggregate_id='order-1', total=29.99),
+    ])
+
+# Error path: business rule violation
+scenario(OrderAggregate) \
+    .given_no_prior_activity() \
+    .when(SubmitCartCommand(aggregate_id='order-1')) \
+    .expect_exception(BusinessRuleViolationError) \
+    .expect_exception_message('Cannot submit empty cart')
+```
+
+#### Scenario API Reference
+
+| Phase | TypeScript | Python | Description |
+|-------|------------|--------|-------------|
+| Setup | `scenario(AggregateClass)` | `scenario(AggregateClass)` | Create test scenario |
+| Given | `.given([events])` | `.given([events])` | Set up prior events |
+| Given | `.givenNoPriorActivity()` | `.given_no_prior_activity()` | No prior events |
+| Given | `.givenCommands([cmds])` | `.given_commands([cmds])` | Generate events from commands |
+| When | `.when(command)` | `.when(command)` | Execute command |
+| Then | `.expectEvents([events])` | `.expect_events([events])` | Assert events emitted |
+| Then | `.expectNoEvents()` | `.expect_no_events()` | Assert no events |
+| Then | `.expectException(Error)` | `.expect_exception(Error)` | Assert exception type |
+| Then | `.expectExceptionMessage(msg)` | `.expect_exception_message(msg)` | Assert exception message |
+| Then | `.expectState(callback)` | `.expect_state(callback)` | Assert aggregate state |
+| Config | `.registerInjectableResource(r)` | `.register_injectable_resource(r)` | Inject dependencies |
+
+### 2. Golden Replay Testing
 
 ```typescript
 import { ReplayTester, loadFixture } from '@event-sourcing-platform/typescript/testing';
@@ -169,13 +284,74 @@ describe('OrderSummaryProjection', () => {
 });
 ```
 
+## ES Test Kit - Complete Toolkit Overview
+
+The ES Test Kit is a **cohesive collection of testing tools** designed specifically for event-sourced applications. Each tool has a specific purpose and answers a specific testing question.
+
+### Tool Purpose Matrix
+
+| Tool | What It Does | Testing Question | When to Use |
+|------|--------------|------------------|-------------|
+| **`scenario()`** | Given-When-Then command testing | "Does this command produce the right events?" | Every command handler |
+| **`ReplayTester`** | Replay events and verify state | "Does replaying events produce correct state?" | Regression tests, migrations |
+| **`InvariantChecker`** | Verify business rules after events | "Do invariants hold after every event?" | Critical business rules |
+| **`PropertyTester`** | Random command sequences | "Do invariants hold for ANY command sequence?" | Complex aggregates |
+| **`ProjectionTester`** | Test projection event handling | "Does the projection produce correct read model?" | Every projection |
+| **`loadFixture()`** | Load test data from files | N/A (utility) | Shared test scenarios |
+
+### Testing Strategy by Concern
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     WHAT ARE YOU TESTING?                               │
+└─────────────────────────────────────────────────────────────────────────┘
+                                │
+        ┌───────────────────────┼───────────────────────┐
+        │                       │                       │
+        ▼                       ▼                       ▼
+┌───────────────┐      ┌───────────────┐      ┌───────────────┐
+│   COMMANDS    │      │    STATE      │      │  PROJECTIONS  │
+│   (Behavior)  │      │   (History)   │      │ (Read Models) │
+└───────┬───────┘      └───────┬───────┘      └───────┬───────┘
+        │                      │                      │
+        ▼                      ▼                      ▼
+   scenario()            ReplayTester          ProjectionTester
+   InvariantChecker      PropertyTester
+```
+
+### Test Pyramid for ES Applications
+
+```
+                    ┌─────────┐
+                   ╱ Property  ╲        ← Few (slow, find edge cases)
+                  ╱   Tests    ╲
+                 ╱──────────────╲
+                ╱ Invariant     ╲       ← Some (verify business rules)
+               ╱   Tests         ╲
+              ╱───────────────────╲
+             ╱ Projection Tests    ╲    ← Some (verify read models)
+            ╱───────────────────────╲
+           ╱  scenario() Tests       ╲  ← Many (fast, every command)
+          ╱   (Given-When-Then)       ╲
+         ╱─────────────────────────────╲
+        ╱  Replay Tests (Regression)    ╲ ← Some (catch regressions)
+       ╱─────────────────────────────────╲
+```
+
 ## Architecture
 
-### Module Structure
+### TypeScript Module Structure
 
 ```
 event-sourcing/typescript/src/testing/
 ├── index.ts                    # Public exports
+├── scenario/                   # NEW: Given-When-Then testing
+│   ├── index.ts                # Exports
+│   ├── aggregate-scenario.ts   # Main scenario class
+│   ├── test-executor.ts        # When phase (execute command)
+│   ├── result-validator.ts     # Then phase (assertions)
+│   └── matchers/               # Event matching utilities
+│       └── event-matchers.ts
 ├── fixtures/
 │   ├── test-fixture.ts         # Load/save fixtures
 │   ├── fixture-types.ts        # TypeScript types for fixtures
@@ -190,6 +366,26 @@ event-sourcing/typescript/src/testing/
 └── projections/
     ├── projection-tester.ts    # Projection test harness
     └── determinism-checker.ts  # Verify same events = same state
+```
+
+### Python Module Structure
+
+```
+event-sourcing/python/src/event_sourcing/testing/
+├── __init__.py                 # Public exports
+├── scenario/                   # Given-When-Then testing
+│   ├── __init__.py
+│   ├── aggregate_scenario.py   # Main scenario class
+│   ├── test_executor.py        # When phase
+│   ├── result_validator.py     # Then phase
+│   └── matchers/
+│       └── event_matchers.py
+├── fixtures/
+│   └── test_fixture.py         # Load/save fixtures
+├── replay/
+│   └── replay_tester.py        # Core replay logic
+└── invariants/
+    └── invariant_checker.py    # Runtime verification
 ```
 
 ### Key Design Choices
@@ -284,14 +480,24 @@ Property testing requires `fast-check` as a peer dependency. Basic testing works
 
 ## Implementation Plan
 
+### Phase 0: Given-When-Then Scenario Testing (Priority)
+- [ ] TypeScript `scenario()` implementation
+- [ ] TypeScript `AggregateScenario`, `TestExecutor`, `ResultValidator` classes
+- [ ] TypeScript event matchers
+- [ ] Python `scenario()` implementation  
+- [ ] Python `AggregateScenario`, `TestExecutor`, `ResultValidator` classes
+- [ ] Python event matchers
+- [ ] Tests for both implementations
+- [ ] Documentation and examples
+
 ### Phase 1: Core Replay Testing
-- [ ] `loadFixture()` and fixture types
-- [ ] `ReplayTester` with state extraction
-- [ ] Basic assertions (deep equality)
+- [x] `loadFixture()` and fixture types ✅
+- [x] `ReplayTester` with state extraction ✅
+- [x] Basic assertions (deep equality) ✅
 
 ### Phase 2: Invariant Testing
-- [ ] `@Invariant` decorator
-- [ ] `InvariantChecker` runtime verification
+- [x] `@Invariant` decorator ✅
+- [x] `InvariantChecker` runtime verification ✅
 - [ ] Integration with replay testing
 
 ### Phase 3: Property Testing
@@ -300,7 +506,7 @@ Property testing requires `fast-check` as a peer dependency. Basic testing works
 - [ ] Shrinking for minimal failing cases
 
 ### Phase 4: Projection Testing
-- [ ] `ProjectionTester` harness
+- [x] `ProjectionTester` harness ✅
 - [ ] Determinism verification
 - [ ] Rebuild testing
 
@@ -311,10 +517,12 @@ Property testing requires `fast-check` as a peer dependency. Basic testing works
 
 ## References
 
+- [Axon Framework AggregateTestFixture](https://docs.axoniq.io/axon-framework-reference/4.12/testing/commands-events/) — Inspiration for Given-When-Then pattern
+- [Reference: eventsourcing-book](../../reference/eventsourcing-book/) — Kotlin examples using Axon
 - [Property-Based Testing with fast-check](https://github.com/dubzzz/fast-check)
 - [Event Sourcing Testing Patterns](https://www.eventstore.com/blog/testing-event-sourced-systems)
 - [ADR-004: Command Handlers in Aggregates](./ADR-004-command-handlers-in-aggregates.md)
 
 ---
 
-**Last Updated:** 2025-12-19
+**Last Updated:** 2026-01-28
