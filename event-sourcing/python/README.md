@@ -129,7 +129,77 @@ vsa generate --context accounts --feature credit-account --interactive
 vsa validate
 ```
 
-## Testing
+## ES Test Kit - Testing Your Aggregates
+
+The SDK includes a comprehensive testing toolkit for event-sourced applications. The primary tool is **Given-When-Then scenario testing** for testing aggregate command handlers.
+
+### Quick Example
+
+```python
+from event_sourcing.testing import scenario
+
+def test_credit_account():
+    """Should emit AccountCredited when crediting money."""
+    scenario(AccountAggregate) \
+        .given_no_prior_activity() \
+        .when(CreditAccountCommand(aggregate_id='account-1', amount=100.0)) \
+        .expect_events([
+            AccountCreditedEvent(account_id='account-1', amount=100.0, balance=100.0),
+        ])
+
+def test_reject_negative_credit():
+    """Should reject negative deposits."""
+    scenario(AccountAggregate) \
+        .given_no_prior_activity() \
+        .when(CreditAccountCommand(aggregate_id='account-1', amount=-50.0)) \
+        .expect_exception(ValueError) \
+        .expect_exception_message('Amount must be positive')
+
+def test_accumulate_balance():
+    """Should accumulate balance correctly."""
+    def assert_balance(aggregate):
+        assert aggregate.balance == 175.0
+
+    scenario(AccountAggregate) \
+        .given([
+            AccountCreditedEvent(account_id='account-1', amount=100.0, balance=100.0),
+            AccountCreditedEvent(account_id='account-1', amount=50.0, balance=150.0),
+        ]) \
+        .when(CreditAccountCommand(aggregate_id='account-1', amount=25.0)) \
+        .expect_state(assert_balance)
+```
+
+### Scenario API Reference
+
+| Method | Description |
+|--------|-------------|
+| `.given([events])` | Set up prior events |
+| `.given_no_prior_activity()` | Start with fresh aggregate |
+| `.given_commands([commands])` | Set up via commands |
+| `.when(command)` | Execute command under test |
+| `.expect_events([events])` | Assert specific events emitted |
+| `.expect_no_events()` | Assert no events emitted |
+| `.expect_exception(ErrorClass)` | Assert exception type thrown |
+| `.expect_exception_message(msg)` | Assert exception message |
+| `.expect_state(callback)` | Assert aggregate state |
+
+### Type Safety
+
+The testing toolkit is fully typed and passes `mypy --strict`:
+
+```python
+# Full autocomplete and type checking in your IDE
+scenario(AccountAggregate) \  # Type: AggregateScenario[AccountAggregate]
+    .given([...]) \           # Type: TestExecutor[AccountAggregate]
+    .when(command) \          # Returns ResultValidator[AccountAggregate]
+    .expect_state(lambda agg: ...)  # agg is typed as AccountAggregate
+```
+
+For comprehensive documentation, see:
+- **[ES Testing Guide](../../docs-site/docs/event-sourcing/testing/index.md)** - Complete testing documentation
+- **[Scenario Testing API](../../docs-site/docs/event-sourcing/testing/scenario-testing.md)** - Given-When-Then reference
+
+## Running Tests
 
 ```bash
 # Run all tests

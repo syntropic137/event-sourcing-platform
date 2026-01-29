@@ -2,6 +2,7 @@
  * ES Test Kit - Testing utilities for Event Sourcing applications
  *
  * This module provides:
+ * - Given-When-Then scenario testing (test command → event flow)
  * - Golden replay testing (verify aggregate state from known events)
  * - Invariant testing (verify business rules hold after each event)
  * - Projection testing (verify projection correctness and determinism)
@@ -9,11 +10,18 @@
  * @example
  * ```typescript
  * import {
+ *   scenario,
  *   loadFixture,
  *   ReplayTester,
  *   InvariantChecker,
  *   ProjectionTester,
- * } from '@event-sourcing-platform/typescript/testing';
+ * } from '@neurale/event-sourcing/testing';
+ *
+ * // Given-When-Then scenario test
+ * scenario(OrderAggregate)
+ *   .given([new CartCreatedEvent('order-1')])
+ *   .when(new AddItemCommand('order-1', 'item-1', 29.99))
+ *   .expectEvents([new ItemAddedEvent('order-1', 'item-1', 29.99)]);
  *
  * // Golden replay test
  * const fixture = await loadFixture('./fixtures/order-lifecycle.json');
@@ -32,6 +40,15 @@
  * expect(determinism.isDeterministic).toBe(true);
  * ```
  */
+
+// ============================================================================
+// SCENARIO TESTING (Given-When-Then)
+// ============================================================================
+
+export { scenario, AggregateScenario } from './scenario';
+export { TestExecutor } from './scenario';
+export { ResultValidator } from './scenario';
+export { ScenarioAssertionError, ScenarioExecutionError } from './scenario';
 
 // ============================================================================
 // FIXTURES
