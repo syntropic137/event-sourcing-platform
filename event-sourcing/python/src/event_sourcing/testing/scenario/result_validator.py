@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from event_sourcing.core.event import DomainEvent
 from event_sourcing.testing.scenario.errors import ScenarioAssertionError
