@@ -1,7 +1,7 @@
 # Architecture Decision Records - Index
 
 **Status:** 📘 Master Reference
-**Last Updated:** 2026-01-20
+**Last Updated:** 2026-01-28
 
 This document provides a comprehensive overview of all architectural decisions for the **Hexagonal Event-Sourced Vertical Slice Architecture** pattern.
 
@@ -71,7 +71,7 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 | [ADR-010](./ADR-010-decorator-patterns-framework.md) | Decorator Patterns | ✅ Accepted | Documents framework integration decorators |
 | [ADR-011](./ADR-011-ts-proto-v1-retention.md) | ts-proto v1 Retention | ✅ Accepted | Decision to retain ts-proto v1.172.0 vs v2 upgrade |
 | [ADR-014](./ADR-014-projection-checkpoint-architecture.md) | Projection Checkpoints | ✅ Accepted | Per-projection checkpoint tracking for reliable event processing |
-| [ADR-015](./ADR-015-es-test-kit-architecture.md) | ES Test Kit Architecture | 📋 Proposed | Reusable testing harness for ES applications |
+| [ADR-015](./ADR-015-es-test-kit-architecture.md) | ES Test Kit Architecture | ✅ Accepted | Reusable testing harness for ES applications (incl. Given-When-Then scenario testing) |
 | [ADR-016](./ADR-016-projection-failure-handling.md) | Projection Failure Handling | 📋 Proposed | DLQ, retry policies, and error handling for projections |
 | [ADR-017](./ADR-017-observability-conventions.md) | Observability Conventions | ✅ Accepted | Tracing, metrics, and logging standards |
 | [ADR-018](./ADR-018-renovate-bot-adoption.md) | Renovate Bot Adoption | 📋 Proposed | Migration from Dependabot to Renovate for dependency management |
@@ -548,7 +548,8 @@ vsa validate --config vsa.yaml
 | 2025-11-06 | 1.0.0 | Initial ADR index created |
 | 2025-12-02 | 1.1.0 | Added ADR-011: ts-proto v1 retention decision |
 | 2025-12-10 | 1.2.0 | Added ADR-014: Projection checkpoint architecture for reliable event processing |
-| 2025-01-22 | 2.0.0 | **Added ADR-019: Comprehensive VSA Standard Structure (canonical reference)** |
+| 2025-12-22 | 2.0.0 | **Added ADR-019: Comprehensive VSA Standard Structure (canonical reference)** |
+| 2026-01-28 | 2.1.0 | **Updated ADR-015: Added Given-When-Then scenario testing (TypeScript + Python)** |
 
 ---
 

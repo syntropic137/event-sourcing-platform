@@ -11,7 +11,7 @@ use crate::scanner::Scanner;
 use crate::scanners::DomainScanner;
 
 /// VSA manifest schema version
-pub const MANIFEST_SCHEMA_VERSION: &str = "2.0.0";
+pub const MANIFEST_SCHEMA_VERSION: &str = "2.1.0";
 
 /// VSA manifest
 #[derive(Debug, Serialize, Deserialize)]

@@ -30,7 +30,7 @@ pub use rules::{ValidationRule, ValidationRuleSet};
 pub use slice_location_rules::RequireSliceLocationRule;
 pub use structure_rules::{
     RequireAggregatesInDomainRootRule, RequireBusesInInfrastructureRule,
-    RequireCommandsInDomainRule, RequireEventsAtContextRootRule, RequirePortSuffixRule,
+    RequireCommandsInDomainRule, RequireEventsInDomainRule, RequirePortSuffixRule,
     RequirePortsInPortsFolderRule, RequireValueObjectsNamingRule,
 };
 pub use suggestions::{Suggestion, SuggestionAction};
