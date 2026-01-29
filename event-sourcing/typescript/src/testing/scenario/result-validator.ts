@@ -93,8 +93,6 @@ export class ResultValidator<TAggregate extends AggregateRoot<DomainEvent>> {
    * @param errorType - The expected error class
    */
   expectException<TError extends Error>(errorType: new (...args: any[]) => TError): this {
-    this.validated = true;
-
     if (!this.error) {
       throw new ScenarioAssertionError(
         `Expected exception ${errorType.name} but command succeeded`
