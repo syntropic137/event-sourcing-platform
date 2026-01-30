@@ -63,6 +63,17 @@ The VSA validator implements **30+ architectural rules** across 6 categories:
 - ✅ Projections subscribe to correct events
 - ✅ No business logic in projections
 
+**Event Handler Conventions:**
+
+The scanner detects event subscriptions via naming patterns:
+
+| Pattern | Purpose | Example |
+|---------|---------|---------|
+| `on_<event>` | **Internal domain events** - Primary pattern for aggregates and projections | `on_order_placed`, `on_session_started` |
+| `handle_<event>` | **External/ACL events** - Anti-Corruption Layer for webhooks and external integrations | `handle_app_installed` (GitHub webhook) |
+
+> **Note:** `handle_<event>` is typically used at integration boundaries (e.g., webhook handlers) where external events are translated into internal domain concepts. These are not domain event subscriptions but rather entry points from external systems.
+
 #### 6. Integration Event Rules
 - ✅ Cross-context events in `_shared/integration-events/`
 - ✅ Single source of truth
