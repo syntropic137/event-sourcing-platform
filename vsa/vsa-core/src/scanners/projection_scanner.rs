@@ -154,7 +154,14 @@ impl<'a> ProjectionScanner<'a> {
         use std::collections::HashSet;
         let mut events = HashSet::new();
 
-        // Skip common non-event method names (lifecycle, field accessors, etc.)
+        // Method verb prefixes that indicate CRUD/accessor methods, not events
+        // e.g., get_by_id, set_value, load_data are methods, not events
+        const METHOD_VERB_PREFIXES: &[&str] = &[
+            "get", "set", "load", "save", "create", "update", "delete",
+        ];
+
+        // Non-event words for PascalCase validation (single-word exclusions)
+        // These are excluded when they appear as standalone PascalCase names
         const NON_EVENT_METHODS: &[&str] = &[
             "init", "error", "complete", "start", "end",
             "id", "ms", "type", "data", "time", "name", "value",
@@ -165,12 +172,9 @@ impl<'a> ProjectionScanner<'a> {
         // Helper to check if snake_case name looks like a valid event
         fn is_valid_snake_case_event(name: &str) -> bool {
             // Must consist of multiple snake_case components (e.g., session_started)
-            // This filters out single-word generic method names like "init", "error", "id"
-            // Multi-word names like "error_occurred" or "data_received" ARE valid events
             let parts: Vec<&str> = name.split('_').filter(|s| !s.is_empty()).collect();
 
             // Must have at least 2 parts (e.g., session_started)
-            // This naturally filters out single-word generics from NON_EVENT_METHODS
             if parts.len() < 2 {
                 return false;
             }
@@ -180,8 +184,15 @@ impl<'a> ProjectionScanner<'a> {
                 return false;
             }
 
-            // Multi-word snake_case names are valid events
-            // Examples: session_started, error_occurred, data_received, workflow_completed
+            // Exclude if first word is a method verb prefix (e.g., get_by_id, set_value)
+            // These are clearly accessor/CRUD methods, not events
+            let first_word = parts.first().unwrap_or(&"");
+            if METHOD_VERB_PREFIXES.contains(first_word) {
+                return false;
+            }
+
+            // Allow noun prefixes like error_occurred, data_received, status_changed
+            // These are valid event names even though the words appear in NON_EVENT_METHODS
             true
         }
 
@@ -620,10 +631,52 @@ class ErrorHandlingProjection:
 "#;
 
         let events = scanner.extract_subscribed_events(content);
-        // Multi-word snake_case events should be extracted even if first word is common
+        // Multi-word snake_case events should be extracted even if first word is common noun
         assert!(events.contains(&"error_occurred".to_string()));
         assert!(events.contains(&"data_received".to_string()));
         assert!(events.contains(&"status_changed".to_string()));
+    }
+
+    #[test]
+    fn test_method_verb_prefixes_excluded() {
+        // Method patterns like get_by_id, set_value, load_data should NOT be extracted
+        // These are clearly CRUD/accessor methods, not events
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let config = create_test_config();
+        let scanner = ProjectionScanner::new(Some(&config), root);
+
+        let content = r#"
+class DataProjection:
+    async def on_get_by_id(self, id: str) -> None:
+        pass
+
+    async def on_set_value(self, value: str) -> None:
+        pass
+
+    async def on_load_data(self, data: dict) -> None:
+        pass
+
+    async def on_save_changes(self) -> None:
+        pass
+
+    async def on_create_item(self, item: dict) -> None:
+        pass
+
+    async def on_session_started(self, event_data: dict) -> None:
+        pass
+"#;
+
+        let events = scanner.extract_subscribed_events(content);
+        // Method verb prefixes should NOT be extracted as events
+        assert!(!events.contains(&"get_by_id".to_string()));
+        assert!(!events.contains(&"set_value".to_string()));
+        assert!(!events.contains(&"load_data".to_string()));
+        assert!(!events.contains(&"save_changes".to_string()));
+        assert!(!events.contains(&"create_item".to_string()));
+        // But valid events should still be extracted
+        assert!(events.contains(&"session_started".to_string()));
     }
 
     #[test]
