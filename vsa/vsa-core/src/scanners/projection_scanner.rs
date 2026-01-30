@@ -148,21 +148,56 @@ impl<'a> ProjectionScanner<'a> {
     /// Looks for patterns like:
     /// - TypeScript: `on_WorkflowCreated`, `handle(event: WorkflowCreatedEvent)`
     /// - Python: `async def on_WorkflowCreated`, `def handle_WorkflowCreated`
+    /// - Python (snake_case): `async def on_session_started` → `session_started`
     /// - Decorators: `@Handles(WorkflowCreatedEvent)`, `@Subscribe(WorkflowCreatedEvent)`
     fn extract_subscribed_events(&self, content: &str) -> Vec<String> {
-        let mut events = Vec::new();
+        use std::collections::HashSet;
+        let mut events = HashSet::new();
+
+        // Skip common non-event method names (lifecycle, field accessors, etc.)
+        const NON_EVENT_METHODS: &[&str] = &[
+            "init", "error", "complete", "start", "end",
+            "id", "ms", "type", "data", "time", "name", "value",
+            "projection", "event", "message", "result", "status",
+            "create", "update", "delete", "get", "set", "load", "save",
+        ];
+
+        // Helper to check if snake_case name looks like a valid event
+        fn is_valid_snake_case_event(name: &str) -> bool {
+            // Must contain underscore (indicates multi-word event like session_started)
+            // AND not be in the exclusion list
+            // AND be longer than 5 chars to avoid false positives
+            name.contains('_')
+                && name.len() > 5
+                && !NON_EVENT_METHODS.iter().any(|ex| name.starts_with(ex))
+        }
+
+        // Helper to check if PascalCase name looks like a valid event
+        fn is_valid_pascal_case_event(name: &str) -> bool {
+            // Must start with uppercase
+            // AND be longer than 3 chars
+            // AND not be in the exclusion list
+            name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+                && name.len() > 3
+                && !NON_EVENT_METHODS.contains(&name.to_lowercase().as_str())
+        }
 
         // Pattern 1: on_<EventName> method (Python/TS)
-        // Matches: on_WorkflowCreated, on_WorkflowCompleted
+        // Supports both conventions:
+        // - PascalCase: on_WorkflowCreated → WorkflowCreatedEvent
+        // - snake_case: on_session_started → session_started
         let on_pattern = Regex::new(r"(?:async\s+)?def\s+on_(\w+)|on_(\w+)\s*[:\(]").unwrap();
         for cap in on_pattern.captures_iter(content) {
             if let Some(event_name) = cap.get(1).or(cap.get(2)) {
                 let name = event_name.as_str();
-                // Skip common non-event method names (exact match only)
-                // These are lifecycle methods, not event handlers
-                const NON_EVENT_METHODS: &[&str] = &["init", "error", "complete", "start", "end"];
-                if !NON_EVENT_METHODS.contains(&name) {
-                    events.push(format!("{name}Event"));
+
+                // Check if it's snake_case (contains underscore)
+                if name.contains('_') && is_valid_snake_case_event(name) {
+                    // snake_case events: on_session_started → session_started
+                    events.insert(name.to_string());
+                } else if is_valid_pascal_case_event(name) {
+                    // PascalCase events: on_WorkflowCreated → WorkflowCreatedEvent
+                    events.insert(format!("{name}Event"));
                 }
             }
         }
@@ -171,7 +206,7 @@ impl<'a> ProjectionScanner<'a> {
         let handle_pattern = Regex::new(r"def\s+handle_(\w+Event)").unwrap();
         for cap in handle_pattern.captures_iter(content) {
             if let Some(event_name) = cap.get(1) {
-                events.push(event_name.as_str().to_string());
+                events.insert(event_name.as_str().to_string());
             }
         }
 
@@ -180,10 +215,7 @@ impl<'a> ProjectionScanner<'a> {
             Regex::new(r"@(?:Handles|Subscribe|EventHandler)\s*\(\s*(\w+Event)\s*\)").unwrap();
         for cap in decorator_pattern.captures_iter(content) {
             if let Some(event_name) = cap.get(1) {
-                let name = event_name.as_str().to_string();
-                if !events.contains(&name) {
-                    events.push(name);
-                }
+                events.insert(event_name.as_str().to_string());
             }
         }
 
@@ -192,10 +224,7 @@ impl<'a> ProjectionScanner<'a> {
         let type_pattern = Regex::new(r"handle\s*\(\s*\w+:\s*(\w+Event)\s*\)").unwrap();
         for cap in type_pattern.captures_iter(content) {
             if let Some(event_name) = cap.get(1) {
-                let name = event_name.as_str().to_string();
-                if !events.contains(&name) {
-                    events.push(name);
-                }
+                events.insert(event_name.as_str().to_string());
             }
         }
 
@@ -207,16 +236,16 @@ impl<'a> ProjectionScanner<'a> {
                 let event_list_pattern = Regex::new(r#"["'](\w+Event)["']"#).unwrap();
                 for event_cap in event_list_pattern.captures_iter(list_content.as_str()) {
                     if let Some(event_name) = event_cap.get(1) {
-                        let name = event_name.as_str().to_string();
-                        if !events.contains(&name) {
-                            events.push(name);
-                        }
+                        events.insert(event_name.as_str().to_string());
                     }
                 }
             }
         }
 
-        events
+        // Convert to Vec and sort for deterministic output
+        let mut result: Vec<String> = events.into_iter().collect();
+        result.sort();
+        result
     }
 
     /// Extract read model type from file content
