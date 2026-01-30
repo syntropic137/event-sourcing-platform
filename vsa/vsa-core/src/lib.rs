@@ -32,13 +32,15 @@ pub use config::{
 };
 pub use domain::{
     Aggregate, Command, CommandField, CommandHandler, DomainModel, Event, EventField, EventHandler,
-    EventVersion, Query, QueryField, Upcaster,
+    EventVersion, Projection, Query, QueryField, Upcaster,
 };
 pub use error::{Result, VsaError};
 pub use integration_events::{IntegrationEvent, IntegrationEventRegistry};
 pub use manifest::{DomainManifest, Manifest, Relationships, MANIFEST_SCHEMA_VERSION};
 pub use scanner::Scanner;
-pub use scanners::{AggregateScanner, CommandScanner, DomainScanner, EventScanner, QueryScanner};
+pub use scanners::{
+    AggregateScanner, CommandScanner, DomainScanner, EventScanner, ProjectionScanner, QueryScanner,
+};
 pub use validation::{
     EnhancedValidationReport, Severity, Suggestion, SuggestionAction, ValidationContext,
     ValidationIssue, ValidationRule, ValidationRuleSet,

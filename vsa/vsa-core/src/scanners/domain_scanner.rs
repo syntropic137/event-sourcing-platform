@@ -5,7 +5,9 @@
 use crate::config::{DomainConfig, EventVersioningConfig};
 use crate::domain::{DomainModel, Upcaster, ValueObject};
 use crate::error::{Result, VsaError};
-use crate::scanners::{AggregateScanner, CommandScanner, EventScanner, QueryScanner};
+use crate::scanners::{
+    AggregateScanner, CommandScanner, EventScanner, ProjectionScanner, QueryScanner,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -125,6 +127,21 @@ impl DomainScanner {
 
         // Scan value objects
         model.value_objects = self.scan_value_objects(domain_path)?;
+
+        // Scan projections
+        // TODO: Consider restricting scan scope to slices/ or queries/ subtree to reduce
+        // false positives and improve performance. Current implementation scans from context
+        // root which can be overly broad for large codebases.
+        let context_path = domain_path.parent().unwrap_or(domain_path);
+        let projection_scanner = ProjectionScanner::new(None, context_path);
+        model.projections = projection_scanner.scan()?;
+
+        // Tag projections with context
+        if let Some(ref ctx) = context {
+            for projection in &mut model.projections {
+                projection.context = Some(ctx.clone());
+            }
+        }
 
         Ok(model)
     }

@@ -8,6 +8,7 @@ import { ManifestValidationError } from './types/manifest';
 import { OverviewGenerator } from './generators/overview-generator';
 import { AggregateGenerator } from './generators/aggregate-generator';
 import { FlowsGenerator } from './generators/flows-generator';
+import { ArchitectureSvgGenerator } from './generators/architecture-svg-generator';
 import { writeFile, writeFiles, ensureDirectoryExists } from './utils/file-writer';
 
 const program = new Command();
@@ -18,7 +19,7 @@ program
   .version('0.1.0')
   .argument('[manifest]', 'Path to manifest JSON file or - for stdin', '-')
   .option('-o, --output <dir>', 'Output directory', 'docs/architecture')
-  .option('-f, --format <type>', 'Output format (currently only "mermaid")', 'mermaid')
+  .option('-f, --format <type>', 'Output format: "mermaid" or "svg"', 'mermaid')
   .option('-v, --verbose', 'Enable verbose logging', false)
   .addHelpText(
     'after',
@@ -26,6 +27,7 @@ program
 Examples:
   $ vsa-visualizer manifest.json
   $ vsa-visualizer manifest.json --output ./docs/arch
+  $ vsa-visualizer manifest.json --format svg --output ./docs
   $ vsa manifest --include-domain | vsa-visualizer
   $ vsa-visualizer --help
 
@@ -36,9 +38,9 @@ For more information, see: https://github.com/your-org/vsa
     async (manifestPath: string, options: { output: string; format: string; verbose: boolean }) => {
       try {
         // Validate format
-        if (options.format !== 'mermaid') {
+        if (options.format !== 'mermaid' && options.format !== 'svg') {
           console.error(
-            `Error: Unsupported format "${options.format}". Currently only "mermaid" is supported.`
+            `Error: Unsupported format "${options.format}". Supported formats: "mermaid", "svg"`
           );
           process.exit(1);
         }
@@ -104,6 +106,28 @@ For more information, see: https://github.com/your-org/vsa
 
         const generatedFiles: string[] = [];
 
+        // Handle SVG format separately
+        if (options.format === 'svg') {
+          if (options.verbose) {
+            console.log('[vsa-visualizer] Generating SVG architecture diagram...');
+          }
+
+          const svgGenerator = new ArchitectureSvgGenerator(manifest);
+          const svgContent = svgGenerator.generate();
+          const svgPath = path.join(options.output, 'ARCHITECTURE.svg');
+          writeFile(svgPath, svgContent);
+          generatedFiles.push(svgPath);
+
+          console.log('\n✅ SVG diagram generated successfully!');
+          console.log('\n📊 Summary:');
+          console.log(`   Contexts:   ${manifest.bounded_contexts?.length || 0}`);
+          console.log('\n📝 Generated files:');
+          console.log(`   - ${svgPath}`);
+
+          return;
+        }
+
+        // Generate Mermaid documentation (default)
         // Generate Overview
         if (options.verbose) {
           console.log('[vsa-visualizer] Generating overview...');

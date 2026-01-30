@@ -3,10 +3,11 @@
 //! Projections are read-side components that build read models from events.
 //! They are a key component of CQRS architecture and live within query slices.
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Metadata for a projection (read model builder)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Projection {
     /// Name of the projection (e.g., "WorkflowListProjection")
     pub name: String,
@@ -19,6 +20,9 @@ pub struct Projection {
 
     /// Read model type this projection builds
     pub read_model: Option<String>,
+
+    /// Bounded context this projection belongs to
+    pub context: Option<String>,
 
     /// Line count (for thin adapter validation)
     pub line_count: usize,
@@ -69,6 +73,7 @@ mod tests {
                 "WorkflowCompletedEvent".to_string(),
             ],
             read_model: Some("WorkflowSummary".to_string()),
+            context: None,
             line_count: 45,
         }
     }
@@ -82,6 +87,7 @@ mod tests {
                 "WorkflowPhaseStartedEvent".to_string(),
             ],
             read_model: Some("WorkflowDetail".to_string()),
+            context: None,
             line_count: 60,
         }
     }
@@ -105,6 +111,7 @@ mod tests {
             file_path: PathBuf::from("slices/empty/EmptyProjection.py"),
             subscribed_events: vec![],
             read_model: None,
+            context: None,
             line_count: 10,
         };
         assert!(!empty_projection.has_subscriptions());

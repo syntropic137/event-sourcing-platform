@@ -2,7 +2,7 @@
 //!
 //! Validates that the codebase follows the canonical VSA structure:
 //! - VSA020: Commands must be in domain/commands/
-//! - VSA021: Events must be at context root (events/), NOT in domain/
+//! - VSA021: Events must be in domain/events/ (domain cohesion per ADR-019)
 //! - VSA022: Aggregates must be in domain/ root, NOT in _shared/
 //! - VSA023: Ports must be in ports/ folder with *Port suffix
 //! - VSA024: Buses must be in infrastructure/buses/, NOT application/

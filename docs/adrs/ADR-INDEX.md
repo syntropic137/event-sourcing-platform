@@ -548,7 +548,7 @@ vsa validate --config vsa.yaml
 | 2025-11-06 | 1.0.0 | Initial ADR index created |
 | 2025-12-02 | 1.1.0 | Added ADR-011: ts-proto v1 retention decision |
 | 2025-12-10 | 1.2.0 | Added ADR-014: Projection checkpoint architecture for reliable event processing |
-| 2025-01-22 | 2.0.0 | **Added ADR-019: Comprehensive VSA Standard Structure (canonical reference)** |
+| 2025-12-22 | 2.0.0 | **Added ADR-019: Comprehensive VSA Standard Structure (canonical reference)** |
 | 2026-01-28 | 2.1.0 | **Updated ADR-015: Added Given-When-Then scenario testing (TypeScript + Python)** |
 
 ---

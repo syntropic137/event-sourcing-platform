@@ -9,6 +9,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### VSA Core & Visualizer v2.1.0 - CQRS Visualization & Projection Support 🎯
+
+**Projection Extraction (vsa-core)**
+- Added `Projection` domain model with event subscription tracking
+- `ProjectionScanner` now discovers projections in query slices
+- Supports both `*Projection.py` and generic `projection.py` file patterns
+- Extracts projection class names from file content
+- Tags projections with bounded context
+- 184 unit tests passing
+
+**Manifest Schema v2.1.0 (BREAKING)**
+- Added `projections` array to `DomainManifest`
+- Added `event_to_projections` relationship mapping
+- Added `projection_to_read_model` relationship mapping
+- Full backwards compatibility with optional fields
+
+**CQRS Layer Visualization (vsa-visualizer)**
+- New `--format svg` option for architecture diagrams
+- CQRS pattern layer showing Commands → Events → Projections flow
+- Color-coded boxes (blue: commands, orange: events, green: projections)
+- Arrow visualization between CQRS components
+- Counts display for each CQRS element
+- 116 tests passing (including 5 new CQRS tests)
+
+**TypeScript Types**
+- Updated `Projection` interface with subscription metadata
+- Enhanced `Relationships` interface with projection mappings
+- Schema version bumped to 2.1.0
+
+**Usage:**
+```bash
+# Generate manifest with projections
+vsa manifest --config vsa.yaml --include-domain --output manifest.json
+
+# Generate SVG architecture diagram with CQRS layer
+vsa-visualizer manifest.json --format svg --output docs/
+```
+
+**Example Output:**
+```
+CQRS Pattern
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│ Commands (12)│───▶│ Events (31)  │───▶│Projections(13)│
+└──────────────┘    └──────────────┘    └──────────────┘
+```
+
+---
+
 #### VSA Visualizer v0.1.0 - Architecture Documentation Generator ✨
 
 **New TypeScript Tool (`vsa-visualizer/`)**

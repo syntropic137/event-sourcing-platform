@@ -11,7 +11,7 @@ use crate::scanner::Scanner;
 use crate::scanners::DomainScanner;
 
 /// VSA manifest schema version
-pub const MANIFEST_SCHEMA_VERSION: &str = "2.0.0";
+pub const MANIFEST_SCHEMA_VERSION: &str = "2.1.0";
 
 /// VSA manifest
 #[derive(Debug, Serialize, Deserialize)]
@@ -50,6 +50,9 @@ pub struct DomainManifest {
     pub commands: Vec<crate::domain::Command>,
     pub events: Vec<crate::domain::Event>,
     pub queries: Vec<crate::domain::Query>,
+    /// Projections that build read models from events - NEW in v2.1.0
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub projections: Vec<crate::domain::Projection>,
     pub upcasters: Vec<crate::domain::Upcaster>,
     /// Value objects in the domain - NEW in v2.0.0
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -66,6 +69,12 @@ pub struct Relationships {
     pub aggregate_to_events: HashMap<String, Vec<String>>,
     /// Maps event type to list of aggregates that handle it
     pub event_to_handlers: HashMap<String, Vec<String>>,
+    /// Maps event type to list of projections that subscribe to it - NEW in v2.1.0
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
+    pub event_to_projections: HashMap<String, Vec<String>>,
+    /// Maps projection name to the read model it builds - NEW in v2.1.0
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
+    pub projection_to_read_model: HashMap<String, String>,
 }
 
 impl Manifest {
@@ -179,6 +188,7 @@ impl Manifest {
             commands: model.commands.clone(),
             events: model.events.clone(),
             queries: model.queries.clone(),
+            projections: model.projections.clone(),
             upcasters: model.upcasters.clone(),
             value_objects: model.value_objects.clone(),
             relationships,
@@ -222,6 +232,8 @@ impl Manifest {
         let mut command_to_aggregate = HashMap::new();
         let mut aggregate_to_events = HashMap::new();
         let mut event_to_handlers = HashMap::new();
+        let mut event_to_projections = HashMap::new();
+        let mut projection_to_read_model = HashMap::new();
 
         // Build command -> aggregate mapping
         for aggregate in &model.aggregates {
@@ -252,7 +264,29 @@ impl Manifest {
             }
         }
 
-        Relationships { command_to_aggregate, aggregate_to_events, event_to_handlers }
+        // Build projection relationships
+        for projection in &model.projections {
+            // Map events to projections
+            for event_name in &projection.subscribed_events {
+                event_to_projections
+                    .entry(event_name.clone())
+                    .or_insert_with(Vec::new)
+                    .push(projection.name.clone());
+            }
+
+            // Map projection to read model
+            if let Some(ref read_model) = projection.read_model {
+                projection_to_read_model.insert(projection.name.clone(), read_model.clone());
+            }
+        }
+
+        Relationships {
+            command_to_aggregate,
+            aggregate_to_events,
+            event_to_handlers,
+            event_to_projections,
+            projection_to_read_model,
+        }
     }
 
     /// Export manifest as JSON
@@ -337,6 +371,7 @@ mod tests {
                 decorator_present: true,
             }],
             queries: vec![],
+            projections: vec![],
             upcasters: vec![],
             value_objects: vec![],
             root_path: std::path::PathBuf::from("/test"),
@@ -414,6 +449,7 @@ mod tests {
             commands: vec![],
             events: vec![],
             queries: vec![],
+            projections: vec![],
             upcasters: vec![],
             value_objects: vec![],
             root_path: std::path::PathBuf::from("/test"),
