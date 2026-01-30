@@ -1,7 +1,7 @@
 # ADR-019: VSA Standard Structure for DDD/ES/Hexagonal Applications
 
 **Status:** ✅ Accepted  
-**Date:** 2025-01-22  
+**Date:** 2025-12-22  
 **Decision Makers:** Architecture Team  
 **Supersedes:** Extends ADR-005, ADR-006, ADR-008  
 **Related:** Domain-Driven Design, Event Sourcing, Hexagonal Architecture, CQRS, Vertical Slice Architecture
@@ -1073,7 +1073,7 @@ This ADR **extends and consolidates** the above ADRs into one comprehensive refe
 
 ---
 
-**Last Updated:** 2025-01-22  
+**Last Updated:** 2025-12-22  
 **Supersedes:** Extends ADR-005, ADR-006, ADR-008  
 **Superseded By:** None
 
