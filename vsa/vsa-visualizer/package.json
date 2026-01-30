@@ -7,7 +7,7 @@
     "vsa-visualizer": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "test": "jest",
     "type-check": "tsc --noEmit",
     "dev": "ts-node src/index.ts",
