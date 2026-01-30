@@ -165,12 +165,12 @@ impl<'a> ProjectionScanner<'a> {
         // Helper to check if snake_case name looks like a valid event
         fn is_valid_snake_case_event(name: &str) -> bool {
             // Must consist of multiple snake_case components (e.g., session_started)
-            // Each component should be at least 2 characters to avoid noise
-            // Only the FIRST word component is checked against exclusion list
-            // (so "error_occurred" is valid - we only check "error" isn't standalone)
+            // This filters out single-word generic method names like "init", "error", "id"
+            // Multi-word names like "error_occurred" or "data_received" ARE valid events
             let parts: Vec<&str> = name.split('_').filter(|s| !s.is_empty()).collect();
 
             // Must have at least 2 parts (e.g., session_started)
+            // This naturally filters out single-word generics from NON_EVENT_METHODS
             if parts.len() < 2 {
                 return false;
             }
@@ -180,9 +180,9 @@ impl<'a> ProjectionScanner<'a> {
                 return false;
             }
 
-            // Check if first word is in exclusion list (standalone non-event methods)
-            let first_word = parts.first().unwrap_or(&"");
-            !NON_EVENT_METHODS.contains(first_word)
+            // Multi-word snake_case names are valid events
+            // Examples: session_started, error_occurred, data_received, workflow_completed
+            true
         }
 
         // Helper to check if PascalCase name looks like a valid event
@@ -564,5 +564,142 @@ class WorkflowReadModel:
     pass
 "#;
         assert_eq!(scanner.extract_read_model(py_content), Some("WorkflowReadModel".to_string()));
+    }
+
+    #[test]
+    fn test_no_false_positive_from_mid_word_on_pattern() {
+        // Regression test: Pattern 1 should NOT match "on_" in the middle of words
+        // like "get_by_execution_and_phase" extracting "and_phase"
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let config = create_test_config();
+        let scanner = ProjectionScanner::new(Some(&config), root);
+
+        let content = r#"
+class ArtifactListProjection:
+    async def on_artifact_created(self, event_data: dict) -> None:
+        pass
+
+    async def get_by_execution_and_phase(
+        self,
+        execution_id: str,
+        phase_id: str,
+    ) -> list:
+        pass
+"#;
+
+        let events = scanner.extract_subscribed_events(content);
+        // Should extract artifact_created
+        assert!(events.contains(&"artifact_created".to_string()));
+        // Should NOT extract and_phase (false positive from mid-word match)
+        assert!(!events.contains(&"and_phase".to_string()));
+        assert!(!events.contains(&"and_phaseEvent".to_string()));
+    }
+
+    #[test]
+    fn test_snake_case_events_with_common_words_allowed() {
+        // Events like error_occurred, data_received should be valid
+        // even though "error" and "data" are in NON_EVENT_METHODS
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let config = create_test_config();
+        let scanner = ProjectionScanner::new(Some(&config), root);
+
+        let content = r#"
+class ErrorHandlingProjection:
+    async def on_error_occurred(self, event_data: dict) -> None:
+        pass
+
+    async def on_data_received(self, event_data: dict) -> None:
+        pass
+
+    async def on_status_changed(self, event_data: dict) -> None:
+        pass
+"#;
+
+        let events = scanner.extract_subscribed_events(content);
+        // Multi-word snake_case events should be extracted even if first word is common
+        assert!(events.contains(&"error_occurred".to_string()));
+        assert!(events.contains(&"data_received".to_string()));
+        assert!(events.contains(&"status_changed".to_string()));
+    }
+
+    #[test]
+    fn test_pattern2_handle_snake_case_events() {
+        // Pattern 2: handle_<event> should support snake_case events
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let config = create_test_config();
+        let scanner = ProjectionScanner::new(Some(&config), root);
+
+        let content = r#"
+class GitHubProjection:
+    def handle_session_started(self, event_data: dict) -> None:
+        pass
+
+    def handle_WorkflowCreatedEvent(self, event: WorkflowCreatedEvent) -> None:
+        pass
+
+    def handle_OrderPlaced(self, event: OrderPlacedEvent) -> None:
+        pass
+"#;
+
+        let events = scanner.extract_subscribed_events(content);
+        // snake_case: handle_session_started → session_started
+        assert!(events.contains(&"session_started".to_string()));
+        // PascalCase with Event suffix: handle_WorkflowCreatedEvent → WorkflowCreatedEvent
+        assert!(events.contains(&"WorkflowCreatedEvent".to_string()));
+        // PascalCase without Event suffix: handle_OrderPlaced → OrderPlacedEvent
+        assert!(events.contains(&"OrderPlacedEvent".to_string()));
+    }
+
+    #[test]
+    fn test_pattern5_subscribed_events_list_snake_case() {
+        // Pattern 5: subscribed_events list should support snake_case events
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let config = create_test_config();
+        let scanner = ProjectionScanner::new(Some(&config), root);
+
+        let content = r#"
+class SessionListProjection:
+    subscribed_events = ["session_started", "session_completed", "WorkflowCreatedEvent"]
+"#;
+
+        let events = scanner.extract_subscribed_events(content);
+        // snake_case events from list
+        assert!(events.contains(&"session_started".to_string()));
+        assert!(events.contains(&"session_completed".to_string()));
+        // PascalCase events from list
+        assert!(events.contains(&"WorkflowCreatedEvent".to_string()));
+    }
+
+    #[test]
+    fn test_subscribed_events_list_ignores_non_events() {
+        // Pattern 5: should ignore non-event strings in subscribed_events list
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let config = create_test_config();
+        let scanner = ProjectionScanner::new(Some(&config), root);
+
+        let content = r#"
+class TestProjection:
+    subscribed_events = ["session_started", "id", "ms", "WorkflowCreatedEvent"]
+"#;
+
+        let events = scanner.extract_subscribed_events(content);
+        // Valid events should be extracted
+        assert!(events.contains(&"session_started".to_string()));
+        assert!(events.contains(&"WorkflowCreatedEvent".to_string()));
+        // Single-word non-event strings should be ignored
+        assert!(!events.contains(&"id".to_string()));
+        assert!(!events.contains(&"ms".to_string()));
+        assert!(!events.contains(&"idEvent".to_string()));
+        assert!(!events.contains(&"msEvent".to_string()));
     }
 }
