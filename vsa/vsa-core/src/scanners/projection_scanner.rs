@@ -164,12 +164,25 @@ impl<'a> ProjectionScanner<'a> {
 
         // Helper to check if snake_case name looks like a valid event
         fn is_valid_snake_case_event(name: &str) -> bool {
-            // Must contain underscore (indicates multi-word event like session_started)
-            // AND not be in the exclusion list
-            // AND be longer than 5 chars to avoid false positives
-            name.contains('_')
-                && name.len() > 5
-                && !NON_EVENT_METHODS.iter().any(|ex| name.starts_with(ex))
+            // Must consist of multiple snake_case components (e.g., session_started)
+            // Each component should be at least 2 characters to avoid noise
+            // Only the FIRST word component is checked against exclusion list
+            // (so "error_occurred" is valid - we only check "error" isn't standalone)
+            let parts: Vec<&str> = name.split('_').filter(|s| !s.is_empty()).collect();
+
+            // Must have at least 2 parts (e.g., session_started)
+            if parts.len() < 2 {
+                return false;
+            }
+
+            // Each part must be at least 2 chars to avoid noise like "a_b"
+            if parts.iter().any(|p| p.len() < 2) {
+                return false;
+            }
+
+            // Check if first word is in exclusion list (standalone non-event methods)
+            let first_word = parts.first().unwrap_or(&"");
+            !NON_EVENT_METHODS.contains(first_word)
         }
 
         // Helper to check if PascalCase name looks like a valid event
@@ -186,7 +199,8 @@ impl<'a> ProjectionScanner<'a> {
         // Supports both conventions:
         // - PascalCase: on_WorkflowCreated → WorkflowCreatedEvent
         // - snake_case: on_session_started → session_started
-        let on_pattern = Regex::new(r"(?:async\s+)?def\s+on_(\w+)|on_(\w+)\s*[:\(]").unwrap();
+        // Uses word boundary (\b) to avoid matching inside words like "execution_and_phase"
+        let on_pattern = Regex::new(r"(?:async\s+)?def\s+on_(\w+)|\bon_(\w+)\s*[:\(]").unwrap();
         for cap in on_pattern.captures_iter(content) {
             if let Some(event_name) = cap.get(1).or(cap.get(2)) {
                 let name = event_name.as_str();
@@ -203,10 +217,24 @@ impl<'a> ProjectionScanner<'a> {
         }
 
         // Pattern 2: handle_<EventName> method (Python)
-        let handle_pattern = Regex::new(r"def\s+handle_(\w+Event)").unwrap();
+        // Supports both conventions:
+        // - PascalCase: handle_WorkflowCreatedEvent → WorkflowCreatedEvent
+        // - snake_case: handle_session_started → session_started
+        let handle_pattern = Regex::new(r"def\s+handle_(\w+)").unwrap();
         for cap in handle_pattern.captures_iter(content) {
             if let Some(event_name) = cap.get(1) {
-                events.insert(event_name.as_str().to_string());
+                let name = event_name.as_str();
+
+                // If it already ends with Event (PascalCase), use as-is
+                if name.ends_with("Event") {
+                    events.insert(name.to_string());
+                } else if name.contains('_') && is_valid_snake_case_event(name) {
+                    // snake_case events: handle_session_started → session_started
+                    events.insert(name.to_string());
+                } else if is_valid_pascal_case_event(name) {
+                    // PascalCase without Event suffix: handle_WorkflowCreated → WorkflowCreatedEvent
+                    events.insert(format!("{name}Event"));
+                }
             }
         }
 
@@ -229,14 +257,25 @@ impl<'a> ProjectionScanner<'a> {
         }
 
         // Pattern 5: subscribed_events list (Python)
-        // Matches: subscribed_events = ["WorkflowCreatedEvent", ...]
+        // Matches both conventions:
+        // - PascalCase: subscribed_events = ["WorkflowCreatedEvent", ...]
+        // - snake_case: subscribed_events = ["session_started", "session_completed", ...]
         let list_pattern = Regex::new(r#"subscribed_events\s*=\s*\[([^\]]+)\]"#).unwrap();
         if let Some(cap) = list_pattern.captures(content) {
             if let Some(list_content) = cap.get(1) {
-                let event_list_pattern = Regex::new(r#"["'](\w+Event)["']"#).unwrap();
+                // Match any quoted string in the list
+                let event_list_pattern = Regex::new(r#"["'](\w+)["']"#).unwrap();
                 for event_cap in event_list_pattern.captures_iter(list_content.as_str()) {
                     if let Some(event_name) = event_cap.get(1) {
-                        events.insert(event_name.as_str().to_string());
+                        let name = event_name.as_str();
+
+                        // PascalCase events ending with Event
+                        if name.ends_with("Event") {
+                            events.insert(name.to_string());
+                        } else if name.contains('_') && is_valid_snake_case_event(name) {
+                            // snake_case events
+                            events.insert(name.to_string());
+                        }
                     }
                 }
             }
