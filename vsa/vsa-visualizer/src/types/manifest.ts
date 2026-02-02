@@ -3,10 +3,23 @@
  *
  * This defines the contract between vsa-cli and vsa-visualizer.
  *
- * Schema version: 2.1.0 (supersedes 2.0.0, 1.0.0)
+ * Schema version: 2.3.0 (supersedes 2.2.0, 2.1.0, 2.0.0, 1.0.0)
  *
  * BREAKING CHANGES since 1.0.0:
  * - Manifest: Renamed `contexts` field to `bounded_contexts` for clarity
+ *
+ * NEW FEATURES since 2.2.0:
+ * - Aggregate: Added `entities` field (entity objects with identity)
+ * - Aggregate: Added `value_objects` field (value objects within aggregate)
+ * - Aggregate: Added `folder_name` field (aggregate_* folder name)
+ * - Aggregate: Added `context` field (bounded context this aggregate belongs to)
+ * - AggregateEntity: New interface for entity metadata within aggregates
+ * - AggregateValueObject: New interface for value object metadata within aggregates
+ *
+ * NEW FEATURES since 2.1.0:
+ * - Feature: Added `slice_type` field (command, query, mixed, unknown)
+ * - BoundedContext: Added `context_type` field (bounded_context, invalid_module)
+ * - BoundedContext: Added `aggregate_count` field
  *
  * NEW FEATURES since 2.0.0:
  * - DomainManifest: Added optional `projections` field (CQRS read models)
@@ -49,6 +62,30 @@ export interface Aggregate {
   line_count: number;
   command_handlers: CommandHandler[];
   event_handlers: EventHandler[];
+  entities?: AggregateEntity[];       // NEW in v2.3.0 - entities within this aggregate
+  value_objects?: AggregateValueObject[]; // NEW in v2.3.0 - value objects within this aggregate
+  folder_name?: string;               // NEW in v2.3.0 - aggregate_* folder name if using DDD convention
+  context?: string;                   // NEW in v2.3.0 - bounded context this aggregate belongs to
+}
+
+/**
+ * Entity within an aggregate (has identity) - NEW in v2.3.0
+ */
+export interface AggregateEntity {
+  name: string;
+  identity_field?: string;  // e.g., "isolation_id"
+  file_path: string;
+  line_count: number;
+}
+
+/**
+ * Value object within an aggregate (immutable, no identity) - NEW in v2.3.0
+ */
+export interface AggregateValueObject {
+  name: string;
+  file_path: string;
+  is_immutable: boolean;
+  line_count: number;
 }
 
 export interface CommandHandler {
@@ -145,6 +182,21 @@ export interface Relationships {
 }
 
 /**
+ * Slice type - classifies whether a feature/slice is command or query
+ * NEW in v2.2.0
+ */
+export type SliceType = 'command' | 'query' | 'mixed' | 'unknown';
+
+/**
+ * Context type - classifies whether a directory is a valid bounded context
+ * NEW in v2.2.0
+ *
+ * - bounded_context: Has at least one aggregate (valid DDD bounded context)
+ * - invalid_module: No aggregates found (e.g., orphan projection modules)
+ */
+export type ContextType = 'bounded_context' | 'invalid_module';
+
+/**
  * Bounded Context with features/slices
  */
 export interface BoundedContext {
@@ -152,12 +204,15 @@ export interface BoundedContext {
   path: string;
   features: Feature[];
   infrastructure_folders?: string[]; // NEW in v2.0.0
+  context_type?: ContextType;        // NEW in v2.2.0 - bounded_context or invalid_module
+  aggregate_count?: number;          // NEW in v2.2.0 - number of aggregates in context
 }
 
 export interface Feature {
   name: string;
   path: string;
   files: string[];
+  slice_type?: SliceType;  // NEW in v2.2.0 - command, query, mixed, or unknown
 }
 
 /**
