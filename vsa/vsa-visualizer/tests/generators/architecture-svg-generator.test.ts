@@ -88,13 +88,12 @@ describe('ArchitectureSvgGenerator', () => {
       expect(svg).toContain('shipping');
     });
 
-    it('should show feature counts', () => {
+    it('should show aggregate counts', () => {
       const generator = new ArchitectureSvgGenerator(manifestWithContexts);
       const svg = generator.generate();
 
-      expect(svg).toContain('(2 features)');
-      expect(svg).toContain('(1 feature)');
-      expect(svg).toContain('(0 features)');
+      // Since no aggregate_count is specified, defaults to 0
+      expect(svg).toContain('(0 aggregates)');
     });
 
     it('should render "Domain Contexts" section title', () => {
@@ -266,7 +265,8 @@ describe('ArchitectureSvgGenerator', () => {
           {
             name: 'single-context',
             path: './contexts/single',
-            features: []
+            features: [],
+            aggregate_count: 2
           }
         ]
       };
@@ -275,7 +275,7 @@ describe('ArchitectureSvgGenerator', () => {
       const svg = generator.generate();
 
       expect(svg).toContain('single-context');
-      expect(svg).toContain('(0 features)');
+      expect(svg).toContain('(2 aggregates)');
     });
   });
 
@@ -283,17 +283,18 @@ describe('ArchitectureSvgGenerator', () => {
     it('should exclude infrastructure folders from feature list', () => {
       const manifest: Manifest = {
         version: '0.1.0',
-        schema_version: '2.0.0',
+        schema_version: '2.2.0',
         generated_at: '2026-01-25T00:00:00Z',
         bounded_contexts: [
           {
             name: 'orders',
             path: './contexts/orders',
+            aggregate_count: 1,
             features: [
               { name: 'domain', path: 'domain', files: [] },
               { name: 'slices', path: 'slices', files: [] },
-              { name: 'place-order', path: 'slices/place-order', files: [] },
-              { name: 'cancel-order', path: 'slices/cancel-order', files: [] }
+              { name: 'place-order', path: 'slices/place-order', files: [], slice_type: 'command' },
+              { name: 'cancel-order', path: 'slices/cancel-order', files: [], slice_type: 'command' }
             ]
           }
         ]
@@ -302,29 +303,32 @@ describe('ArchitectureSvgGenerator', () => {
       const generator = new ArchitectureSvgGenerator(manifest);
       const svg = generator.generate();
 
-      // Should only count actual features, not infrastructure folders
-      expect(svg).toContain('(2 features)');
+      // Should show aggregate count (new behavior)
+      expect(svg).toContain('(1 aggregate)');
+      // Should show actual features, not infrastructure folders
       expect(svg).toContain('place-order');
       expect(svg).toContain('cancel-order');
       expect(svg).not.toContain('>domain<');
       expect(svg).not.toContain('>slices<');
     });
 
-    it('should show limited number of features with "... and X more"', () => {
+    it('should show all features by default (no truncation)', () => {
       const features = Array.from({ length: 10 }, (_, i) => ({
         name: `feature-${i + 1}`,
         path: `slices/feature-${i + 1}`,
-        files: []
+        files: [],
+        slice_type: 'command' as const
       }));
 
       const manifest: Manifest = {
         version: '0.1.0',
-        schema_version: '2.0.0',
+        schema_version: '2.2.0',
         generated_at: '2026-01-25T00:00:00Z',
         bounded_contexts: [
           {
             name: 'large-context',
             path: './contexts/large',
+            aggregate_count: 2,
             features
           }
         ]
@@ -333,10 +337,12 @@ describe('ArchitectureSvgGenerator', () => {
       const generator = new ArchitectureSvgGenerator(manifest);
       const svg = generator.generate();
 
-      expect(svg).toContain('(10 features)');
-      expect(svg).toContain('feature-1');
-      expect(svg).toContain('feature-5');
-      expect(svg).toContain('... and 5 more');
+      // Should show all 10 features (no truncation by default)
+      for (let i = 1; i <= 10; i++) {
+        expect(svg).toContain(`feature-${i}`);
+      }
+      // Should NOT have "... and X more" since no truncation
+      expect(svg).not.toContain('... and');
     });
   });
 
@@ -410,6 +416,288 @@ describe('ArchitectureSvgGenerator', () => {
       expect(svg).toContain('Packages');
       expect(svg).toContain('aef-domain');
       expect(svg).toContain('aef-adapters');
+    });
+  });
+
+  describe('slice type grouping', () => {
+    it('should group features by slice type', () => {
+      const manifest: Manifest = {
+        version: '0.1.0',
+        schema_version: '2.2.0',
+        generated_at: '2026-02-02T00:00:00Z',
+        bounded_contexts: [
+          {
+            name: 'orchestration',
+            path: './contexts/orchestration',
+            context_type: 'bounded_context',
+            aggregate_count: 3,
+            features: [
+              { name: 'create-workspace', path: 'slices/create-workspace', files: [], slice_type: 'command' },
+              { name: 'execute-workflow', path: 'slices/execute-workflow', files: [], slice_type: 'command' },
+              { name: 'workspace-metrics', path: 'slices/workspace-metrics', files: [], slice_type: 'query' },
+              { name: 'session-stats', path: 'slices/session-stats', files: [], slice_type: 'query' }
+            ]
+          }
+        ]
+      };
+
+      const generator = new ArchitectureSvgGenerator(manifest);
+      const svg = generator.generate();
+
+      // Should have slice type section headers
+      expect(svg).toContain('⚡ Commands');
+      expect(svg).toContain('📊 Queries');
+      
+      // Should list features under correct sections
+      expect(svg).toContain('create-workspace');
+      expect(svg).toContain('execute-workflow');
+      expect(svg).toContain('workspace-metrics');
+      expect(svg).toContain('session-stats');
+    });
+
+    it('should show mixed and unknown slice types', () => {
+      const manifest: Manifest = {
+        version: '0.1.0',
+        schema_version: '2.2.0',
+        generated_at: '2026-02-02T00:00:00Z',
+        bounded_contexts: [
+          {
+            name: 'test-context',
+            path: './contexts/test',
+            features: [
+              { name: 'mixed-feature', path: 'slices/mixed', files: [], slice_type: 'mixed' },
+              { name: 'unknown-feature', path: 'slices/unknown', files: [], slice_type: 'unknown' },
+              { name: 'no-type-feature', path: 'slices/no-type', files: [] }
+            ]
+          }
+        ]
+      };
+
+      const generator = new ArchitectureSvgGenerator(manifest);
+      const svg = generator.generate();
+
+      expect(svg).toContain('🔀 Mixed');
+      expect(svg).toContain('📁 Other');
+    });
+  });
+
+  describe('aggregate count display', () => {
+    it('should show aggregate count in context header', () => {
+      const manifest: Manifest = {
+        version: '0.1.0',
+        schema_version: '2.2.0',
+        generated_at: '2026-02-02T00:00:00Z',
+        bounded_contexts: [
+          {
+            name: 'orchestration',
+            path: './contexts/orchestration',
+            context_type: 'bounded_context',
+            aggregate_count: 3,
+            features: []
+          }
+        ]
+      };
+
+      const generator = new ArchitectureSvgGenerator(manifest);
+      const svg = generator.generate();
+
+      expect(svg).toContain('3 aggregates');
+    });
+
+    it('should show singular "aggregate" for count of 1', () => {
+      const manifest: Manifest = {
+        version: '0.1.0',
+        schema_version: '2.2.0',
+        generated_at: '2026-02-02T00:00:00Z',
+        bounded_contexts: [
+          {
+            name: 'github',
+            path: './contexts/github',
+            context_type: 'bounded_context',
+            aggregate_count: 1,
+            features: []
+          }
+        ]
+      };
+
+      const generator = new ArchitectureSvgGenerator(manifest);
+      const svg = generator.generate();
+
+      expect(svg).toContain('1 aggregate)');
+      expect(svg).not.toContain('1 aggregates');
+    });
+
+    it('should handle missing aggregate_count (default to 0)', () => {
+      const manifest: Manifest = {
+        version: '0.1.0',
+        schema_version: '2.2.0',
+        generated_at: '2026-02-02T00:00:00Z',
+        bounded_contexts: [
+          {
+            name: 'legacy-context',
+            path: './contexts/legacy',
+            features: []
+          }
+        ]
+      };
+
+      const generator = new ArchitectureSvgGenerator(manifest);
+      const svg = generator.generate();
+
+      expect(svg).toContain('0 aggregates');
+    });
+  });
+
+  describe('context type filtering', () => {
+    it('should exclude invalid_module contexts by default', () => {
+      const manifest: Manifest = {
+        version: '0.1.0',
+        schema_version: '2.2.0',
+        generated_at: '2026-02-02T00:00:00Z',
+        bounded_contexts: [
+          {
+            name: 'orchestration',
+            path: './contexts/orchestration',
+            context_type: 'bounded_context',
+            aggregate_count: 3,
+            features: []
+          },
+          {
+            name: 'metrics',
+            path: './contexts/metrics',
+            context_type: 'invalid_module',
+            aggregate_count: 0,
+            features: []
+          }
+        ]
+      };
+
+      const generator = new ArchitectureSvgGenerator(manifest);
+      const svg = generator.generate();
+
+      // Valid bounded context should be shown
+      expect(svg).toContain('orchestration');
+      // Invalid module should be filtered out
+      expect(svg).not.toContain('>metrics<');
+    });
+
+    it('should include invalid_module contexts when showInvalidModules is true', () => {
+      const manifest: Manifest = {
+        version: '0.1.0',
+        schema_version: '2.2.0',
+        generated_at: '2026-02-02T00:00:00Z',
+        bounded_contexts: [
+          {
+            name: 'orchestration',
+            path: './contexts/orchestration',
+            context_type: 'bounded_context',
+            aggregate_count: 3,
+            features: []
+          },
+          {
+            name: 'metrics',
+            path: './contexts/metrics',
+            context_type: 'invalid_module',
+            aggregate_count: 0,
+            features: []
+          }
+        ]
+      };
+
+      const generator = new ArchitectureSvgGenerator(manifest, {}, { showInvalidModules: true });
+      const svg = generator.generate();
+
+      // Both should be shown
+      expect(svg).toContain('orchestration');
+      expect(svg).toContain('metrics');
+    });
+
+    it('should treat contexts without context_type as valid (backward compatibility)', () => {
+      const manifest: Manifest = {
+        version: '0.1.0',
+        schema_version: '2.0.0', // Old schema without context_type
+        generated_at: '2026-02-02T00:00:00Z',
+        bounded_contexts: [
+          {
+            name: 'orders',
+            path: './contexts/orders',
+            features: []
+          }
+        ]
+      };
+
+      const generator = new ArchitectureSvgGenerator(manifest);
+      const svg = generator.generate();
+
+      // Should be shown (no context_type defaults to valid)
+      expect(svg).toContain('orders');
+    });
+  });
+
+  describe('dynamic height', () => {
+    it('should calculate height based on content', () => {
+      // Create manifest with many features that would exceed the old fixed height
+      const manifest: Manifest = {
+        version: '0.1.0',
+        schema_version: '2.2.0',
+        generated_at: '2026-02-02T00:00:00Z',
+        bounded_contexts: [
+          {
+            name: 'orchestration',
+            path: './contexts/orchestration',
+            context_type: 'bounded_context',
+            aggregate_count: 3,
+            features: Array.from({ length: 15 }, (_, i) => ({
+              name: `feature-${i + 1}`,
+              path: `slices/feature-${i + 1}`,
+              files: [],
+              slice_type: 'command' as const
+            }))
+          }
+        ]
+      };
+
+      const generator = new ArchitectureSvgGenerator(manifest);
+      const svg = generator.generate();
+
+      // All features should be present (no truncation)
+      for (let i = 1; i <= 15; i++) {
+        expect(svg).toContain(`feature-${i}`);
+      }
+      // Should NOT have "... and X more" since no truncation
+      expect(svg).not.toContain('... and');
+    });
+
+    it('should respect maxFeaturesPerSection config', () => {
+      const manifest: Manifest = {
+        version: '0.1.0',
+        schema_version: '2.2.0',
+        generated_at: '2026-02-02T00:00:00Z',
+        bounded_contexts: [
+          {
+            name: 'orchestration',
+            path: './contexts/orchestration',
+            context_type: 'bounded_context',
+            aggregate_count: 3,
+            features: Array.from({ length: 10 }, (_, i) => ({
+              name: `command-${i + 1}`,
+              path: `slices/command-${i + 1}`,
+              files: [],
+              slice_type: 'command' as const
+            }))
+          }
+        ]
+      };
+
+      const generator = new ArchitectureSvgGenerator(manifest, {}, { maxFeaturesPerSection: 3 });
+      const svg = generator.generate();
+
+      // First 3 should be present
+      expect(svg).toContain('command-1');
+      expect(svg).toContain('command-2');
+      expect(svg).toContain('command-3');
+      // Should show "... and 7 more"
+      expect(svg).toContain('... and 7 more');
     });
   });
 
