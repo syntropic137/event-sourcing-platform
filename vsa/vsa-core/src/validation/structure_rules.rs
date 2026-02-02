@@ -1127,6 +1127,223 @@ impl ValidationRule for RequirePortSuffixRule {
     }
 }
 
+// ============================================================================
+// VSA027: Aggregate folder convention
+// ============================================================================
+
+/// VSA027: Aggregates should follow the aggregate_<name>/ folder convention
+///
+/// As per ADR-020, each aggregate should live in its own folder:
+/// - Folder name: `aggregate_<name>/` (lowercase, snake_case)
+/// - One `*Aggregate.*` file per folder (the aggregate root)
+/// - Entities and value objects co-located in the same folder
+///
+/// Invalid structure:
+/// ```
+/// domain/
+///   ├── WorkspaceAggregate.py       # ❌ Not in aggregate_* folder
+///   ├── WorkflowAggregate.py        # ❌ Not in aggregate_* folder
+///   └── aggregate_workspace/
+///       ├── WorkspaceAggregate.py
+///       └── OtherAggregate.py       # ❌ Multiple aggregates in one folder
+/// ```
+///
+/// Valid structure:
+/// ```
+/// domain/
+///   ├── aggregate_workspace/
+///   │   ├── WorkspaceAggregate.py   # ✅ One aggregate per folder
+///   │   ├── IsolationHandle.py      # ✅ Entity co-located
+///   │   └── SecurityPolicy.py       # ✅ Value object co-located
+///   └── aggregate_workflow/
+///       └── WorkflowAggregate.py    # ✅ One aggregate per folder
+/// ```
+pub struct RequireAggregateFolderConventionRule;
+
+impl RequireAggregateFolderConventionRule {
+    fn is_aggregate_file(&self, path: &Path, ctx: &ValidationContext) -> bool {
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => return false,
+        };
+
+        let ext = ctx.config.file_extension();
+        file_name.ends_with(&format!("Aggregate.{ext}"))
+    }
+}
+
+impl ValidationRule for RequireAggregateFolderConventionRule {
+    fn name(&self) -> &str {
+        "require-aggregate-folder-convention"
+    }
+
+    fn code(&self) -> &str {
+        "VSA027"
+    }
+
+    fn validate(
+        &self,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        let scanner = Scanner::new(ctx.config.clone(), ctx.root.clone());
+        let contexts = scanner.scan_contexts()?;
+
+        for context in contexts {
+            let domain_path = context.path.join("domain");
+            if !domain_path.exists() || !domain_path.is_dir() {
+                continue;
+            }
+
+            // Check for aggregates directly in domain/ (not in aggregate_* folder)
+            self.check_aggregates_in_domain_root(&domain_path, &context.name, ctx, report)?;
+
+            // Check for multiple aggregates in same aggregate_* folder
+            self.check_aggregate_folder_contents(&domain_path, &context.name, ctx, report)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl RequireAggregateFolderConventionRule {
+    fn check_aggregates_in_domain_root(
+        &self,
+        domain_path: &Path,
+        context_name: &str,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        if let Ok(entries) = std::fs::read_dir(domain_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+
+                if path.is_file() && self.is_aggregate_file(&path, ctx) {
+                    let file_name = path.file_name().unwrap().to_string_lossy();
+
+                    // Extract aggregate name from file name (e.g., "WorkspaceAggregate.py" -> "workspace")
+                    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    let aggregate_name =
+                        file_stem.strip_suffix("Aggregate").unwrap_or(file_stem).to_lowercase();
+
+                    let suggested_folder = format!("aggregate_{aggregate_name}");
+                    let suggested_path = domain_path.join(&suggested_folder).join(&*file_name);
+
+                    report.warnings.push(ValidationIssue {
+                        path: path.clone(),
+                        code: self.code().to_string(),
+                        severity: Severity::Warning,
+                        message: format!(
+                            "Aggregate '{file_name}' in context '{context_name}' is directly in domain/ root. \
+                             Per ADR-020, aggregates should be in aggregate_<name>/ folders \
+                             for better organization and co-location of related entities/VOs."
+                        ),
+                        suggestions: vec![Suggestion::manual(format!(
+                            "Move to aggregate_* folder:\n\
+                             mkdir -p {}\n\
+                             git mv {} {}",
+                            domain_path.join(&suggested_folder).display(),
+                            path.display(),
+                            suggested_path.display()
+                        ))],
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn check_aggregate_folder_contents(
+        &self,
+        domain_path: &Path,
+        context_name: &str,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        if let Ok(entries) = std::fs::read_dir(domain_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+
+                if path.is_dir() {
+                    let folder_name = match path.file_name().and_then(|n| n.to_str()) {
+                        Some(name) => name,
+                        None => continue,
+                    };
+
+                    // Check aggregate_* folders for multiple aggregates
+                    if folder_name.starts_with("aggregate_") {
+                        let mut aggregate_files = Vec::new();
+
+                        if let Ok(folder_entries) = std::fs::read_dir(&path) {
+                            for folder_entry in folder_entries.flatten() {
+                                let file_path = folder_entry.path();
+                                if file_path.is_file() && self.is_aggregate_file(&file_path, ctx) {
+                                    aggregate_files.push(file_path);
+                                }
+                            }
+                        }
+
+                        // Check for multiple aggregates in one folder
+                        if aggregate_files.len() > 1 {
+                            report.errors.push(ValidationIssue {
+                                path: path.clone(),
+                                code: self.code().to_string(),
+                                severity: Severity::Error,
+                                message: format!(
+                                    "Folder '{}' in context '{}' contains {} aggregate files. \
+                                     Per ADR-020, each aggregate_* folder should have exactly ONE *Aggregate file. \
+                                     Files found: {}",
+                                    folder_name,
+                                    context_name,
+                                    aggregate_files.len(),
+                                    aggregate_files
+                                        .iter()
+                                        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                ),
+                                suggestions: vec![Suggestion::manual(
+                                    "Each aggregate should have its own aggregate_* folder. \
+                                     Move extra aggregates to their own folders.".to_string()
+                                )],
+                            });
+                        }
+
+                        // Check for empty aggregate_* folder (no aggregate file)
+                        if aggregate_files.is_empty() {
+                            // Check if folder has any files at all
+                            let has_files = std::fs::read_dir(&path)
+                                .map(|entries| {
+                                    entries.filter_map(|e| e.ok()).any(|e| e.path().is_file())
+                                })
+                                .unwrap_or(false);
+
+                            if has_files {
+                                report.warnings.push(ValidationIssue {
+                                path: path.clone(),
+                                code: self.code().to_string(),
+                                severity: Severity::Warning,
+                                message: format!(
+                                    "Folder '{folder_name}' in context '{context_name}' is named like an aggregate folder \
+                                     but contains no *Aggregate file. \
+                                     Per ADR-020, each aggregate_* folder should contain its aggregate root."
+                                ),
+                                    suggestions: vec![Suggestion::manual(
+                                        "Add the aggregate root file to this folder or rename the folder.".to_string()
+                                    )],
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1401,5 +1618,114 @@ mod tests {
 
         assert_eq!(report.errors.len(), 0, "Valid structure should have no errors");
         assert_eq!(report.warnings.len(), 0, "Valid structure should have no warnings");
+    }
+
+    // ============================================================================
+    // VSA027: Aggregate folder convention tests
+    // ============================================================================
+
+    #[test]
+    fn test_vsa027_aggregate_not_in_folder() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        let context_path = root.join("workflows");
+        let domain_path = context_path.join("domain");
+        fs::create_dir_all(&domain_path).unwrap();
+
+        // Aggregate directly in domain/ (not in aggregate_* folder)
+        fs::write(domain_path.join("WorkflowAggregate.py"), "class WorkflowAggregate: pass")
+            .unwrap();
+
+        let config = create_test_config(root.clone(), "python");
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = RequireAggregateFolderConventionRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.warnings.len(), 1);
+        assert_eq!(report.warnings[0].code, "VSA027");
+        assert!(report.warnings[0].message.contains("aggregate_"));
+    }
+
+    #[test]
+    fn test_vsa027_multiple_aggregates_in_folder() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        let context_path = root.join("workflows");
+        let aggregate_folder = context_path.join("domain/aggregate_workspace");
+        fs::create_dir_all(&aggregate_folder).unwrap();
+
+        // Two aggregates in same folder (error)
+        fs::write(aggregate_folder.join("WorkspaceAggregate.py"), "class WorkspaceAggregate: pass")
+            .unwrap();
+        fs::write(aggregate_folder.join("OtherAggregate.py"), "class OtherAggregate: pass")
+            .unwrap();
+
+        let config = create_test_config(root.clone(), "python");
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = RequireAggregateFolderConventionRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].code, "VSA027");
+        assert!(report.errors[0].message.contains("2 aggregate files"));
+    }
+
+    #[test]
+    fn test_vsa027_valid_aggregate_folder() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        let context_path = root.join("workflows");
+        let aggregate_folder = context_path.join("domain/aggregate_workspace");
+        fs::create_dir_all(&aggregate_folder).unwrap();
+
+        // Valid: One aggregate per folder with co-located entities
+        fs::write(aggregate_folder.join("WorkspaceAggregate.py"), "class WorkspaceAggregate: pass")
+            .unwrap();
+        fs::write(aggregate_folder.join("IsolationHandle.py"), "class IsolationHandle: pass")
+            .unwrap();
+        fs::write(aggregate_folder.join("SecurityPolicy.py"), "class SecurityPolicy: pass")
+            .unwrap();
+
+        let config = create_test_config(root.clone(), "python");
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = RequireAggregateFolderConventionRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.errors.len(), 0);
+        assert_eq!(report.warnings.len(), 0);
+    }
+
+    #[test]
+    fn test_vsa027_empty_aggregate_folder() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        let context_path = root.join("workflows");
+        let aggregate_folder = context_path.join("domain/aggregate_workspace");
+        fs::create_dir_all(&aggregate_folder).unwrap();
+
+        // aggregate_* folder with files but no aggregate
+        fs::write(aggregate_folder.join("IsolationHandle.py"), "class IsolationHandle: pass")
+            .unwrap();
+
+        let config = create_test_config(root.clone(), "python");
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = RequireAggregateFolderConventionRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.warnings.len(), 1);
+        assert_eq!(report.warnings[0].code, "VSA027");
+        assert!(report.warnings[0].message.contains("no *Aggregate file"));
     }
 }

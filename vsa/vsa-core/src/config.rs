@@ -361,7 +361,7 @@ impl Default for SlicesConfig {
 }
 
 /// Slice type
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SliceType {
     /// Command slice (write operations)
@@ -370,6 +370,27 @@ pub enum SliceType {
     Query,
     /// Saga slice (process managers)
     Saga,
+    /// Mixed slice (has both command and query)
+    Mixed,
+    /// Unknown slice type (neither detected)
+    #[default]
+    Unknown,
+}
+
+/// Context type - classifies whether a directory is a valid bounded context
+///
+/// A valid bounded context MUST have aggregates. Directories without aggregates
+/// are considered "invalid modules" that should be reorganized.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextType {
+    /// Valid bounded context - has at least one aggregate
+    #[default]
+    BoundedContext,
+    /// Invalid module - no aggregates found
+    /// These are typically projection-only modules that should be moved
+    /// to the bounded context that owns the data
+    InvalidModule,
 }
 
 /// Command slice configuration
@@ -1273,5 +1294,22 @@ mod tests {
         assert!(slices_config.types.contains(&SliceType::Command));
         assert!(slices_config.types.contains(&SliceType::Query));
         assert!(slices_config.types.contains(&SliceType::Saga));
+    }
+
+    #[test]
+    fn test_slice_type_default() {
+        // Default slice type should be Unknown
+        let slice_type = SliceType::default();
+        assert_eq!(slice_type, SliceType::Unknown);
+    }
+
+    #[test]
+    fn test_slice_type_variants() {
+        // Verify all variants exist
+        let _command = SliceType::Command;
+        let _query = SliceType::Query;
+        let _saga = SliceType::Saga;
+        let _mixed = SliceType::Mixed;
+        let _unknown = SliceType::Unknown;
     }
 }

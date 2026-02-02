@@ -156,6 +156,8 @@ impl ValidationRule for ThinAdapterRule {
                 crate::config::SliceType::Command => command_max_lines,
                 crate::config::SliceType::Query => query_max_lines,
                 crate::config::SliceType::Saga => command_max_lines, // Use command default for sagas
+                crate::config::SliceType::Mixed => command_max_lines, // Use command default for mixed slices
+                crate::config::SliceType::Unknown => command_max_lines, // Use command default for unknown slices
             };
 
             for file in &slice.files {

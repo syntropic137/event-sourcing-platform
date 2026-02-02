@@ -12,7 +12,8 @@ mod structure_rules;
 mod suggestions;
 
 pub use bounded_context_rules::{
-    ContextBoundariesRule, NoCircularDependenciesRule, RequireSharedFolderRule,
+    ContextBoundariesRule, NoCircularDependenciesRule, RequireAggregatesForBoundedContextRule,
+    RequireSharedFolderRule,
 };
 pub use dependency_rules::{
     ApplicationIsolationRule, DomainPurityRule, EventsIsolationRule, PortIsolationRule,
@@ -29,9 +30,9 @@ pub use query_slice_rules::{
 pub use rules::{ValidationRule, ValidationRuleSet};
 pub use slice_location_rules::RequireSliceLocationRule;
 pub use structure_rules::{
-    RequireAggregatesInDomainRootRule, RequireBusesInInfrastructureRule,
-    RequireCommandsInDomainRule, RequireEventsInDomainRule, RequirePortSuffixRule,
-    RequirePortsInPortsFolderRule, RequireValueObjectsNamingRule,
+    RequireAggregateFolderConventionRule, RequireAggregatesInDomainRootRule,
+    RequireBusesInInfrastructureRule, RequireCommandsInDomainRule, RequireEventsInDomainRule,
+    RequirePortSuffixRule, RequirePortsInPortsFolderRule, RequireValueObjectsNamingRule,
 };
 pub use suggestions::{Suggestion, SuggestionAction};
 
