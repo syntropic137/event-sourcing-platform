@@ -1,6 +1,6 @@
 /**
  * SVG Builder Utility
- * 
+ *
  * Helper class for generating SVG elements with clean, readable code.
  * Provides methods for creating common SVG shapes, text, and document structure.
  */
@@ -36,42 +36,42 @@ export class SvgBuilder {
   private elements: string[] = [];
   private defs: string[] = [];
   private styles: string[] = [];
-  
+
   constructor(
     private width: number,
     private height: number
   ) {}
-  
+
   /**
    * Build the complete SVG document
    */
   build(): string {
     const xmlns = 'http://www.w3.org/2000/svg';
     const viewBox = `0 0 ${this.width} ${this.height}`;
-    
+
     let svg = `<svg xmlns="${xmlns}" viewBox="${viewBox}" width="${this.width}" height="${this.height}">\n`;
-    
+
     // Add defs section if we have any
     if (this.defs.length > 0) {
       svg += '  <defs>\n';
       svg += this.defs.map(d => `    ${d}`).join('\n') + '\n';
       svg += '  </defs>\n';
     }
-    
+
     // Add styles section if we have any
     if (this.styles.length > 0) {
       svg += '  <style>\n';
       svg += this.styles.map(s => `    ${s}`).join('\n') + '\n';
       svg += '  </style>\n';
     }
-    
+
     // Add all elements
     svg += this.elements.map(e => `  ${e}`).join('\n') + '\n';
     svg += '</svg>';
-    
+
     return svg;
   }
-  
+
   /**
    * Add a drop shadow filter definition
    */
@@ -88,11 +88,11 @@ export class SvgBuilder {
     <feMergeNode in="SourceGraphic"/>
   </feMerge>
 </filter>`.trim();
-    
+
     this.defs.push(filter);
     return this;
   }
-  
+
   /**
    * Add a CSS style
    */
@@ -100,7 +100,7 @@ export class SvgBuilder {
     this.styles.push(css);
     return this;
   }
-  
+
   /**
    * Add a rectangle
    */
@@ -113,18 +113,18 @@ export class SvgBuilder {
       opacity = 1,
       shadow = false
     } = style;
-    
+
     const filter = shadow ? ' filter="url(#shadow)"' : '';
-    
+
     const rect =
       `<rect x="${pos.x}" y="${pos.y}" width="${dims.width}" height="${dims.height}" ` +
       `fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" ` +
       `rx="${rx}" opacity="${opacity}"${filter}/>`;
-    
+
     this.elements.push(rect);
     return this;
   }
-  
+
   /**
    * Add text
    */
@@ -136,7 +136,7 @@ export class SvgBuilder {
       fill = '#000000',
       textAnchor = 'start'
     } = style;
-    
+
     // Escape special XML characters
     const escapedContent = content
       .replace(/&/g, '&amp;')
@@ -144,16 +144,16 @@ export class SvgBuilder {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&apos;');
-    
+
     const text =
       `<text x="${pos.x}" y="${pos.y}" ` +
       `font-size="${fontSize}" font-weight="${fontWeight}" ` +
       `font-family="${fontFamily}" fill="${fill}" text-anchor="${textAnchor}">${escapedContent}</text>`;
-    
+
     this.elements.push(text);
     return this;
   }
-  
+
   /**
    * Add multiple lines of text (each line is a separate text element)
    */
@@ -167,7 +167,7 @@ export class SvgBuilder {
     });
     return this;
   }
-  
+
   /**
    * Add a line
    */
@@ -177,14 +177,14 @@ export class SvgBuilder {
     this.elements.push(line);
     return this;
   }
-  
+
   /**
    * Add a group (allows applying transforms, classes, etc. to multiple elements)
    */
   group(id?: string, transform?: string): GroupBuilder {
     return new GroupBuilder(this, id, transform);
   }
-  
+
   /**
    * Internal: Add a raw SVG element (used by GroupBuilder)
    */
@@ -198,13 +198,13 @@ export class SvgBuilder {
  */
 export class GroupBuilder {
   private elements: string[] = [];
-  
+
   constructor(
     private parent: SvgBuilder,
     private id?: string,
     private transform?: string
   ) {}
-  
+
   /**
    * Add a rectangle to the group
    */
@@ -215,7 +215,7 @@ export class GroupBuilder {
     this.elements.push(`    ${element}`);
     return this;
   }
-  
+
   /**
    * Add text to the group
    */
@@ -226,17 +226,17 @@ export class GroupBuilder {
     this.elements.push(`    ${element}`);
     return this;
   }
-  
+
   /**
    * Close the group and add it to the parent builder
    */
   end(): SvgBuilder {
     const idAttr = this.id ? ` id="${this.id}"` : '';
     const transformAttr = this.transform ? ` transform="${this.transform}"` : '';
-    
+
     const group = `<g${idAttr}${transformAttr}>\n${this.elements.join('\n')}\n  </g>`;
     this.parent._addElement(group);
-    
+
     return this.parent;
   }
 }
@@ -251,39 +251,39 @@ export const ArchitectureColors = {
     secondary: '#c9d9ff',    // Pastel blue
     tertiary: '#ffd9e8',     // Pastel pink
   },
-  
+
   // Infrastructure layer
   infrastructure: {
     primary: '#cce5ff',      // Light blue
     secondary: '#d9f0ff',
   },
-  
+
   // Applications layer
   application: {
     primary: '#e8e8e8',      // Light gray
     secondary: '#f5f5f5',
   },
-  
+
   // Packages/Libraries ecosystem
   ecosystem: {
     primary: '#d4f1d4',      // Light green
     secondary: '#e5f7e5',
   },
-  
+
   // Text
   text: {
     primary: '#1a1a1a',      // Almost black
     secondary: '#666666',    // Medium gray
     tertiary: '#999999',     // Light gray
   },
-  
+
   // Borders
   border: {
     light: '#d0d0d0',
     medium: '#a0a0a0',
     dark: '#707070',
   },
-  
+
   // Background
   background: '#ffffff',
 };

@@ -79,6 +79,96 @@ The scanner detects event handlers and external entry points via naming patterns
 - ✅ Single source of truth
 - ✅ Proper publisher/subscriber declarations
 
+---
+
+## 🏗️ Bounded Context & Aggregate Convention (ADR-020)
+
+> **New in v0.7+**: Clear conventions for organizing aggregates within bounded contexts.
+
+### The Key Principle
+
+> **Multiple aggregates CAN and SHOULD live in ONE bounded context when they share the same domain language.**
+
+A bounded context is a **semantic boundary** (shared language), NOT a 1:1 mapping with aggregates.
+An aggregate is a **consistency boundary** (atomic changes).
+
+### The `aggregate_<name>/` Folder Convention
+
+Each aggregate lives in its own folder within `domain/`:
+
+```
+context/domain/
+├── aggregate_execution/                    # All sort together alphabetically
+│   ├── WorkflowExecutionAggregate.py       # THE root (full name, NOT generic!)
+│   ├── PhaseExecution.py                   # Entity (has identity)
+│   └── ExecutionStatus.py                  # Value Object (immutable)
+│
+├── aggregate_workflow/
+│   ├── WorkflowAggregate.py                # THE root
+│   └── PhaseDefinition.py                  # Value Object
+│
+├── aggregate_workspace/
+│   ├── WorkspaceAggregate.py               # THE root
+│   ├── IsolationHandle.py                  # Entity
+│   └── SecurityPolicy.py                   # Value Object
+│
+├── commands/                               # Commands (sorted after aggregate_*)
+├── events/                                 # Events
+└── _shared/                                # Shared VOs across aggregates
+```
+
+### Why This Convention?
+
+| Feature | Benefit |
+|---------|---------|
+| `aggregate_` prefix | All aggregate folders sort together at top |
+| Full file names | Editor tabs show `WorkspaceAggregate.py` not generic `aggregate.py` |
+| One root per folder | Enforces consistency boundary |
+| Co-located entities/VOs | Clear ownership, no orphans |
+
+### Convention Rules
+
+1. **Folder name:** `aggregate_<name>/` (lowercase, snake_case)
+2. **Root file:** `<Name>Aggregate.py` (PascalCase, FULL name)
+3. **One root only:** Only ONE `*Aggregate.*` file per `aggregate_*` folder
+4. **Co-location:** Entities and VOs in same folder as their root
+5. **Shared VOs:** Go in `_shared/` (truly shared across aggregates only)
+
+### Validation
+
+VSA validates these rules:
+
+```
+✅ domain/aggregate_workspace/WorkspaceAggregate.py → Valid aggregate root
+
+❌ domain/aggregate_workspace/OtherAggregate.py → ERROR: Only one root per folder
+
+❌ domain/WorkspaceAggregate.py → WARNING: Aggregate not in aggregate_* folder
+   Consider moving to: domain/aggregate_workspace/WorkspaceAggregate.py
+```
+
+### Entity vs Value Object
+
+| Type | Identity | Mutability | Example |
+|------|----------|------------|---------|
+| Entity | Has unique ID field | Can change | `IsolationHandle(isolation_id="...")` |
+| Value Object | Defined by attributes | Immutable (`frozen=True`) | `SecurityPolicy(memory_limit=2048)` |
+
+### Bounded Context Requirements
+
+A directory is only a valid bounded context if it contains `aggregate_*` folders:
+
+```
+✅ VALID: orchestration/ contains aggregate_workspace/, aggregate_workflow/
+❌ INVALID: metrics/ has projections but no aggregates
+```
+
+Projections (query slices) must live in the bounded context that **owns the data**, not in separate "projection-only" modules.
+
+**See:** [ADR-020: Bounded Context & Aggregate Convention](../../docs/adrs/ADR-020-bounded-context-aggregate-convention.md)
+
+---
+
 ### Key Benefits
 
 **🔒 Architectural Integrity**

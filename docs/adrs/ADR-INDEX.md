@@ -1,7 +1,7 @@
 # Architecture Decision Records - Index
 
 **Status:** 📘 Master Reference
-**Last Updated:** 2026-01-28
+**Last Updated:** 2026-02-02
 
 This document provides a comprehensive overview of all architectural decisions for the **Hexagonal Event-Sourced Vertical Slice Architecture** pattern.
 
@@ -76,6 +76,7 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 | [ADR-017](./ADR-017-observability-conventions.md) | Observability Conventions | ✅ Accepted | Tracing, metrics, and logging standards |
 | [ADR-018](./ADR-018-renovate-bot-adoption.md) | Renovate Bot Adoption | 📋 Proposed | Migration from Dependabot to Renovate for dependency management |
 | [ADR-019](./ADR-019-vsa-standard-structure.md) | **VSA Standard Structure** | ✅ Accepted | **CANONICAL reference for all VSA applications - comprehensive structure standard** |
+|| [ADR-020](./ADR-020-bounded-context-aggregate-convention.md) | **Bounded Context & Aggregate Convention** | ✅ Accepted | **Defines aggregate_<name>/ folder convention, entity/VO rules, BC requirements** |
 
 ---
 
@@ -550,6 +551,7 @@ vsa validate --config vsa.yaml
 | 2025-12-10 | 1.2.0 | Added ADR-014: Projection checkpoint architecture for reliable event processing |
 | 2025-12-22 | 2.0.0 | **Added ADR-019: Comprehensive VSA Standard Structure (canonical reference)** |
 | 2026-01-28 | 2.1.0 | **Updated ADR-015: Added Given-When-Then scenario testing (TypeScript + Python)** |
+|| 2026-02-02 | 2.2.0 | **Added ADR-020: Bounded Context & Aggregate Convention (aggregate_<name>/ folders)** |
 
 ---
 
