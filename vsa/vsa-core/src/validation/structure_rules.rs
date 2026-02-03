@@ -1271,8 +1271,8 @@ impl ValidationRule for RequireAggregateFolderConventionRule {
                 continue;
             }
 
-            // Check for aggregates directly in domain/ (not in aggregate_* folder)
-            self.check_aggregates_in_domain_root(&domain_path, &context.name, ctx, report)?;
+            // NOTE: Aggregates at domain/ root are now checked by VSA022 (as error)
+            // VSA027 only checks aggregate_* folder contents
 
             // Check for multiple aggregates in same aggregate_* folder
             self.check_aggregate_folder_contents(&domain_path, &context.name, ctx, report)?;
@@ -1703,7 +1703,9 @@ mod tests {
     // ============================================================================
 
     #[test]
-    fn test_vsa027_aggregate_not_in_folder() {
+    fn test_vsa027_aggregate_not_in_folder_deferred_to_vsa022() {
+        // NOTE: Aggregates at domain/ root are now checked by VSA022 (as error)
+        // VSA027 no longer checks for this - it only validates aggregate_* folder contents
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path().to_path_buf();
 
@@ -1712,6 +1714,7 @@ mod tests {
         fs::create_dir_all(&domain_path).unwrap();
 
         // Aggregate directly in domain/ (not in aggregate_* folder)
+        // VSA027 should NOT warn - this is handled by VSA022
         fs::write(domain_path.join("WorkflowAggregate.py"), "class WorkflowAggregate: pass")
             .unwrap();
 
@@ -1722,9 +1725,9 @@ mod tests {
         let rule = RequireAggregateFolderConventionRule;
         rule.validate(&ctx, &mut report).unwrap();
 
-        assert_eq!(report.warnings.len(), 1);
-        assert_eq!(report.warnings[0].code, "VSA027");
-        assert!(report.warnings[0].message.contains("aggregate_"));
+        // VSA027 no longer checks domain root - deferred to VSA022
+        assert_eq!(report.warnings.len(), 0);
+        assert_eq!(report.errors.len(), 0);
     }
 
     #[test]
