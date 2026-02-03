@@ -1,9 +1,9 @@
-//! Structure validation rules for ADR-019
+//! Structure validation rules for ADR-019 and ADR-020
 //!
 //! Validates that the codebase follows the canonical VSA structure:
 //! - VSA020: Commands must be in domain/commands/
 //! - VSA021: Events must be in domain/events/ (domain cohesion per ADR-019)
-//! - VSA022: Aggregates must be in domain/ root, NOT in _shared/
+//! - VSA022: Aggregates must be in domain/aggregate_*/ folders (ADR-020)
 //! - VSA023: Ports must be in ports/ folder with *Port suffix
 //! - VSA024: Buses must be in infrastructure/buses/, NOT application/
 //! - VSA025: All ports must end with Port suffix
@@ -25,15 +25,15 @@ use std::path::Path;
 /// Commands are domain contracts that define all write operations.
 ///
 /// Invalid structure:
-/// ```
+/// ```text
 /// contexts/workflows/
 ///   └── slices/
 ///       └── create_workflow/
 ///           └── CreateWorkflowCommand.py  # ❌ Command in slice
-/// ```
+/// ```text
 ///
 /// Valid structure:
-/// ```
+/// ```text
 /// contexts/workflows/
 ///   ├── domain/
 ///   │   └── commands/
@@ -42,7 +42,7 @@ use std::path::Path;
 ///       └── create_workflow/
 ///           └── internal/
 ///               └── Handler.py            # ✅ Handler imports from domain
-/// ```
+/// ```text
 pub struct RequireCommandsInDomainRule;
 
 impl RequireCommandsInDomainRule {
@@ -173,16 +173,16 @@ impl RequireCommandsInDomainRule {
 /// and should be in the domain folder for domain cohesion, not at context root.
 ///
 /// Invalid structure:
-/// ```
+/// ```text
 /// contexts/workflows/
 ///   ├── events/
 ///   │   └── WorkflowCreatedEvent.py  # ❌ Events at context root
 ///   └── domain/
 ///       └── WorkflowAggregate.py
-/// ```
+/// ```text
 ///
 /// Valid structure:
-/// ```
+/// ```text
 /// contexts/workflows/
 ///   └── domain/
 ///       ├── events/
@@ -190,7 +190,7 @@ impl RequireCommandsInDomainRule {
 ///       │   ├── versioned/                   # ✅ Old versions
 ///       │   └── upcasters/                   # ✅ Migrations
 ///       └── WorkflowAggregate.py
-/// ```
+/// ```text
 pub struct RequireEventsInDomainRule;
 
 impl RequireEventsInDomainRule {
@@ -331,28 +331,40 @@ impl RequireEventsInDomainRule {
 }
 
 // ============================================================================
-// VSA022: Aggregates must be in domain/ root, NOT in _shared/
+// VSA022: Aggregates must be in domain/aggregate_*/ folders
 // ============================================================================
 
-/// VSA022: Aggregates must be in domain/ root
+/// VSA022: Aggregates must be in domain/aggregate_*/ folders
 ///
-/// As per ADR-019, aggregates should be at the domain/ root for high visibility.
-/// The _shared/ folder pattern is deprecated.
+/// As per ADR-020, aggregates MUST be in `domain/aggregate_*/` folders.
+/// This convention:
+/// - Clearly defines aggregate boundaries
+/// - Groups aggregate root with its entities and value objects
+/// - Enables future growth within the consistency boundary
+/// - Makes aggregates easily identifiable via folder naming
 ///
-/// Invalid structure:
-/// ```
+/// Invalid structures:
+/// ```text
 /// contexts/workflows/
 ///   └── _shared/
 ///       └── WorkflowAggregate.py  # ❌ Aggregate in _shared/
-/// ```
 ///
-/// Valid structure:
-/// ```
 /// contexts/workflows/
 ///   └── domain/
-///       ├── WorkflowAggregate.py          # ✅ Aggregate at domain root
-///       └── WorkflowExecutionAggregate.py # ✅ Multiple aggregates OK
-/// ```
+///       └── WorkflowAggregate.py  # ❌ Aggregate at domain root (use folder!)
+/// ```text
+///
+/// Valid structure:
+/// ```text
+/// contexts/orchestration/
+///   └── domain/
+///       ├── aggregate_workflow/
+///       │   ├── WorkflowAggregate.py      # ✅ Aggregate root in named folder
+///       │   └── value_objects.py          # ✅ Related value objects
+///       └── aggregate_workspace/
+///           ├── WorkspaceAggregate.py     # ✅ Another aggregate
+///           └── IsolationHandle.py        # ✅ Entity within aggregate
+/// ```text
 pub struct RequireAggregatesInDomainRootRule;
 
 impl RequireAggregatesInDomainRootRule {
@@ -365,11 +377,26 @@ impl RequireAggregatesInDomainRootRule {
         let ext = ctx.config.file_extension();
         file_name.ends_with(&format!("Aggregate.{ext}"))
     }
+
+    /// Extract aggregate name from filename (e.g., "WorkflowAggregate.py" -> "workflow")
+    fn extract_aggregate_name(&self, path: &Path) -> String {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .map(|name| {
+                // Remove extension and "Aggregate" suffix
+                name.split('.')
+                    .next()
+                    .unwrap_or(name)
+                    .trim_end_matches("Aggregate")
+                    .to_string()
+            })
+            .unwrap_or_default()
+    }
 }
 
 impl ValidationRule for RequireAggregatesInDomainRootRule {
     fn name(&self) -> &str {
-        "require-aggregates-in-domain-root"
+        "require-aggregates-in-aggregate-folders"
     }
 
     fn code(&self) -> &str {
@@ -385,6 +412,8 @@ impl ValidationRule for RequireAggregatesInDomainRootRule {
         let contexts = scanner.scan_contexts()?;
 
         for context in contexts {
+            let domain_path = context.path.join("domain");
+
             // Check for aggregates in _shared/ (wrong location)
             let shared_path = context.path.join("_shared");
             if shared_path.exists() && shared_path.is_dir() {
@@ -392,8 +421,9 @@ impl ValidationRule for RequireAggregatesInDomainRootRule {
                     for entry in entries.flatten() {
                         let path = entry.path();
                         if path.is_file() && self.is_aggregate_file(&path, ctx) {
-                            let domain_path = context.path.join("domain");
-                            let suggested_path = domain_path.join(path.file_name().unwrap());
+                            let agg_name = self.extract_aggregate_name(&path);
+                            let suggested_folder = domain_path.join(format!("aggregate_{}", agg_name.to_lowercase()));
+                            let suggested_path = suggested_folder.join(path.file_name().unwrap());
 
                             report.errors.push(ValidationIssue {
                                 path: path.clone(),
@@ -401,17 +431,52 @@ impl ValidationRule for RequireAggregatesInDomainRootRule {
                                 severity: Severity::Error,
                                 message: format!(
                                     "Aggregate '{}' in context '{}' is in _shared/ directory. \
-                                     As per ADR-019, aggregates should be in domain/ root \
-                                     for high visibility. The _shared/ pattern is deprecated.",
+                                     As per ADR-020, aggregates must be in domain/aggregate_*/ folders.",
                                     path.file_name().unwrap().to_string_lossy(),
                                     context.name
                                 ),
                                 suggestions: vec![Suggestion::manual(format!(
-                                    "Move aggregate to domain/ root\n\
+                                    "Move aggregate to domain/aggregate_*/ folder\n\
                                      Commands:\n\
                                      mkdir -p {}\n\
                                      git mv {} {}",
-                                    domain_path.display(),
+                                    suggested_folder.display(),
+                                    path.display(),
+                                    suggested_path.display()
+                                ))],
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Check for aggregates at domain/ root (should be in aggregate_*/ folders)
+            if domain_path.exists() && domain_path.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&domain_path) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() && self.is_aggregate_file(&path, ctx) {
+                            let agg_name = self.extract_aggregate_name(&path);
+                            let suggested_folder = domain_path.join(format!("aggregate_{}", agg_name.to_lowercase()));
+                            let suggested_path = suggested_folder.join(path.file_name().unwrap());
+
+                            report.errors.push(ValidationIssue {
+                                path: path.clone(),
+                                code: self.code().to_string(),
+                                severity: Severity::Error,
+                                message: format!(
+                                    "Aggregate '{}' in context '{}' is at domain/ root. \
+                                     As per ADR-020, aggregates must be in domain/aggregate_*/ folders \
+                                     to define clear consistency boundaries.",
+                                    path.file_name().unwrap().to_string_lossy(),
+                                    context.name
+                                ),
+                                suggestions: vec![Suggestion::manual(format!(
+                                    "Move aggregate to domain/aggregate_*/ folder\n\
+                                     Commands:\n\
+                                     mkdir -p {}\n\
+                                     git mv {} {}",
+                                    suggested_folder.display(),
                                     path.display(),
                                     suggested_path.display()
                                 ))],
@@ -458,14 +523,25 @@ impl RequireAggregatesInDomainRootRule {
         if dir_name == "domain" {
             // Only check if aggregates are NOT in domain root
             // (they should be directly in domain/, not in subfolders)
+            // EXCEPTION: aggregate_* folders are allowed per ADR-020 (DDD convention)
             if let Ok(entries) = std::fs::read_dir(path) {
                 for entry in entries.flatten() {
                     let entry_path = entry.path();
+                    let subfolder_name = entry_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
+
                     if entry_path.is_dir()
-                        && entry_path.file_name().unwrap() != "commands"
-                        && entry_path.file_name().unwrap() != "queries"
+                        && subfolder_name != "commands"
+                        && subfolder_name != "queries"
+                        && subfolder_name != "events"
+                        && subfolder_name != "read_models"
+                        && subfolder_name != "_shared"
+                        && !subfolder_name.starts_with("aggregate_")
                     {
                         // Check subfolders of domain/ for misplaced aggregates
+                        // (but NOT aggregate_* folders which are valid DDD convention)
                         self.check_subfolder_for_aggregates(
                             &entry_path,
                             context_path,
@@ -570,16 +646,16 @@ impl RequireAggregatesInDomainRootRule {
 /// should be in a dedicated ports/ folder for discoverability.
 ///
 /// Invalid:
-/// ```
+/// ```text
 /// contexts/workflows/
 ///   ├── domain/
 ///   │   └── WorkflowRepositoryPort.py    # ❌ Port in domain/
 ///   └── infrastructure/
 ///       └── CommandBusPort.py            # ❌ Port in infrastructure/
-/// ```
+/// ```text
 ///
 /// Valid:
-/// ```
+/// ```text
 /// contexts/workflows/
 ///   ├── ports/
 ///   │   ├── WorkflowRepositoryPort.py    # ✅ Port in ports/
@@ -587,7 +663,7 @@ impl RequireAggregatesInDomainRootRule {
 ///   └── infrastructure/
 ///       └── repositories/
 ///           └── PostgresWorkflowRepository.py  # ✅ Implementation
-/// ```
+/// ```text
 pub struct RequirePortsInPortsFolderRule;
 
 impl RequirePortsInPortsFolderRule {
@@ -716,15 +792,15 @@ impl RequirePortsInPortsFolderRule {
 /// concerns (message routing), not business orchestration.
 ///
 /// Invalid:
-/// ```
+/// ```text
 /// contexts/workflows/
 ///   └── application/
 ///       ├── CommandBus.py      # ❌ Bus in application/
 ///       └── EventBus.py        # ❌ Bus in application/
-/// ```
+/// ```text
 ///
 /// Valid:
-/// ```
+/// ```text
 /// contexts/workflows/
 ///   ├── ports/
 ///   │   ├── CommandBusPort.py              # ✅ Interface in ports/
@@ -735,7 +811,7 @@ impl RequirePortsInPortsFolderRule {
 ///       └── buses/
 ///           ├── InMemoryCommandBus.py      # ✅ Implementation
 ///           └── InMemoryEventBus.py        # ✅ Implementation
-/// ```
+/// ```text
 pub struct RequireBusesInInfrastructureRule;
 
 impl RequireBusesInInfrastructureRule {
@@ -912,16 +988,16 @@ impl RequireBusesInInfrastructureRule {
 /// use the *ValueObjects suffix for discoverability.
 ///
 /// Invalid:
-/// ```
+/// ```text
 /// domain/WorkflowValues.py       # ❌ Missing ValueObjects suffix
 /// domain/Values.py               # ❌ Too generic
-/// ```
+/// ```text
 ///
 /// Valid:
-/// ```
+/// ```text
 /// domain/WorkflowValueObjects.py # ✅ Clear naming
 /// domain/WorkflowAggregate.py    # ✅ Inline value objects OK
-/// ```
+/// ```text
 pub struct RequireValueObjectsNamingRule;
 
 impl ValidationRule for RequireValueObjectsNamingRule {
@@ -1032,16 +1108,16 @@ impl ValidationRule for RequireValueObjectsNamingRule {
 /// for discoverability and automated validation.
 ///
 /// Invalid:
-/// ```
+/// ```text
 /// ports/WorkflowRepository.py      # ❌ Missing Port suffix
 /// ports/CommandBus.py              # ❌ Missing Port suffix
-/// ```
+/// ```text
 ///
 /// Valid:
-/// ```
+/// ```text
 /// ports/WorkflowRepositoryPort.py  # ✅ Has Port suffix
 /// ports/CommandBusPort.py          # ✅ Has Port suffix
-/// ```
+/// ```text
 pub struct RequirePortSuffixRule;
 
 impl ValidationRule for RequirePortSuffixRule {
@@ -1139,17 +1215,17 @@ impl ValidationRule for RequirePortSuffixRule {
 /// - Entities and value objects co-located in the same folder
 ///
 /// Invalid structure:
-/// ```
+/// ```text
 /// domain/
 ///   ├── WorkspaceAggregate.py       # ❌ Not in aggregate_* folder
 ///   ├── WorkflowAggregate.py        # ❌ Not in aggregate_* folder
 ///   └── aggregate_workspace/
 ///       ├── WorkspaceAggregate.py
 ///       └── OtherAggregate.py       # ❌ Multiple aggregates in one folder
-/// ```
+/// ```text
 ///
 /// Valid structure:
-/// ```
+/// ```text
 /// domain/
 ///   ├── aggregate_workspace/
 ///   │   ├── WorkspaceAggregate.py   # ✅ One aggregate per folder
@@ -1157,7 +1233,7 @@ impl ValidationRule for RequirePortSuffixRule {
 ///   │   └── SecurityPolicy.py       # ✅ Value object co-located
 ///   └── aggregate_workflow/
 ///       └── WorkflowAggregate.py    # ✅ One aggregate per folder
-/// ```
+/// ```text
 pub struct RequireAggregateFolderConventionRule;
 
 impl RequireAggregateFolderConventionRule {
@@ -1195,8 +1271,8 @@ impl ValidationRule for RequireAggregateFolderConventionRule {
                 continue;
             }
 
-            // Check for aggregates directly in domain/ (not in aggregate_* folder)
-            self.check_aggregates_in_domain_root(&domain_path, &context.name, ctx, report)?;
+            // NOTE: Aggregates at domain/ root are now checked by VSA022 (as error)
+            // VSA027 only checks aggregate_* folder contents
 
             // Check for multiple aggregates in same aggregate_* folder
             self.check_aggregate_folder_contents(&domain_path, &context.name, ctx, report)?;
@@ -1453,7 +1529,7 @@ mod tests {
 
         assert_eq!(report.errors.len(), 1);
         assert_eq!(report.errors[0].code, "VSA022");
-        assert!(report.errors[0].message.contains("domain/ root"));
+        assert!(report.errors[0].message.contains("domain/aggregate_*/"));
     }
 
     #[test]
@@ -1572,13 +1648,15 @@ mod tests {
         let infrastructure_path = context_path.join("infrastructure");
         let buses_path = infrastructure_path.join("buses");
 
+        let aggregate_path = domain_path.join("aggregate_workflow");
         fs::create_dir_all(&commands_path).unwrap();
         fs::create_dir_all(&events_path).unwrap();
         fs::create_dir_all(&ports_path).unwrap();
         fs::create_dir_all(&buses_path).unwrap();
+        fs::create_dir_all(&aggregate_path).unwrap();
 
-        // Aggregate in domain root (correct)
-        fs::write(domain_path.join("WorkflowAggregate.py"), "class WorkflowAggregate: pass")
+        // Aggregate in domain/aggregate_workflow/ folder (correct per ADR-020)
+        fs::write(aggregate_path.join("WorkflowAggregate.py"), "class WorkflowAggregate: pass")
             .unwrap();
 
         // Command in domain/commands/ (correct)
@@ -1625,7 +1703,9 @@ mod tests {
     // ============================================================================
 
     #[test]
-    fn test_vsa027_aggregate_not_in_folder() {
+    fn test_vsa027_aggregate_not_in_folder_deferred_to_vsa022() {
+        // NOTE: Aggregates at domain/ root are now checked by VSA022 (as error)
+        // VSA027 no longer checks for this - it only validates aggregate_* folder contents
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path().to_path_buf();
 
@@ -1634,6 +1714,7 @@ mod tests {
         fs::create_dir_all(&domain_path).unwrap();
 
         // Aggregate directly in domain/ (not in aggregate_* folder)
+        // VSA027 should NOT warn - this is handled by VSA022
         fs::write(domain_path.join("WorkflowAggregate.py"), "class WorkflowAggregate: pass")
             .unwrap();
 
@@ -1644,9 +1725,9 @@ mod tests {
         let rule = RequireAggregateFolderConventionRule;
         rule.validate(&ctx, &mut report).unwrap();
 
-        assert_eq!(report.warnings.len(), 1);
-        assert_eq!(report.warnings[0].code, "VSA027");
-        assert!(report.warnings[0].message.contains("aggregate_"));
+        // VSA027 no longer checks domain root - deferred to VSA022
+        assert_eq!(report.warnings.len(), 0);
+        assert_eq!(report.errors.len(), 0);
     }
 
     #[test]
