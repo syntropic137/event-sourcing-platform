@@ -4,8 +4,10 @@ use super::{
     EnhancedValidationReport, Severity, Suggestion, ValidationContext, ValidationIssue,
     ValidationRule,
 };
+use crate::config::ContextType;
 use crate::error::Result;
 use crate::integration_events::IntegrationEventRegistry;
+use crate::manifest::Manifest;
 use crate::scanner::Scanner;
 use std::collections::{HashMap, HashSet};
 
@@ -215,6 +217,124 @@ impl ValidationRule for RequireSharedFolderRule {
         }
 
         Ok(())
+    }
+}
+
+/// Rule: A bounded context MUST have aggregates
+///
+/// Directories without aggregates are "invalid modules" that should be
+/// reorganized. Common examples:
+/// - Projection-only modules should move to the bounded context that owns the data
+/// - Empty context directories should be deleted
+/// - Utility/shared modules are not bounded contexts
+pub struct RequireAggregatesForBoundedContextRule;
+
+impl ValidationRule for RequireAggregatesForBoundedContextRule {
+    fn name(&self) -> &str {
+        "require-aggregates-for-bounded-context"
+    }
+
+    fn code(&self) -> &str {
+        "VSA203"
+    }
+
+    fn validate(
+        &self,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        // Generate manifest to get context classification
+        let manifest = Manifest::generate(&ctx.config, ctx.root.clone())?;
+
+        for context in &manifest.bounded_contexts {
+            if context.context_type == ContextType::InvalidModule {
+                // Determine if it has any slices (projections)
+                let has_projections = context.features.iter().any(|f| {
+                    matches!(
+                        f.slice_type,
+                        crate::config::SliceType::Query | crate::config::SliceType::Mixed
+                    )
+                });
+
+                let message = if has_projections {
+                    format!(
+                        "'{}' has no aggregates - not a valid bounded context. \
+                         Projections should live in the bounded context that owns the data.",
+                        context.name
+                    )
+                } else if context.features.is_empty() {
+                    format!(
+                        "'{}' has no aggregates and no features - consider removing this empty directory.",
+                        context.name
+                    )
+                } else {
+                    format!(
+                        "'{}' has no aggregates - not a valid bounded context. \
+                         Consider moving contents to an existing bounded context.",
+                        context.name
+                    )
+                };
+
+                // Suggest moving to related contexts
+                let suggestion_text = Self::suggest_target_context(&context.name, &manifest);
+
+                report.warnings.push(ValidationIssue {
+                    path: ctx.root.join(&context.path),
+                    code: self.code().to_string(),
+                    severity: Severity::Warning,
+                    message,
+                    suggestions: vec![Suggestion::manual(suggestion_text)],
+                });
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl RequireAggregatesForBoundedContextRule {
+    /// Suggest target bounded contexts based on naming heuristics
+    fn suggest_target_context(invalid_module: &str, manifest: &Manifest) -> String {
+        // Find valid bounded contexts to suggest
+        let valid_contexts: Vec<&str> = manifest
+            .bounded_contexts
+            .iter()
+            .filter(|c| c.context_type == ContextType::BoundedContext)
+            .map(|c| c.name.as_str())
+            .collect();
+
+        if valid_contexts.is_empty() {
+            return "Create aggregates in this module or delete it.".to_string();
+        }
+
+        // Naming heuristics for common orphan module names
+        let suggestion = match invalid_module.to_lowercase().as_str() {
+            "metrics" | "observability" | "analytics" => {
+                // These typically belong with sessions or orchestration
+                if valid_contexts.contains(&"sessions") {
+                    "Consider moving to sessions/slices/"
+                } else if valid_contexts.contains(&"orchestration") {
+                    "Consider moving to orchestration/slices/"
+                } else {
+                    "Consider moving to a bounded context that owns the data being observed"
+                }
+            }
+            "costs" | "billing" | "pricing" => {
+                if valid_contexts.contains(&"sessions") {
+                    "Consider moving to sessions/slices/ (for session costs)"
+                } else if valid_contexts.contains(&"orchestration") {
+                    "Consider moving to orchestration/slices/ (for execution costs)"
+                } else {
+                    "Consider moving to the bounded context that owns the billable entities"
+                }
+            }
+            _ => {
+                // Generic suggestion
+                &format!("Consider moving contents to one of: {}", valid_contexts.join(", "))
+            }
+        };
+
+        suggestion.to_string()
     }
 }
 

@@ -248,7 +248,7 @@ See [Manifest Schema](#manifest-schema) for full details.
 
 ### Prerequisites
 
-- Node.js 18+ 
+- Node.js 18+
 - npm or pnpm
 - VSA CLI (for testing)
 
@@ -384,7 +384,7 @@ vsa-visualizer manifest.json
 
 **Cause**: VSA scanner may not be detecting all domain objects
 
-**Solution**: 
+**Solution**:
 1. Ensure your code follows VSA naming conventions
 2. Check that decorators are present on events
 3. Verify aggregate command/event handlers are public

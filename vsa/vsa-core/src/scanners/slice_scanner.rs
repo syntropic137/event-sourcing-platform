@@ -295,7 +295,8 @@ impl<'a> SliceScanner<'a> {
                 "command" => SliceType::Command,
                 "query" => SliceType::Query,
                 "saga" => SliceType::Saga,
-                _ => SliceType::Command, // Default
+                "mixed" => SliceType::Mixed,
+                _ => SliceType::Unknown, // Default to Unknown for unrecognized types
             };
             return (slice_type, true);
         }
@@ -306,16 +307,18 @@ impl<'a> SliceScanner<'a> {
         let has_projection = files.iter().any(|f| f.file_type == SliceFileType::Projection);
         let has_saga = files.iter().any(|f| f.file_type == SliceFileType::Saga);
 
-        // Priority: Saga > Query (with Projection) > Query > Command
+        // Priority: Saga > Mixed > Query > Command > Unknown
         let slice_type = if has_saga {
             SliceType::Saga
+        } else if has_command && (has_query || has_projection) {
+            SliceType::Mixed
         } else if has_query || has_projection {
             SliceType::Query
         } else if has_command {
             SliceType::Command
         } else {
-            // Default to Command if we can't determine
-            SliceType::Command
+            // Unknown if we can't determine
+            SliceType::Unknown
         };
 
         (slice_type, false)
@@ -591,6 +594,106 @@ returns: OrderDetail
 
         let (slice_type, explicit) = scanner.detect_slice_type(&files, &manifest);
         assert_eq!(slice_type, SliceType::Saga);
+        assert!(explicit);
+    }
+
+    #[test]
+    fn test_detect_slice_type_mixed() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let config = create_test_config();
+        let scanner = SliceScanner::new(Some(&config), root);
+
+        // Slice with both command and query/projection files
+        let files = vec![
+            SliceFile {
+                name: "CreateOrderCommand.ts".to_string(),
+                path: PathBuf::from("CreateOrderCommand.ts"),
+                file_type: SliceFileType::Command,
+            },
+            SliceFile {
+                name: "GetOrderQuery.ts".to_string(),
+                path: PathBuf::from("GetOrderQuery.ts"),
+                file_type: SliceFileType::Query,
+            },
+        ];
+
+        let (slice_type, explicit) = scanner.detect_slice_type(&files, &None);
+        assert_eq!(slice_type, SliceType::Mixed);
+        assert!(!explicit);
+    }
+
+    #[test]
+    fn test_detect_slice_type_unknown() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let config = create_test_config();
+        let scanner = SliceScanner::new(Some(&config), root);
+
+        // Slice with no recognized file types
+        let files = vec![
+            SliceFile {
+                name: "utils.ts".to_string(),
+                path: PathBuf::from("utils.ts"),
+                file_type: SliceFileType::Other,
+            },
+            SliceFile {
+                name: "helpers.ts".to_string(),
+                path: PathBuf::from("helpers.ts"),
+                file_type: SliceFileType::Other,
+            },
+        ];
+
+        let (slice_type, explicit) = scanner.detect_slice_type(&files, &None);
+        assert_eq!(slice_type, SliceType::Unknown);
+        assert!(!explicit);
+    }
+
+    #[test]
+    fn test_detect_slice_type_explicit_mixed() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let config = create_test_config();
+        let scanner = SliceScanner::new(Some(&config), root);
+
+        let files = vec![];
+        let manifest = Some(SliceManifest {
+            name: "test_slice".to_string(),
+            slice_type: "mixed".to_string(),
+            projection: None,
+            subscribes_to: vec![],
+            returns: None,
+            description: None,
+        });
+
+        let (slice_type, explicit) = scanner.detect_slice_type(&files, &manifest);
+        assert_eq!(slice_type, SliceType::Mixed);
+        assert!(explicit);
+    }
+
+    #[test]
+    fn test_detect_slice_type_explicit_unknown_string() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let config = create_test_config();
+        let scanner = SliceScanner::new(Some(&config), root);
+
+        let files = vec![];
+        let manifest = Some(SliceManifest {
+            name: "test_slice".to_string(),
+            slice_type: "invalid_type".to_string(), // Unrecognized type
+            projection: None,
+            subscribes_to: vec![],
+            returns: None,
+            description: None,
+        });
+
+        let (slice_type, explicit) = scanner.detect_slice_type(&files, &manifest);
+        assert_eq!(slice_type, SliceType::Unknown);
         assert!(explicit);
     }
 

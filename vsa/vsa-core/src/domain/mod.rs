@@ -17,7 +17,9 @@ pub mod query;
 pub mod upcaster;
 pub mod value_object;
 
-pub use aggregate::{Aggregate, CommandHandler, EventHandler};
+pub use aggregate::{
+    Aggregate, AggregateEntity, AggregateValueObject, CommandHandler, EventHandler,
+};
 pub use command::{Command, CommandField};
 pub use event::{Event, EventField, EventVersion};
 pub use projection::Projection;
@@ -65,6 +67,15 @@ impl DomainModel {
             + self.projections.len()
             + self.upcasters.len()
             + self.value_objects.len()
+    }
+
+    /// Check if the domain model has any aggregates
+    ///
+    /// A bounded context MUST have aggregates to be valid.
+    /// Directories without aggregates are "invalid modules" that should be
+    /// reorganized (e.g., projection-only modules should move to owning context).
+    pub fn has_aggregates(&self) -> bool {
+        !self.aggregates.is_empty()
     }
 
     /// Find an aggregate by name
@@ -148,6 +159,29 @@ mod tests {
     }
 
     #[test]
+    fn test_has_aggregates_empty() {
+        let model = DomainModel::new(PathBuf::from("/test"));
+        assert!(!model.has_aggregates());
+    }
+
+    #[test]
+    fn test_has_aggregates_with_aggregate() {
+        let mut model = DomainModel::new(PathBuf::from("/test"));
+        model.aggregates.push(Aggregate {
+            name: "TestAggregate".to_string(),
+            context: None,
+            file_path: PathBuf::from("domain/TestAggregate.py"),
+            line_count: 100,
+            command_handlers: vec![],
+            event_handlers: vec![],
+            entities: vec![],
+            value_objects: vec![],
+            folder_name: None,
+        });
+        assert!(model.has_aggregates());
+    }
+
+    #[test]
     fn test_find_aggregate() {
         let mut model = DomainModel::new(PathBuf::from("/test"));
         model.aggregates.push(Aggregate {
@@ -157,6 +191,9 @@ mod tests {
             line_count: 100,
             command_handlers: vec![],
             event_handlers: vec![],
+            entities: vec![],
+            value_objects: vec![],
+            folder_name: None,
         });
 
         assert!(model.find_aggregate("TaskAggregate").is_some());
@@ -229,6 +266,9 @@ mod tests {
             line_count: 100,
             command_handlers: vec![],
             event_handlers: vec![],
+            entities: vec![],
+            value_objects: vec![],
+            folder_name: None,
         });
 
         let mut model2 = DomainModel::new(PathBuf::from("/test"));
@@ -239,6 +279,9 @@ mod tests {
             line_count: 150,
             command_handlers: vec![],
             event_handlers: vec![],
+            entities: vec![],
+            value_objects: vec![],
+            folder_name: None,
         });
 
         model1.merge(model2);
@@ -258,6 +301,9 @@ mod tests {
             line_count: 100,
             command_handlers: vec![],
             event_handlers: vec![],
+            entities: vec![],
+            value_objects: vec![],
+            folder_name: None,
         });
 
         let mut model2 = DomainModel::new(PathBuf::from("/test"));
@@ -268,6 +314,9 @@ mod tests {
             line_count: 120,
             command_handlers: vec![],
             event_handlers: vec![],
+            entities: vec![],
+            value_objects: vec![],
+            folder_name: None,
         });
 
         model1.merge(model2);
@@ -295,6 +344,9 @@ mod tests {
             line_count: 200,
             command_handlers: vec![],
             event_handlers: vec![],
+            entities: vec![],
+            value_objects: vec![],
+            folder_name: None,
         });
         model2.commands.push(Command {
             name: "CreateWorkspaceCommand".to_string(),
@@ -337,6 +389,9 @@ mod tests {
             line_count: 100,
             command_handlers: vec![],
             event_handlers: vec![],
+            entities: vec![],
+            value_objects: vec![],
+            folder_name: None,
         });
 
         model.aggregates.push(Aggregate {
@@ -346,6 +401,9 @@ mod tests {
             line_count: 150,
             command_handlers: vec![],
             event_handlers: vec![],
+            entities: vec![],
+            value_objects: vec![],
+            folder_name: None,
         });
 
         model.commands.push(Command {
@@ -372,6 +430,9 @@ mod tests {
             line_count: 100,
             command_handlers: vec![],
             event_handlers: vec![],
+            entities: vec![],
+            value_objects: vec![],
+            folder_name: None,
         });
 
         model.aggregates.push(Aggregate {
@@ -381,6 +442,9 @@ mod tests {
             line_count: 50,
             command_handlers: vec![],
             event_handlers: vec![],
+            entities: vec![],
+            value_objects: vec![],
+            folder_name: None,
         });
 
         let contexts = model.get_contexts();

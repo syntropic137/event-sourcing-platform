@@ -156,17 +156,36 @@ impl<'a> ProjectionScanner<'a> {
 
         // Method verb prefixes that indicate CRUD/accessor methods, not events
         // e.g., get_by_id, set_value, load_data are methods, not events
-        const METHOD_VERB_PREFIXES: &[&str] = &[
-            "get", "set", "load", "save", "create", "update", "delete",
-        ];
+        const METHOD_VERB_PREFIXES: &[&str] =
+            &["get", "set", "load", "save", "create", "update", "delete"];
 
         // Non-event words for PascalCase validation (single-word exclusions)
         // These are excluded when they appear as standalone PascalCase names
         const NON_EVENT_METHODS: &[&str] = &[
-            "init", "error", "complete", "start", "end",
-            "id", "ms", "type", "data", "time", "name", "value",
-            "projection", "event", "message", "result", "status",
-            "create", "update", "delete", "get", "set", "load", "save",
+            "init",
+            "error",
+            "complete",
+            "start",
+            "end",
+            "id",
+            "ms",
+            "type",
+            "data",
+            "time",
+            "name",
+            "value",
+            "projection",
+            "event",
+            "message",
+            "result",
+            "status",
+            "create",
+            "update",
+            "delete",
+            "get",
+            "set",
+            "load",
+            "save",
         ];
 
         // Helper to check if snake_case name looks like a valid event

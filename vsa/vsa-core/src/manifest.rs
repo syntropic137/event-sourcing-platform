@@ -3,15 +3,17 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
-use crate::config::VsaConfig;
+use crate::config::{ContextType, SliceType, VsaConfig};
 use crate::domain::DomainModel;
 use crate::error::Result;
 use crate::scanner::Scanner;
 use crate::scanners::DomainScanner;
 
 /// VSA manifest schema version
-pub const MANIFEST_SCHEMA_VERSION: &str = "2.1.0";
+/// v2.3.0 - Added aggregate entities, value_objects, and folder_name for relationship visualization
+pub const MANIFEST_SCHEMA_VERSION: &str = "2.3.0";
 
 /// VSA manifest
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,6 +32,14 @@ pub struct ContextManifest {
     pub name: String,
     pub path: String,
     pub features: Vec<FeatureManifest>,
+    /// Context type - bounded_context (has aggregates) or invalid_module (no aggregates)
+    /// NEW in v2.2.0 - helps identify orphan projection modules
+    #[serde(default)]
+    pub context_type: ContextType,
+    /// Number of aggregates in this context - NEW in v2.2.0
+    /// A valid bounded context has aggregate_count > 0
+    #[serde(default)]
+    pub aggregate_count: usize,
     /// Infrastructure folders (repositories, buses, etc.) - NEW in v2.0.0
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub infrastructure_folders: Vec<String>,
@@ -41,6 +51,10 @@ pub struct FeatureManifest {
     pub name: String,
     pub path: String,
     pub files: Vec<String>,
+    /// The type of slice (command, query, saga, mixed, or unknown)
+    /// Detected from file contents: *Command.* = command, *Query.*/*Projection.* = query
+    #[serde(default)]
+    pub slice_type: SliceType,
 }
 
 /// Domain manifest containing all domain model components
@@ -92,6 +106,12 @@ impl Manifest {
         let scanner = Scanner::new(config.clone(), root.clone());
         let contexts = scanner.scan_contexts()?;
 
+        // Create domain scanner for context classification (always needed for aggregate counting)
+        let domain_scanner = config
+            .domain
+            .as_ref()
+            .map(|domain_config| DomainScanner::new(domain_config.clone(), root.clone()));
+
         let mut context_manifests = Vec::new();
 
         for context in &contexts {
@@ -102,20 +122,37 @@ impl Manifest {
                 let files = scanner.scan_feature_files(&feature.path)?;
                 let file_names: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
 
+                // Detect slice type from file names
+                let slice_type = Self::detect_slice_type(&file_names);
+
                 feature_manifests.push(FeatureManifest {
                     name: feature.name.clone(),
                     path: feature.relative_path.to_string_lossy().to_string(),
                     files: file_names,
+                    slice_type,
                 });
             }
 
             // Detect infrastructure folders
             let infrastructure_folders = Self::detect_infrastructure_folders(&context.path);
 
+            // Count aggregates to classify context type
+            let aggregate_count =
+                Self::count_context_aggregates(&domain_scanner, &context.path, &context.name);
+
+            // Classify context based on aggregate presence
+            let context_type = if aggregate_count > 0 {
+                ContextType::BoundedContext
+            } else {
+                ContextType::InvalidModule
+            };
+
             context_manifests.push(ContextManifest {
                 name: context.name.clone(),
                 path: context.path.to_string_lossy().to_string(),
                 features: feature_manifests,
+                context_type,
+                aggregate_count,
                 infrastructure_folders,
             });
         }
@@ -146,6 +183,54 @@ impl Manifest {
             bounded_contexts: context_manifests,
             domain,
         })
+    }
+
+    /// Count aggregates in a specific context
+    ///
+    /// Returns the number of aggregates found in the context's domain folder.
+    /// Used to classify whether a directory is a valid bounded context.
+    fn count_context_aggregates(
+        domain_scanner: &Option<DomainScanner>,
+        context_path: &std::path::Path,
+        context_name: &str,
+    ) -> usize {
+        if let Some(scanner) = domain_scanner {
+            // Try to scan the context's domain folder
+            match scanner.scan_context(context_path, context_name) {
+                Ok(domain_model) => domain_model.aggregates.len(),
+                Err(_) => 0,
+            }
+        } else {
+            // No domain config - use file-based heuristic
+            Self::count_aggregates_by_filename(context_path)
+        }
+    }
+
+    /// Count aggregates by scanning for *Aggregate.* files (fallback when no domain config)
+    fn count_aggregates_by_filename(context_path: &Path) -> usize {
+        let domain_path = context_path.join("domain");
+        if !domain_path.exists() {
+            return 0;
+        }
+
+        let mut count = 0;
+        // Walk the domain directory looking for *Aggregate.* files
+        for entry in WalkDir::new(&domain_path)
+            .max_depth(3) // Check up to 3 levels deep (domain/aggregate_*/*)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if entry.file_type().is_file() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name.contains("Aggregate.")
+                        && (name.ends_with(".py") || name.ends_with(".ts") || name.ends_with(".rs"))
+                    {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
     }
 
     /// Scan domain models across multiple bounded contexts and merge them
@@ -192,6 +277,69 @@ impl Manifest {
             upcasters: model.upcasters.clone(),
             value_objects: model.value_objects.clone(),
             relationships,
+        }
+    }
+
+    /// Detect slice type from file names
+    ///
+    /// Detection logic:
+    /// - Files ending with "Command.*" indicate a command slice
+    /// - Files ending with "Query.*" or "Projection.*" or named "projection.*" indicate a query slice
+    /// - Files ending with "Saga.*" indicate a saga slice
+    /// - If both command and query indicators found → Mixed
+    /// - If none found → Unknown
+    fn detect_slice_type(file_names: &[String]) -> SliceType {
+        let mut has_command = false;
+        let mut has_query = false;
+        let mut has_saga = false;
+
+        for file_name in file_names {
+            // Remove extension for checking
+            let base = file_name
+                .strip_suffix(".ts")
+                .or_else(|| file_name.strip_suffix(".tsx"))
+                .or_else(|| file_name.strip_suffix(".py"))
+                .or_else(|| file_name.strip_suffix(".rs"))
+                .or_else(|| file_name.strip_suffix(".js"))
+                .or_else(|| file_name.strip_suffix(".jsx"))
+                .unwrap_or(file_name);
+
+            // Skip test files
+            if file_name.contains(".test.")
+                || file_name.contains("_test.")
+                || file_name.starts_with("test_")
+            {
+                continue;
+            }
+
+            // Check for command files
+            if base.ends_with("Command") {
+                has_command = true;
+            }
+
+            // Check for query/projection files
+            if base.ends_with("Query") || base.ends_with("Projection") || base == "projection" {
+                has_query = true;
+            }
+
+            // Check for saga files
+            if base.ends_with("Saga") {
+                has_saga = true;
+            }
+        }
+
+        // Determine slice type based on detected files
+        // Priority: Saga > Mixed > Query > Command > Unknown
+        if has_saga {
+            SliceType::Saga
+        } else if has_command && has_query {
+            SliceType::Mixed
+        } else if has_query {
+            SliceType::Query
+        } else if has_command {
+            SliceType::Command
+        } else {
+            SliceType::Unknown
         }
     }
 
@@ -320,7 +468,10 @@ mod tests {
                         "CreateProductCommand.ts".to_string(),
                         "ProductCreatedEvent.ts".to_string(),
                     ],
+                    slice_type: SliceType::Command,
                 }],
+                context_type: ContextType::BoundedContext,
+                aggregate_count: 2,
                 infrastructure_folders: vec![],
             }],
             domain: None,
@@ -330,6 +481,87 @@ mod tests {
         assert!(json.contains("warehouse"));
         assert!(json.contains("create-product"));
         assert!(json.contains("schema_version"));
+        assert!(json.contains("\"slice_type\": \"command\""));
+        assert!(json.contains("\"context_type\": \"bounded_context\""));
+        assert!(json.contains("\"aggregate_count\": 2"));
+    }
+
+    #[test]
+    fn test_detect_slice_type_command() {
+        let files = vec![
+            "CreateOrderCommand.ts".to_string(),
+            "CreateOrderHandler.ts".to_string(),
+            "OrderCreatedEvent.ts".to_string(),
+        ];
+        assert_eq!(Manifest::detect_slice_type(&files), SliceType::Command);
+    }
+
+    #[test]
+    fn test_detect_slice_type_query() {
+        let files = vec![
+            "ListOrdersQuery.ts".to_string(),
+            "OrderListProjection.ts".to_string(),
+            "ListOrdersHandler.ts".to_string(),
+        ];
+        assert_eq!(Manifest::detect_slice_type(&files), SliceType::Query);
+    }
+
+    #[test]
+    fn test_detect_slice_type_query_projection_only() {
+        // Query slice with only projection file
+        let files = vec!["OrderListProjection.py".to_string(), "handler.py".to_string()];
+        assert_eq!(Manifest::detect_slice_type(&files), SliceType::Query);
+    }
+
+    #[test]
+    fn test_detect_slice_type_saga() {
+        let files =
+            vec!["OrderProcessingSaga.ts".to_string(), "OrderProcessingSagaHandler.ts".to_string()];
+        assert_eq!(Manifest::detect_slice_type(&files), SliceType::Saga);
+    }
+
+    #[test]
+    fn test_detect_slice_type_mixed() {
+        let files = vec![
+            "CreateOrderCommand.ts".to_string(),
+            "GetOrderQuery.ts".to_string(),
+            "OrderHandler.ts".to_string(),
+        ];
+        assert_eq!(Manifest::detect_slice_type(&files), SliceType::Mixed);
+    }
+
+    #[test]
+    fn test_detect_slice_type_unknown() {
+        let files = vec!["utils.ts".to_string(), "helpers.ts".to_string(), "index.ts".to_string()];
+        assert_eq!(Manifest::detect_slice_type(&files), SliceType::Unknown);
+    }
+
+    #[test]
+    fn test_detect_slice_type_ignores_test_files() {
+        // Test files should not affect slice type detection
+        let files = vec![
+            "CreateOrderCommand.test.ts".to_string(),
+            "test_create_order.py".to_string(),
+            "utils.ts".to_string(),
+        ];
+        // Even though test files mention Command, they should be ignored
+        assert_eq!(Manifest::detect_slice_type(&files), SliceType::Unknown);
+    }
+
+    #[test]
+    fn test_detect_slice_type_python_files() {
+        let files =
+            vec!["CreateOrderCommand.py".to_string(), "create_order_handler.py".to_string()];
+        assert_eq!(Manifest::detect_slice_type(&files), SliceType::Command);
+    }
+
+    #[test]
+    fn test_detect_slice_type_rust_files() {
+        let files = vec![
+            "list_orders_query.rs".to_string(), // Note: doesn't end with Query
+            "OrderProjection.rs".to_string(),
+        ];
+        assert_eq!(Manifest::detect_slice_type(&files), SliceType::Query);
     }
 
     #[test]
@@ -353,6 +585,9 @@ mod tests {
                     method_name: "onCreated".to_string(),
                     line_number: 20,
                 }],
+                entities: vec![],
+                value_objects: vec![],
+                folder_name: None,
             }],
             commands: vec![Command {
                 name: "CreateTaskCommand".to_string(),
@@ -445,6 +680,9 @@ mod tests {
                         line_number: 60,
                     },
                 ],
+                entities: vec![],
+                value_objects: vec![],
+                folder_name: None,
             }],
             commands: vec![],
             events: vec![],

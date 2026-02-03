@@ -25,10 +25,10 @@ pub mod validator;
 
 pub use config::{
     AggregateConfig, ArchitectureType, ArchitectureValidation, CommandConfig, CommandSliceConfig,
-    ContextConfig, CqrsValidation, DecoratorValidation, DomainConfig, DomainValidation,
-    EventConfig, EventSourcingValidation, EventVersioningConfig, InfrastructureConfig,
-    LanguageConfig, QueryConfig, QuerySliceConfig, SagaSliceConfig, SliceType, SliceValidation,
-    SlicesConfig, ValidationConfig, VersionFormat, VsaConfig,
+    ContextConfig, ContextType, CqrsValidation, DecoratorValidation, DomainConfig,
+    DomainValidation, EventConfig, EventSourcingValidation, EventVersioningConfig,
+    InfrastructureConfig, LanguageConfig, QueryConfig, QuerySliceConfig, SagaSliceConfig,
+    SliceType, SliceValidation, SlicesConfig, ValidationConfig, VersionFormat, VsaConfig,
 };
 pub use domain::{
     Aggregate, Command, CommandField, CommandHandler, DomainModel, Event, EventField, EventHandler,

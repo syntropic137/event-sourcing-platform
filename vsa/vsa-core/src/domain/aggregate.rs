@@ -24,6 +24,56 @@ pub struct Aggregate {
 
     /// Event sourcing handlers defined in this aggregate
     pub event_handlers: Vec<EventHandler>,
+
+    /// Entities within this aggregate (objects with identity)
+    /// NEW in v2.3.0 - Aggregate relationship visualization
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub entities: Vec<AggregateEntity>,
+
+    /// Value objects within this aggregate (immutable, no identity)
+    /// NEW in v2.3.0 - Aggregate relationship visualization
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub value_objects: Vec<AggregateValueObject>,
+
+    /// Whether this aggregate was found in an aggregate_* folder
+    /// This helps validate proper DDD folder structure
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder_name: Option<String>,
+}
+
+/// An entity within an aggregate (has identity)
+/// Entities are objects with a unique identity that persists through their lifecycle.
+/// They are accessed only through the aggregate root.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AggregateEntity {
+    /// Name of the entity class (e.g., "IsolationHandle", "PhaseExecution")
+    pub name: String,
+
+    /// The identity field that gives this entity its identity (e.g., "isolation_id", "phase_id")
+    pub identity_field: Option<String>,
+
+    /// File path relative to aggregate folder
+    pub file_path: PathBuf,
+
+    /// Line count for metrics
+    pub line_count: usize,
+}
+
+/// A value object within an aggregate (no identity, immutable)
+/// Value objects are defined by their attributes, not by an identity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AggregateValueObject {
+    /// Name of the value object class (e.g., "SecurityPolicy", "ExecutionStatus")
+    pub name: String,
+
+    /// File path relative to aggregate folder
+    pub file_path: PathBuf,
+
+    /// Whether the value object is immutable (frozen=True, readonly, etc.)
+    pub is_immutable: bool,
+
+    /// Line count for metrics
+    pub line_count: usize,
 }
 
 impl Aggregate {
@@ -109,6 +159,9 @@ mod tests {
                     line_number: 85,
                 },
             ],
+            entities: vec![],
+            value_objects: vec![],
+            folder_name: None,
         }
     }
 
@@ -145,10 +198,51 @@ mod tests {
             line_count: 10,
             command_handlers: vec![],
             event_handlers: vec![],
+            entities: vec![],
+            value_objects: vec![],
+            folder_name: None,
         };
 
         assert_eq!(aggregate.handler_count(), 0);
         assert!(!aggregate.handles_command("AnyCommand"));
         assert!(!aggregate.handles_event("AnyEvent"));
+    }
+
+    #[test]
+    fn test_aggregate_with_entities_and_value_objects() {
+        let aggregate = Aggregate {
+            name: "WorkspaceAggregate".to_string(),
+            context: Some("orchestration".to_string()),
+            file_path: PathBuf::from("domain/aggregate_workspace/WorkspaceAggregate.py"),
+            line_count: 200,
+            command_handlers: vec![],
+            event_handlers: vec![],
+            entities: vec![AggregateEntity {
+                name: "IsolationHandle".to_string(),
+                identity_field: Some("isolation_id".to_string()),
+                file_path: PathBuf::from("domain/aggregate_workspace/IsolationHandle.py"),
+                line_count: 50,
+            }],
+            value_objects: vec![
+                AggregateValueObject {
+                    name: "SecurityPolicy".to_string(),
+                    file_path: PathBuf::from("domain/aggregate_workspace/SecurityPolicy.py"),
+                    is_immutable: true,
+                    line_count: 30,
+                },
+                AggregateValueObject {
+                    name: "ExecutionResult".to_string(),
+                    file_path: PathBuf::from("domain/aggregate_workspace/ExecutionResult.py"),
+                    is_immutable: true,
+                    line_count: 25,
+                },
+            ],
+            folder_name: Some("aggregate_workspace".to_string()),
+        };
+
+        assert_eq!(aggregate.entities.len(), 1);
+        assert_eq!(aggregate.value_objects.len(), 2);
+        assert_eq!(aggregate.folder_name, Some("aggregate_workspace".to_string()));
+        assert_eq!(aggregate.entities[0].identity_field, Some("isolation_id".to_string()));
     }
 }

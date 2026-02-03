@@ -10,7 +10,7 @@
  */
 
 import { BaseGenerator } from './base-generator';
-import { Manifest, BoundedContext, Feature } from '../types/manifest';
+import { Manifest, BoundedContext, Feature, SliceType } from '../types/manifest';
 import { SvgBuilder, Point, ArchitectureColors } from '../utils/svg-builder';
 
 interface GridLayout {
@@ -18,6 +18,15 @@ interface GridLayout {
   rows: number;
   cellWidth: number;
   cellHeight: number;
+}
+
+interface VisualizeConfig {
+  /** Maximum features to display per slice type section (default: unlimited/all) */
+  maxFeaturesPerSection?: number;
+  /** Whether to show invalid modules (context_type === 'invalid_module') */
+  showInvalidModules?: boolean;
+  /** Minimum context box height */
+  minContextHeight?: number;
 }
 
 interface LayerConfig {
@@ -36,10 +45,12 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
   private readonly PADDING = 40;
   private readonly SECTION_MARGIN = 20;
   private readonly MAX_COLS = 3;
-  private readonly CONTEXT_CELL_HEIGHT = 180;
+  private readonly MIN_CONTEXT_HEIGHT = 180;
   private readonly SIDEBAR_WIDTH = 280;
   private readonly CQRS_LAYER_HEIGHT = 200;
   private readonly CQRS_BOX_HEIGHT = 120;
+  private readonly FEATURE_LINE_HEIGHT = 18;
+  private readonly SECTION_HEADER_HEIGHT = 20;
   
   // Typography
   private readonly FONT_HEADER = 'Arial, Helvetica, sans-serif';
@@ -59,11 +70,15 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
   };
   
   private layerConfig: LayerConfig = {};
+  private visualizeConfig: VisualizeConfig = {};
   
-  constructor(manifest: Manifest, config?: LayerConfig) {
+  constructor(manifest: Manifest, config?: LayerConfig, visualizeConfig?: VisualizeConfig) {
     super(manifest);
     if (config) {
       this.layerConfig = config;
+    }
+    if (visualizeConfig) {
+      this.visualizeConfig = visualizeConfig;
     }
     
     // Infer layer config from manifest if not provided
@@ -78,14 +93,40 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
    * Calculate required canvas height based on layers to be rendered
    */
   private calculateCanvasHeight(): number {
-    let height = this.BASE_CANVAS_HEIGHT;
+    let height = this.PADDING; // Start with padding
+    
+    // Header height
+    height += 60;
+    
+    // Applications layer (if configured)
+    if (this.layerConfig.applications && this.layerConfig.applications.length > 0) {
+      height += 100;
+    }
+    
+    // Context layer - calculate based on actual content
+    const contexts = this.filterContexts(this.manifest.bounded_contexts || []);
+    if (contexts.length > 0) {
+      const maxContextHeight = Math.max(...contexts.map(ctx => this.calculateContextHeight(ctx)));
+      const cols = Math.min(contexts.length, this.MAX_COLS);
+      const rows = Math.ceil(contexts.length / cols);
+      height += 30 + (rows * (maxContextHeight + 15));
+    }
     
     // Add extra height for CQRS layer if it will be rendered
     if (this.shouldRenderCqrsLayer()) {
       height += this.CQRS_LAYER_HEIGHT;
     }
     
-    return height;
+    // Infrastructure layer
+    if (this.layerConfig.infrastructure && this.layerConfig.infrastructure.length > 0) {
+      height += 120;
+    }
+    
+    // Add bottom padding
+    height += this.PADDING;
+    
+    // Ensure minimum height
+    return Math.max(height, this.BASE_CANVAS_HEIGHT);
   }
   
   /**
@@ -228,14 +269,84 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
   }
   
   /**
+   * Filter contexts - exclude invalid modules unless configured to show them
+   */
+  private filterContexts(contexts: BoundedContext[]): BoundedContext[] {
+    if (this.visualizeConfig.showInvalidModules) {
+      return contexts;
+    }
+    // Only show valid bounded contexts (have aggregates)
+    return contexts.filter(ctx => 
+      ctx.context_type === undefined || ctx.context_type === 'bounded_context'
+    );
+  }
+
+  /**
+   * Calculate required height for a context box based on its content
+   */
+  private calculateContextHeight(context: BoundedContext): number {
+    const features = this.filterFeatures(context.features || []);
+    const grouped = this.groupFeaturesBySliceType(features);
+    
+    // Base height: header + aggregate count + padding
+    let height = 70;
+    
+    // Add height for each non-empty section
+    const sections: SliceType[] = ['command', 'query', 'mixed', 'unknown'];
+    for (const sliceType of sections) {
+      const sectionFeatures = grouped[sliceType] || [];
+      if (sectionFeatures.length > 0) {
+        // Section header + features
+        const maxFeatures = this.visualizeConfig.maxFeaturesPerSection;
+        const displayCount = maxFeatures 
+          ? Math.min(sectionFeatures.length, maxFeatures)
+          : sectionFeatures.length;
+        height += this.SECTION_HEADER_HEIGHT + (displayCount * this.FEATURE_LINE_HEIGHT);
+        // Add "... and X more" line if truncated
+        if (maxFeatures && sectionFeatures.length > maxFeatures) {
+          height += this.FEATURE_LINE_HEIGHT;
+        }
+      }
+    }
+    
+    // Ensure minimum height
+    const minHeight = this.visualizeConfig.minContextHeight || this.MIN_CONTEXT_HEIGHT;
+    return Math.max(height, minHeight);
+  }
+
+  /**
+   * Group features by their slice type
+   */
+  private groupFeaturesBySliceType(features: Feature[]): Record<SliceType, Feature[]> {
+    const grouped: Record<SliceType, Feature[]> = {
+      command: [],
+      query: [],
+      mixed: [],
+      unknown: []
+    };
+    
+    for (const feature of features) {
+      const sliceType = feature.slice_type || 'unknown';
+      grouped[sliceType].push(feature);
+    }
+    
+    return grouped;
+  }
+
+  /**
    * Render domain contexts in grid layout
    */
   private renderContextsLayer(svg: SvgBuilder, startY: number): number {
-    const contexts = this.manifest.bounded_contexts || [];
+    const allContexts = this.manifest.bounded_contexts || [];
+    const contexts = this.filterContexts(allContexts);
     if (contexts.length === 0) return startY;
     
     const availableWidth = this.CANVAS_WIDTH - this.SIDEBAR_WIDTH - (this.PADDING * 2) - this.SECTION_MARGIN;
+    
+    // Calculate max height needed for any context in each row
+    const maxHeight = Math.max(...contexts.map(ctx => this.calculateContextHeight(ctx)));
     const grid = this.calculateGrid(contexts.length, availableWidth);
+    const cellHeight = maxHeight;
     
     // Section title
     svg.text(
@@ -252,13 +363,26 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     const gridStartY = startY + 10;
     
     contexts.forEach((context, index) => {
-      const pos = this.getGridPosition(index, grid, this.PADDING, gridStartY);
-      this.renderContext(svg, context, pos, grid.cellWidth, this.CONTEXT_CELL_HEIGHT, index);
+      const pos = this.getGridPosition(index, grid, this.PADDING, gridStartY, cellHeight);
+      const contextHeight = this.calculateContextHeight(context);
+      this.renderContext(svg, context, pos, grid.cellWidth, contextHeight, index);
     });
     
-    return gridStartY + (grid.rows * (this.CONTEXT_CELL_HEIGHT + 15));
+    return gridStartY + (grid.rows * (cellHeight + 15));
   }
   
+  /**
+   * Get slice type section label with emoji
+   */
+  private getSliceTypeSectionLabel(sliceType: SliceType): string {
+    switch (sliceType) {
+      case 'command': return '⚡ Commands';
+      case 'query': return '📊 Queries';
+      case 'mixed': return '🔀 Mixed';
+      case 'unknown': return '📁 Other';
+    }
+  }
+
   /**
    * Render a single context box
    */
@@ -303,11 +427,12 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       }
     );
     
-    // Feature count
-    const features = this.filterFeatures(context.features || []);
+    // Aggregate count (NEW in v2.2.0)
+    const aggregateCount = context.aggregate_count ?? 0;
+    const aggregateText = aggregateCount === 1 ? '1 aggregate' : `${aggregateCount} aggregates`;
     svg.text(
-      { x: pos.x + 15, y: pos.y + 45 },
-      `(${features.length} feature${features.length !== 1 ? 's' : ''})`,
+      { x: pos.x + 15, y: pos.y + 43 },
+      `(${aggregateText})`,
       {
         fontSize: this.FONT_SIZE_FEATURE,
         fontFamily: this.FONT_HEADER,
@@ -315,36 +440,63 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       }
     );
     
-    // List top features
-    const maxFeatures = 5;
-    const displayFeatures = features.slice(0, maxFeatures);
-    let featureY = pos.y + 65;
+    // Group features by slice type
+    const features = this.filterFeatures(context.features || []);
+    const grouped = this.groupFeaturesBySliceType(features);
     
-    displayFeatures.forEach(feature => {
+    let currentY = pos.y + 60;
+    const maxFeaturesPerSection = this.visualizeConfig.maxFeaturesPerSection;
+    
+    // Render each non-empty slice type section
+    const sliceTypes: SliceType[] = ['command', 'query', 'mixed', 'unknown'];
+    for (const sliceType of sliceTypes) {
+      const sectionFeatures = grouped[sliceType];
+      if (sectionFeatures.length === 0) continue;
+      
+      // Section header
       svg.text(
-        { x: pos.x + 15, y: featureY },
-        `• ${feature.name}`,
+        { x: pos.x + 15, y: currentY },
+        this.getSliceTypeSectionLabel(sliceType),
         {
           fontSize: this.FONT_SIZE_FEATURE,
+          fontWeight: '600',
           fontFamily: this.FONT_HEADER,
-          fill: this.colors.text.primary
+          fill: this.colors.text.secondary
         }
       );
-      featureY += 18;
-    });
-    
-    // Show "..." if there are more features
-    if (features.length > maxFeatures) {
-      svg.text(
-        { x: pos.x + 15, y: featureY },
-        `• ... and ${features.length - maxFeatures} more`,
-        {
-          fontSize: this.FONT_SIZE_FEATURE,
-          fontFamily: this.FONT_HEADER,
-          fill: this.colors.text.tertiary,
-          fontWeight: 'italic'
-        }
-      );
+      currentY += this.SECTION_HEADER_HEIGHT;
+      
+      // List features
+      const displayFeatures = maxFeaturesPerSection 
+        ? sectionFeatures.slice(0, maxFeaturesPerSection)
+        : sectionFeatures;
+      
+      displayFeatures.forEach(feature => {
+        svg.text(
+          { x: pos.x + 20, y: currentY },
+          `• ${feature.name}`,
+          {
+            fontSize: this.FONT_SIZE_FEATURE,
+            fontFamily: this.FONT_HEADER,
+            fill: this.colors.text.primary
+          }
+        );
+        currentY += this.FEATURE_LINE_HEIGHT;
+      });
+      
+      // Show "... and X more" if truncated
+      if (maxFeaturesPerSection && sectionFeatures.length > maxFeaturesPerSection) {
+        svg.text(
+          { x: pos.x + 20, y: currentY },
+          `• ... and ${sectionFeatures.length - maxFeaturesPerSection} more`,
+          {
+            fontSize: this.FONT_SIZE_FEATURE,
+            fontFamily: this.FONT_HEADER,
+            fill: this.colors.text.tertiary
+          }
+        );
+        currentY += this.FEATURE_LINE_HEIGHT;
+      }
     }
   }
   
@@ -544,20 +696,21 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       cols,
       rows,
       cellWidth,
-      cellHeight: this.CONTEXT_CELL_HEIGHT
+      cellHeight: this.MIN_CONTEXT_HEIGHT
     };
   }
   
   /**
    * Get position for item in grid
    */
-  private getGridPosition(index: number, grid: GridLayout, startX: number, startY: number): Point {
+  private getGridPosition(index: number, grid: GridLayout, startX: number, startY: number, cellHeight?: number): Point {
     const col = index % grid.cols;
     const row = Math.floor(index / grid.cols);
+    const height = cellHeight ?? this.MIN_CONTEXT_HEIGHT;
     
     return {
       x: startX + col * (grid.cellWidth + 15),
-      y: startY + row * (this.CONTEXT_CELL_HEIGHT + 15)
+      y: startY + row * (height + 15)
     };
   }
   

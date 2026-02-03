@@ -9,6 +9,7 @@ import { OverviewGenerator } from './generators/overview-generator';
 import { AggregateGenerator } from './generators/aggregate-generator';
 import { FlowsGenerator } from './generators/flows-generator';
 import { ArchitectureSvgGenerator } from './generators/architecture-svg-generator';
+import { AggregateRelationshipGenerator } from './generators/aggregate-relationship-generator';
 import { writeFile, writeFiles, ensureDirectoryExists } from './utils/file-writer';
 
 const program = new Command();
@@ -20,6 +21,7 @@ program
   .argument('[manifest]', 'Path to manifest JSON file or - for stdin', '-')
   .option('-o, --output <dir>', 'Output directory', 'docs/architecture')
   .option('-f, --format <type>', 'Output format: "mermaid" or "svg"', 'mermaid')
+  .option('-t, --type <diagram>', 'Diagram type: "architecture", "aggregates", or "all"', 'architecture')
   .option('-v, --verbose', 'Enable verbose logging', false)
   .addHelpText(
     'after',
@@ -28,14 +30,21 @@ Examples:
   $ vsa-visualizer manifest.json
   $ vsa-visualizer manifest.json --output ./docs/arch
   $ vsa-visualizer manifest.json --format svg --output ./docs
+  $ vsa-visualizer manifest.json --format svg --type aggregates  # Aggregate relationships
+  $ vsa-visualizer manifest.json --format svg --type all          # Both diagrams
   $ vsa manifest --include-domain | vsa-visualizer
   $ vsa-visualizer --help
+
+Diagram types (--type):
+  architecture  Show bounded contexts with features (default)
+  aggregates    Show aggregate relationships with entities/VOs
+  all           Generate both diagrams
 
 For more information, see: https://github.com/your-org/vsa
 `
   )
   .action(
-    async (manifestPath: string, options: { output: string; format: string; verbose: boolean }) => {
+    async (manifestPath: string, options: { output: string; format: string; type: string; verbose: boolean }) => {
       try {
         // Validate format
         if (options.format !== 'mermaid' && options.format !== 'svg') {
@@ -45,11 +54,20 @@ For more information, see: https://github.com/your-org/vsa
           process.exit(1);
         }
 
+        // Validate diagram type
+        if (!['architecture', 'aggregates', 'all'].includes(options.type)) {
+          console.error(
+            `Error: Unsupported diagram type "${options.type}". Supported types: "architecture", "aggregates", "all"`
+          );
+          process.exit(1);
+        }
+
         if (options.verbose) {
           console.log('[vsa-visualizer] Starting...');
           console.log(`[vsa-visualizer] Manifest path: ${manifestPath}`);
           console.log(`[vsa-visualizer] Output directory: ${options.output}`);
           console.log(`[vsa-visualizer] Output format: ${options.format}`);
+          console.log(`[vsa-visualizer] Diagram type: ${options.type}`);
         }
 
         // Read manifest
@@ -108,21 +126,47 @@ For more information, see: https://github.com/your-org/vsa
 
         // Handle SVG format separately
         if (options.format === 'svg') {
-          if (options.verbose) {
-            console.log('[vsa-visualizer] Generating SVG architecture diagram...');
+          const diagramTypes = options.type === 'all'
+            ? ['architecture', 'aggregates']
+            : [options.type];
+
+          for (const diagramType of diagramTypes) {
+            if (diagramType === 'architecture') {
+              if (options.verbose) {
+                console.log('[vsa-visualizer] Generating SVG architecture diagram...');
+              }
+
+              const svgGenerator = new ArchitectureSvgGenerator(manifest);
+              const svgContent = svgGenerator.generate();
+              const svgPath = path.join(options.output, 'ARCHITECTURE.svg');
+              writeFile(svgPath, svgContent);
+              generatedFiles.push(svgPath);
+            } else if (diagramType === 'aggregates') {
+              if (options.verbose) {
+                console.log('[vsa-visualizer] Generating SVG aggregate relationship diagram...');
+              }
+
+              const aggregateRelGenerator = new AggregateRelationshipGenerator(manifest, {
+                showDetails: true,
+                showEventFlow: true,
+              });
+              const svgContent = aggregateRelGenerator.generate();
+              const svgPath = path.join(options.output, 'AGGREGATES.svg');
+              writeFile(svgPath, svgContent);
+              generatedFiles.push(svgPath);
+            }
           }
 
-          const svgGenerator = new ArchitectureSvgGenerator(manifest);
-          const svgContent = svgGenerator.generate();
-          const svgPath = path.join(options.output, 'ARCHITECTURE.svg');
-          writeFile(svgPath, svgContent);
-          generatedFiles.push(svgPath);
-
-          console.log('\n✅ SVG diagram generated successfully!');
+          console.log('\n✅ SVG diagram(s) generated successfully!');
           console.log('\n📊 Summary:');
           console.log(`   Contexts:   ${manifest.bounded_contexts?.length || 0}`);
+          if (manifest.domain) {
+            console.log(`   Aggregates: ${manifest.domain.aggregates.length}`);
+          }
           console.log('\n📝 Generated files:');
-          console.log(`   - ${svgPath}`);
+          for (const filePath of generatedFiles) {
+            console.log(`   - ${filePath}`);
+          }
 
           return;
         }
