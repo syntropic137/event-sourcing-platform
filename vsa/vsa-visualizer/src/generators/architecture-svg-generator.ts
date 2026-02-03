@@ -103,13 +103,22 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       height += 100;
     }
     
-    // Context layer - calculate based on actual content
+    // Context layer - calculate based on actual content with per-row heights
     const contexts = this.filterContexts(this.manifest.bounded_contexts || []);
     if (contexts.length > 0) {
-      const maxContextHeight = Math.max(...contexts.map(ctx => this.calculateContextHeight(ctx)));
       const cols = Math.min(contexts.length, this.MAX_COLS);
       const rows = Math.ceil(contexts.length / cols);
-      height += 30 + (rows * (maxContextHeight + 15));
+      const heights = contexts.map(ctx => this.calculateContextHeight(ctx));
+      
+      // Sum up max height per row
+      let contextLayerHeight = 30; // Section header
+      for (let row = 0; row < rows; row++) {
+        const rowStart = row * cols;
+        const rowEnd = Math.min(rowStart + cols, contexts.length);
+        const rowMaxHeight = Math.max(...heights.slice(rowStart, rowEnd));
+        contextLayerHeight += rowMaxHeight + 15;
+      }
+      height += contextLayerHeight;
     }
     
     // Add extra height for CQRS layer if it will be rendered
@@ -288,8 +297,17 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     const features = this.filterFeatures(context.features || []);
     const grouped = this.groupFeaturesBySliceType(features);
     
-    // Base height: header + aggregate count + padding
-    let height = 70;
+    // Base height: header + padding
+    let height = 50;
+    
+    // Add height for aggregates section
+    const contextAggregates = (this.manifest.domain?.aggregates || [])
+      .filter(agg => agg.context === context.name);
+    if (contextAggregates.length > 0) {
+      height += this.SECTION_HEADER_HEIGHT; // "Aggregates:" header
+      height += contextAggregates.length * this.FEATURE_LINE_HEIGHT; // aggregate list
+      height += 5; // gap before features
+    }
     
     // Add height for each non-empty section
     const sections: SliceType[] = ['command', 'query', 'mixed', 'unknown'];
@@ -343,10 +361,19 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     
     const availableWidth = this.CANVAS_WIDTH - this.SIDEBAR_WIDTH - (this.PADDING * 2) - this.SECTION_MARGIN;
     
-    // Calculate max height needed for any context in each row
-    const maxHeight = Math.max(...contexts.map(ctx => this.calculateContextHeight(ctx)));
     const grid = this.calculateGrid(contexts.length, availableWidth);
-    const cellHeight = maxHeight;
+    
+    // Calculate heights for each context
+    const heights = contexts.map(ctx => this.calculateContextHeight(ctx));
+    
+    // Calculate max height per row
+    const rowHeights: number[] = [];
+    for (let row = 0; row < grid.rows; row++) {
+      const rowStart = row * grid.cols;
+      const rowEnd = Math.min(rowStart + grid.cols, contexts.length);
+      const rowMaxHeight = Math.max(...heights.slice(rowStart, rowEnd));
+      rowHeights.push(rowMaxHeight);
+    }
     
     // Section title
     svg.text(
@@ -362,13 +389,26 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     
     const gridStartY = startY + 10;
     
+    // Calculate cumulative Y positions for each row
+    const rowYPositions: number[] = [gridStartY];
+    for (let i = 0; i < rowHeights.length - 1; i++) {
+      rowYPositions.push(rowYPositions[i] + rowHeights[i] + 15);
+    }
+    
     contexts.forEach((context, index) => {
-      const pos = this.getGridPosition(index, grid, this.PADDING, gridStartY, cellHeight);
-      const contextHeight = this.calculateContextHeight(context);
+      const col = index % grid.cols;
+      const row = Math.floor(index / grid.cols);
+      const pos = {
+        x: this.PADDING + col * (grid.cellWidth + 15),
+        y: rowYPositions[row]
+      };
+      const contextHeight = heights[index];
       this.renderContext(svg, context, pos, grid.cellWidth, contextHeight, index);
     });
     
-    return gridStartY + (grid.rows * (cellHeight + 15));
+    // Return total height used
+    const totalHeight = rowYPositions[rowYPositions.length - 1] + rowHeights[rowHeights.length - 1] + 15;
+    return totalHeight;
   }
   
   /**
@@ -742,8 +782,12 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
    * Filter out infrastructure and organizational folders from features
    */
   private filterFeatures(features: Feature[]): Feature[] {
-    const excluded = ['domain', 'slices', 'ports', 'application', 'events', 'commands', 'queries', 'read_models'];
-    return features.filter(f => !excluded.includes(f.name) && !f.name.startsWith('_'));
+    const excluded = ['domain', 'slices', 'ports', 'application', 'events', 'commands', 'queries', 'read_models', 'services'];
+    return features.filter(f => 
+      !excluded.includes(f.name) && 
+      !f.name.startsWith('_') &&
+      !f.name.startsWith('aggregate_')  // Aggregate folders are shown in Aggregates section
+    );
   }
   
   /**
