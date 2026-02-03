@@ -138,7 +138,7 @@ For more information, see: https://github.com/your-org/vsa
 
               const svgGenerator = new ArchitectureSvgGenerator(manifest);
               const svgContent = svgGenerator.generate();
-              const svgPath = path.join(options.output, 'ARCHITECTURE.svg');
+              const svgPath = path.join(options.output, 'vsa-overview.svg');
               writeFile(svgPath, svgContent);
               generatedFiles.push(svgPath);
             } else if (diagramType === 'aggregates') {
@@ -151,7 +151,7 @@ For more information, see: https://github.com/your-org/vsa
                 showEventFlow: true,
               });
               const svgContent = aggregateRelGenerator.generate();
-              const svgPath = path.join(options.output, 'AGGREGATES.svg');
+              const svgPath = path.join(options.output, 'aggregates-overview.svg');
               writeFile(svgPath, svgContent);
               generatedFiles.push(svgPath);
             }

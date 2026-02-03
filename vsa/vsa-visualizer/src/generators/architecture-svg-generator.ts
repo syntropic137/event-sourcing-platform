@@ -427,24 +427,48 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       }
     );
     
-    // Aggregate count (NEW in v2.2.0)
-    const aggregateCount = context.aggregate_count ?? 0;
-    const aggregateText = aggregateCount === 1 ? '1 aggregate' : `${aggregateCount} aggregates`;
-    svg.text(
-      { x: pos.x + 15, y: pos.y + 43 },
-      `(${aggregateText})`,
-      {
-        fontSize: this.FONT_SIZE_FEATURE,
-        fontFamily: this.FONT_HEADER,
-        fill: this.colors.text.secondary
-      }
-    );
+    // Aggregates section (v2.3.0 - show as proper section with header)
+    const contextAggregates = (this.manifest.domain?.aggregates || [])
+      .filter(agg => agg.context === context.name)
+      .map(agg => agg.name.replace(/Aggregate$/, ''));
+    
+    let currentY = pos.y + 50;
+    
+    if (contextAggregates.length > 0) {
+      // Section header
+      svg.text(
+        { x: pos.x + 15, y: currentY },
+        'Aggregates:',
+        {
+          fontSize: this.FONT_SIZE_FEATURE,
+          fontWeight: '600',
+          fontFamily: this.FONT_HEADER,
+          fill: this.colors.text.secondary
+        }
+      );
+      currentY += this.SECTION_HEADER_HEIGHT;
+      
+      // List aggregates
+      contextAggregates.forEach(aggName => {
+        svg.text(
+          { x: pos.x + 20, y: currentY },
+          `• ${aggName}`,
+          {
+            fontSize: this.FONT_SIZE_FEATURE,
+            fontFamily: this.FONT_HEADER,
+            fill: this.colors.text.primary
+          }
+        );
+        currentY += this.FEATURE_LINE_HEIGHT;
+      });
+      
+      currentY += 5; // Small gap before features
+    }
     
     // Group features by slice type
     const features = this.filterFeatures(context.features || []);
     const grouped = this.groupFeaturesBySliceType(features);
     
-    let currentY = pos.y + 60;
     const maxFeaturesPerSection = this.visualizeConfig.maxFeaturesPerSection;
     
     // Render each non-empty slice type section
