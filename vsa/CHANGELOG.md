@@ -5,6 +5,28 @@ All notable changes to the VSA (Vertical Slice Architecture Manager) project wil
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-02-03
+
+### Added
+
+#### VSA Core v0.8.0 - Bounded Context Validation & Aggregate Visualization 🎯
+
+**Bounded Context Validation (vsa-core)**
+- Added `ContextType` classification for bounded contexts
+- `SliceType` detection for command vs query slices
+- Aggregate relationship detection and visualization
+- ADR-020 bounded context aggregate convention documentation
+
+**Aggregate Relationship SVG Visualization (vsa-visualizer)**
+- New aggregate relationship SVG rendering
+- Enhanced visualization for bounded context structures
+- Tests for aggregate visualization components
+
+**Documentation:**
+- Added ADR-020: Bounded Context Aggregate Convention
+
+---
+
 ## [Unreleased]
 
 ### Added
@@ -146,10 +168,10 @@ vsa manifest --include-domain | vsa-visualizer --output ./docs/architecture
 
 ### Technical Details
 
-**Lines of Code**: ~1,600 lines of Rust  
-**Test Coverage**: 13 passing tests  
-**Dependencies**: clap, serde, serde_yaml, handlebars, walkdir, regex, chrono  
-**Rust Edition**: 2021  
+**Lines of Code**: ~1,600 lines of Rust
+**Test Coverage**: 13 passing tests
+**Dependencies**: clap, serde, serde_yaml, handlebars, walkdir, regex, chrono
+**Rust Edition**: 2021
 **Minimum Rust Version**: 1.70+
 
 ### Next Steps
@@ -162,4 +184,3 @@ See Milestone 2 in PROJECT-PLAN for upcoming features:
 
 [unreleased]: https://github.com/yourusername/vsa/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/yourusername/vsa/releases/tag/v0.1.0
-
