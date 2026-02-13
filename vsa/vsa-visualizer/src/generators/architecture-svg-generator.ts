@@ -419,7 +419,7 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       case 'command': return '⚡ Commands';
       case 'query': return '📊 Queries';
       case 'mixed': return '🔀 Mixed';
-      case 'unknown': return '📁 Other';
+      case 'unknown': return '⚡ Commands';
     }
   }
 

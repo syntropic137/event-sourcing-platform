@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -122,8 +123,8 @@ impl Manifest {
                 let files = scanner.scan_feature_files(&feature.path)?;
                 let file_names: Vec<String> = files.iter().map(|f| f.name.clone()).collect();
 
-                // Detect slice type from file names
-                let slice_type = Self::detect_slice_type(&file_names);
+                // Detect slice type from slice.yaml first, then file names
+                let slice_type = Self::detect_slice_type(&feature.path, &file_names);
 
                 feature_manifests.push(FeatureManifest {
                     name: feature.name.clone(),
@@ -280,15 +281,73 @@ impl Manifest {
         }
     }
 
-    /// Detect slice type from file names
+    /// Detect slice type from slice.yaml (if present) or file names
     ///
-    /// Detection logic:
-    /// - Files ending with "Command.*" indicate a command slice
-    /// - Files ending with "Query.*" or "Projection.*" or named "projection.*" indicate a query slice
-    /// - Files ending with "Saga.*" indicate a saga slice
-    /// - If both command and query indicators found → Mixed
-    /// - If none found → Unknown
-    fn detect_slice_type(file_names: &[String]) -> SliceType {
+    /// Detection priority:
+    /// 1. Explicit `type:` field in slice.yaml (command, query, saga, mixed)
+    /// 2. Implicit from slice.yaml structure (`query:` key → query, `command:` key → command)
+    /// 3. File name patterns (*Command.*, *Query.*, *Projection.*, projection.*)
+    fn detect_slice_type(feature_path: &Path, file_names: &[String]) -> SliceType {
+        // 1. Try slice.yaml first
+        if let Some(slice_type) = Self::detect_slice_type_from_yaml(feature_path) {
+            return slice_type;
+        }
+
+        // 2. Fall back to file-name detection
+        Self::detect_slice_type_from_files(file_names)
+    }
+
+    /// Try to detect slice type from slice.yaml or slice.yml
+    fn detect_slice_type_from_yaml(feature_path: &Path) -> Option<SliceType> {
+        let yaml_path = feature_path.join("slice.yaml");
+        let yml_path = feature_path.join("slice.yml");
+
+        let path = if yaml_path.exists() {
+            yaml_path
+        } else if yml_path.exists() {
+            yml_path
+        } else {
+            return None;
+        };
+
+        let content = fs::read_to_string(&path).ok()?;
+
+        // Try to parse as YAML value to check for type field and section keys
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
+        let mapping = yaml.as_mapping()?;
+
+        // Check explicit `type:` field first
+        if let Some(type_val) = mapping.get(&serde_yaml::Value::String("type".to_string())) {
+            if let Some(type_str) = type_val.as_str() {
+                return Some(match type_str.to_lowercase().as_str() {
+                    "command" => SliceType::Command,
+                    "query" => SliceType::Query,
+                    "saga" => SliceType::Saga,
+                    "mixed" => SliceType::Mixed,
+                    _ => SliceType::Unknown,
+                });
+            }
+        }
+
+        // Infer from section keys: `query:` or `command:` keys
+        let has_query_key = mapping
+            .contains_key(&serde_yaml::Value::String("query".to_string()));
+        let has_command_key = mapping
+            .contains_key(&serde_yaml::Value::String("command".to_string()));
+
+        if has_command_key && has_query_key {
+            Some(SliceType::Mixed)
+        } else if has_query_key {
+            Some(SliceType::Query)
+        } else if has_command_key {
+            Some(SliceType::Command)
+        } else {
+            None // No type info in yaml, fall through to file detection
+        }
+    }
+
+    /// Detect slice type from file naming conventions
+    fn detect_slice_type_from_files(file_names: &[String]) -> SliceType {
         let mut has_command = false;
         let mut has_query = false;
         let mut has_saga = false;
