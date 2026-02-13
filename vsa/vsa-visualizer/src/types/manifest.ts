@@ -107,6 +107,7 @@ export interface Command {
   target_aggregate?: string;
   has_aggregate_id: boolean;
   fields: Field[];
+  context?: string;                 // NEW in v2.3.0 - bounded context this command belongs to
 }
 
 export interface Event {
@@ -118,6 +119,7 @@ export interface Event {
   handled_by: string[];
   fields: Field[];
   decorator_present: boolean;
+  context?: string;                 // NEW in v2.3.0 - bounded context this event belongs to
 }
 
 export interface Field {

@@ -10,7 +10,7 @@
  */
 
 import { BaseGenerator } from './base-generator';
-import { Manifest, BoundedContext, Feature, SliceType } from '../types/manifest';
+import { Manifest, BoundedContext, Feature } from '../types/manifest';
 import { SvgBuilder, Point, ArchitectureColors } from '../utils/svg-builder';
 
 interface GridLayout {
@@ -294,61 +294,48 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
    * Calculate required height for a context box based on its content
    */
   private calculateContextHeight(context: BoundedContext): number {
-    const features = this.filterFeatures(context.features || []);
-    const grouped = this.groupFeaturesBySliceType(features);
-    
     // Base height: header + padding
     let height = 50;
-    
-    // Add height for aggregates section
+
+    // Aggregates section
     const contextAggregates = (this.manifest.domain?.aggregates || [])
       .filter(agg => agg.context === context.name);
     if (contextAggregates.length > 0) {
-      height += this.SECTION_HEADER_HEIGHT; // "Aggregates:" header
-      height += contextAggregates.length * this.FEATURE_LINE_HEIGHT; // aggregate list
-      height += 5; // gap before features
+      height += this.SECTION_HEADER_HEIGHT;
+      height += contextAggregates.length * this.FEATURE_LINE_HEIGHT;
+      height += 5;
     }
-    
-    // Add height for each non-empty section
-    const sections: SliceType[] = ['command', 'query', 'mixed', 'unknown'];
-    for (const sliceType of sections) {
-      const sectionFeatures = grouped[sliceType] || [];
-      if (sectionFeatures.length > 0) {
-        // Section header + features
-        const maxFeatures = this.visualizeConfig.maxFeaturesPerSection;
-        const displayCount = maxFeatures 
-          ? Math.min(sectionFeatures.length, maxFeatures)
-          : sectionFeatures.length;
-        height += this.SECTION_HEADER_HEIGHT + (displayCount * this.FEATURE_LINE_HEIGHT);
-        // Add "... and X more" line if truncated
-        if (maxFeatures && sectionFeatures.length > maxFeatures) {
-          height += this.FEATURE_LINE_HEIGHT;
-        }
+
+    // Features section (flat list of all slices)
+    const features = this.filterFeatures(context.features || []);
+    if (features.length > 0) {
+      const maxFeatures = this.visualizeConfig.maxFeaturesPerSection;
+      const displayCount = maxFeatures
+        ? Math.min(features.length, maxFeatures)
+        : features.length;
+      height += this.SECTION_HEADER_HEIGHT + (displayCount * this.FEATURE_LINE_HEIGHT);
+      if (maxFeatures && features.length > maxFeatures) {
+        height += this.FEATURE_LINE_HEIGHT;
       }
     }
-    
+
+    // Commands section
+    const contextCommands = (this.manifest.domain?.commands || [])
+      .filter(cmd => cmd.context === context.name);
+    if (contextCommands.length > 0) {
+      height += this.SECTION_HEADER_HEIGHT + (contextCommands.length * this.FEATURE_LINE_HEIGHT);
+    }
+
+    // Events section
+    const contextEvents = (this.manifest.domain?.events || [])
+      .filter(evt => evt.context === context.name);
+    if (contextEvents.length > 0) {
+      height += this.SECTION_HEADER_HEIGHT + (contextEvents.length * this.FEATURE_LINE_HEIGHT);
+    }
+
     // Ensure minimum height
     const minHeight = this.visualizeConfig.minContextHeight || this.MIN_CONTEXT_HEIGHT;
     return Math.max(height, minHeight);
-  }
-
-  /**
-   * Group features by their slice type
-   */
-  private groupFeaturesBySliceType(features: Feature[]): Record<SliceType, Feature[]> {
-    const grouped: Record<SliceType, Feature[]> = {
-      command: [],
-      query: [],
-      mixed: [],
-      unknown: []
-    };
-    
-    for (const feature of features) {
-      const sliceType = feature.slice_type || 'unknown';
-      grouped[sliceType].push(feature);
-    }
-    
-    return grouped;
   }
 
   /**
@@ -411,18 +398,6 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     return totalHeight;
   }
   
-  /**
-   * Get slice type section label with emoji
-   */
-  private getSliceTypeSectionLabel(sliceType: SliceType): string {
-    switch (sliceType) {
-      case 'command': return '⚡ Commands';
-      case 'query': return '📊 Queries';
-      case 'mixed': return '🔀 Mixed';
-      case 'unknown': return '⚡ Commands';
-    }
-  }
-
   /**
    * Render a single context box
    */
@@ -505,22 +480,14 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       currentY += 5; // Small gap before features
     }
     
-    // Group features by slice type
+    // Features section (flat list of all slices)
     const features = this.filterFeatures(context.features || []);
-    const grouped = this.groupFeaturesBySliceType(features);
-    
     const maxFeaturesPerSection = this.visualizeConfig.maxFeaturesPerSection;
-    
-    // Render each non-empty slice type section
-    const sliceTypes: SliceType[] = ['command', 'query', 'mixed', 'unknown'];
-    for (const sliceType of sliceTypes) {
-      const sectionFeatures = grouped[sliceType];
-      if (sectionFeatures.length === 0) continue;
-      
-      // Section header
+
+    if (features.length > 0) {
       svg.text(
         { x: pos.x + 15, y: currentY },
-        this.getSliceTypeSectionLabel(sliceType),
+        '📋 Features',
         {
           fontSize: this.FONT_SIZE_FEATURE,
           fontWeight: '600',
@@ -529,12 +496,11 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
         }
       );
       currentY += this.SECTION_HEADER_HEIGHT;
-      
-      // List features
-      const displayFeatures = maxFeaturesPerSection 
-        ? sectionFeatures.slice(0, maxFeaturesPerSection)
-        : sectionFeatures;
-      
+
+      const displayFeatures = maxFeaturesPerSection
+        ? features.slice(0, maxFeaturesPerSection)
+        : features;
+
       displayFeatures.forEach(feature => {
         svg.text(
           { x: pos.x + 20, y: currentY },
@@ -547,12 +513,11 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
         );
         currentY += this.FEATURE_LINE_HEIGHT;
       });
-      
-      // Show "... and X more" if truncated
-      if (maxFeaturesPerSection && sectionFeatures.length > maxFeaturesPerSection) {
+
+      if (maxFeaturesPerSection && features.length > maxFeaturesPerSection) {
         svg.text(
           { x: pos.x + 20, y: currentY },
-          `• ... and ${sectionFeatures.length - maxFeaturesPerSection} more`,
+          `• ... and ${features.length - maxFeaturesPerSection} more`,
           {
             fontSize: this.FONT_SIZE_FEATURE,
             fontFamily: this.FONT_HEADER,
@@ -561,6 +526,70 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
         );
         currentY += this.FEATURE_LINE_HEIGHT;
       }
+    }
+
+    // Commands section (from domain.commands filtered by context)
+    const contextCommands = (this.manifest.domain?.commands || [])
+      .filter(cmd => cmd.context === context.name)
+      .map(cmd => cmd.name.replace(/Command$/, ''));
+
+    if (contextCommands.length > 0) {
+      svg.text(
+        { x: pos.x + 15, y: currentY },
+        '⚡ Commands',
+        {
+          fontSize: this.FONT_SIZE_FEATURE,
+          fontWeight: '600',
+          fontFamily: this.FONT_HEADER,
+          fill: this.colors.text.secondary
+        }
+      );
+      currentY += this.SECTION_HEADER_HEIGHT;
+
+      contextCommands.forEach(cmdName => {
+        svg.text(
+          { x: pos.x + 20, y: currentY },
+          `• ${cmdName}`,
+          {
+            fontSize: this.FONT_SIZE_FEATURE,
+            fontFamily: this.FONT_HEADER,
+            fill: this.colors.text.primary
+          }
+        );
+        currentY += this.FEATURE_LINE_HEIGHT;
+      });
+    }
+
+    // Events section (from domain.events filtered by context)
+    const contextEvents = (this.manifest.domain?.events || [])
+      .filter(evt => evt.context === context.name)
+      .map(evt => evt.name.replace(/Event$/, ''));
+
+    if (contextEvents.length > 0) {
+      svg.text(
+        { x: pos.x + 15, y: currentY },
+        '📨 Events',
+        {
+          fontSize: this.FONT_SIZE_FEATURE,
+          fontWeight: '600',
+          fontFamily: this.FONT_HEADER,
+          fill: this.colors.text.secondary
+        }
+      );
+      currentY += this.SECTION_HEADER_HEIGHT;
+
+      contextEvents.forEach(evtName => {
+        svg.text(
+          { x: pos.x + 20, y: currentY },
+          `• ${evtName}`,
+          {
+            fontSize: this.FONT_SIZE_FEATURE,
+            fontFamily: this.FONT_HEADER,
+            fill: this.colors.text.primary
+          }
+        );
+        currentY += this.FEATURE_LINE_HEIGHT;
+      });
     }
   }
   
