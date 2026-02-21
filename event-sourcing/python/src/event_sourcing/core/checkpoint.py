@@ -10,6 +10,7 @@ This module provides the core abstractions for checkpointed projections:
 See ADR-014 for architectural decision rationale.
 """
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -349,3 +350,107 @@ class CheckpointedProjection(ABC):
         """
         subscribed = self.get_subscribed_event_types()
         return subscribed is None or event_type in subscribed
+
+
+def _camel_to_snake(name: str) -> str:
+    """Convert CamelCase event type name to snake_case handler name.
+
+    Examples:
+        WorkflowExecutionStarted -> workflow_execution_started
+        ExecutionCancelled -> execution_cancelled
+        PhaseStarted -> phase_started
+    """
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+def _snake_to_camel(name: str) -> str:
+    """Convert snake_case handler suffix to CamelCase event type name.
+
+    Examples:
+        workflow_execution_started -> WorkflowExecutionStarted
+        execution_cancelled -> ExecutionCancelled
+        phase_started -> PhaseStarted
+    """
+    return "".join(part.capitalize() for part in name.split("_"))
+
+
+class AutoDispatchProjection(CheckpointedProjection, ABC):
+    """Projection base class with automatic event dispatch.
+
+    Eliminates the two-places-to-update problem in projections:
+
+    OLD pattern (fragile):
+        _SUBSCRIBED_EVENTS = {"EventA", "EventB"}  # 1. Add here
+        async def handle_event(...):
+            if event_type == "EventA": ...       # 2. And here — easy to miss
+            elif event_type == "EventB": ...
+
+    NEW pattern (safe):
+        async def on_event_a(self, data): ...    # Only place to add
+        async def on_event_b(self, data): ...
+
+    Convention: define ``async def on_<snake_case_event_type>(self, data: dict)``
+    methods. The base class:
+    - Automatically derives ``get_subscribed_event_types()`` from those methods
+    - Automatically dispatches each event to the right handler
+    - Saves the checkpoint after every successful dispatch
+
+    Subclasses must still implement:
+    - ``get_name() -> str``
+    - ``get_version() -> int``
+    - ``clear_all_data() -> None``
+    """
+
+    @classmethod
+    def _discover_handlers(cls) -> dict[str, str]:
+        """Map event type -> handler method name by scanning on_* methods.
+
+        Scans the MRO so inherited handlers are included. Ignores non-async
+        methods and private helpers (double-underscore names).
+
+        Returns:
+            Dict of {event_type: method_name}, e.g.
+            {"WorkflowExecutionStarted": "on_workflow_execution_started"}
+        """
+        handlers: dict[str, str] = {}
+        for klass in reversed(cls.__mro__):
+            for attr_name, attr_value in vars(klass).items():
+                if not attr_name.startswith("on_") or not callable(attr_value):
+                    continue
+                suffix = attr_name[3:]  # strip "on_"
+                event_type = _snake_to_camel(suffix)
+                handlers[event_type] = attr_name
+        return handlers
+
+    def get_subscribed_event_types(self) -> set[str] | None:
+        """Derived automatically from on_* method names — do not override."""
+        return set(self._discover_handlers().keys())
+
+    async def handle_event(
+        self,
+        envelope: "EventEnvelope[Any]",
+        checkpoint_store: "ProjectionCheckpointStore",
+    ) -> "ProjectionResult":
+        """Auto-dispatch to the matching on_* handler and save checkpoint."""
+        event_type = envelope.event.event_type
+        event_data = envelope.event.model_dump()
+        global_nonce = envelope.metadata.global_nonce or 0
+
+        try:
+            handler_name = self._discover_handlers().get(event_type)
+            if handler_name:
+                handler = getattr(self, handler_name)
+                await handler(event_data)
+
+            await checkpoint_store.save_checkpoint(
+                ProjectionCheckpoint(
+                    projection_name=self.get_name(),
+                    global_position=global_nonce,
+                    updated_at=datetime.now(UTC),
+                    version=self.get_version(),
+                )
+            )
+            return ProjectionResult.SUCCESS
+
+        except Exception:
+            return ProjectionResult.FAILURE

@@ -177,10 +177,14 @@ class SubscriptionCoordinator:
         """
         Get the minimum checkpoint position across all projections.
 
+        Checks ALL projections for version mismatches before returning,
+        so that multiple projections bumped simultaneously are all rebuilt.
+
         Returns:
             Position to start subscription from
         """
         min_pos: int | None = None
+        needs_full_replay = False
 
         for name, projection in self._projections.items():
             checkpoint = await self._checkpoint_store.get_checkpoint(name)
@@ -191,7 +195,8 @@ class SubscriptionCoordinator:
                     "Projection has no checkpoint, starting from 0",
                     extra={"projection_name": name},
                 )
-                return 0
+                needs_full_replay = True
+                continue
 
             # Check version mismatch (needs rebuild)
             if checkpoint.version != projection.get_version():
@@ -206,10 +211,14 @@ class SubscriptionCoordinator:
                 # Clear projection data before replay to avoid data corruption
                 await projection.clear_all_data()
                 await self._checkpoint_store.delete_checkpoint(name)
-                return 0
+                needs_full_replay = True
+                continue
 
             if min_pos is None or checkpoint.global_position < min_pos:
                 min_pos = checkpoint.global_position
+
+        if needs_full_replay:
+            return 0
 
         # Start from next position after minimum
         return (min_pos or 0) + 1
