@@ -10,12 +10,14 @@ This module provides the core abstractions for checkpointed projections:
 See ADR-014 for architectural decision rationale.
 """
 
-import re
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from event_sourcing.core.event import EventEnvelope
@@ -352,17 +354,6 @@ class CheckpointedProjection(ABC):
         return subscribed is None or event_type in subscribed
 
 
-def _camel_to_snake(name: str) -> str:
-    """Convert CamelCase event type name to snake_case handler name.
-
-    Examples:
-        WorkflowExecutionStarted -> workflow_execution_started
-        ExecutionCancelled -> execution_cancelled
-        PhaseStarted -> phase_started
-    """
-    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
-
-
 def _snake_to_camel(name: str) -> str:
     """Convert snake_case handler suffix to CamelCase event type name.
 
@@ -401,17 +392,24 @@ class AutoDispatchProjection(CheckpointedProjection, ABC):
     - ``clear_all_data() -> None``
     """
 
+    _handler_cache: dict[type, dict[str, str]] = {}
+
     @classmethod
     def _discover_handlers(cls) -> dict[str, str]:
-        """Map event type -> handler method name by scanning on_* methods.
+        """Map event type -> handler method name by scanning ``on_*`` methods.
 
-        Scans the MRO so inherited handlers are included. Ignores non-async
-        methods and private helpers (double-underscore names).
+        Scans the MRO so inherited handlers are included. Collects all
+        callable ``on_*`` methods from the class hierarchy.
+
+        Results are cached per-class to avoid re-walking the MRO on every event.
 
         Returns:
             Dict of {event_type: method_name}, e.g.
             {"WorkflowExecutionStarted": "on_workflow_execution_started"}
         """
+        if cls in cls._handler_cache:
+            return cls._handler_cache[cls]
+
         handlers: dict[str, str] = {}
         for klass in reversed(cls.__mro__):
             for attr_name, attr_value in vars(klass).items():
@@ -420,6 +418,8 @@ class AutoDispatchProjection(CheckpointedProjection, ABC):
                 suffix = attr_name[3:]  # strip "on_"
                 event_type = _snake_to_camel(suffix)
                 handlers[event_type] = attr_name
+
+        cls._handler_cache[cls] = handlers
         return handlers
 
     def get_subscribed_event_types(self) -> set[str] | None:
@@ -453,4 +453,9 @@ class AutoDispatchProjection(CheckpointedProjection, ABC):
             return ProjectionResult.SUCCESS
 
         except Exception:
+            logger.exception(
+                "AutoDispatchProjection handler failed for event %s in %s",
+                event_type,
+                self.get_name(),
+            )
             return ProjectionResult.FAILURE
