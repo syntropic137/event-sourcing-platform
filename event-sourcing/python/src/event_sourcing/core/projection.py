@@ -9,6 +9,7 @@ All projections should inherit from CheckpointedProjection.
 
 # Re-export all checkpoint types from the canonical location
 from event_sourcing.core.checkpoint import (
+    AutoDispatchProjection,
     CheckpointedProjection,
     ProjectionCheckpoint,
     ProjectionCheckpointStore,
@@ -16,6 +17,7 @@ from event_sourcing.core.checkpoint import (
 )
 
 __all__ = [
+    "AutoDispatchProjection",
     "CheckpointedProjection",
     "ProjectionCheckpoint",
     "ProjectionCheckpointStore",

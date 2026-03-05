@@ -58,6 +58,16 @@ impl Scanner {
         current_path: &Path,
         features: &mut Vec<FeatureInfo>,
     ) -> Result<()> {
+        // Determine domain layer path to exclude from feature scanning.
+        // When a DomainConfig is present, the domain directory (e.g. "domain/")
+        // contains organizational subdirectories (commands/, events/, aggregates/)
+        // that are NOT vertical slice features and should not be scanned as such.
+        let domain_path = self
+            .config
+            .domain
+            .as_ref()
+            .map(|d| d.path.to_string_lossy().to_string());
+
         for entry in WalkDir::new(current_path)
             .min_depth(1)
             .max_depth(1)
@@ -70,6 +80,15 @@ impl Scanner {
             // Skip _shared and hidden directories
             if name.starts_with('_') || name.starts_with('.') {
                 continue;
+            }
+
+            // Skip the domain layer directory when DomainConfig is declared.
+            // The domain/ directory tree contains aggregates, commands, events,
+            // and queries — these are domain model files, not feature slices.
+            if let Some(ref dp) = domain_path {
+                if &name == dp {
+                    continue;
+                }
             }
 
             let path = entry.path().to_path_buf();
@@ -174,5 +193,71 @@ mod tests {
         assert!(contexts.iter().any(|c| c.name == "warehouse"));
         assert!(contexts.iter().any(|c| c.name == "sales"));
         assert!(!contexts.iter().any(|c| c.name == "_shared"));
+    }
+
+    #[test]
+    fn test_scan_features_excludes_domain_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let context_path = temp_dir.path().to_path_buf();
+
+        // Create DDD-style structure: domain/ + slices/
+        std::fs::create_dir_all(context_path.join("domain/commands")).unwrap();
+        std::fs::create_dir_all(context_path.join("domain/events")).unwrap();
+        std::fs::create_dir_all(context_path.join("domain/aggregate_order")).unwrap();
+        std::fs::create_dir_all(context_path.join("slices/place_order")).unwrap();
+        std::fs::create_dir_all(context_path.join("slices/list_orders")).unwrap();
+        std::fs::create_dir_all(context_path.join("_shared")).unwrap();
+
+        // Config WITH DomainConfig — domain/ should be excluded from features
+        let mut config = create_test_config(context_path.clone());
+        config.domain = Some(crate::config::DomainConfig::default()); // path = "domain"
+
+        let scanner = Scanner::new(config, context_path.clone());
+        let features = scanner.scan_features(&context_path).unwrap();
+
+        let feature_names: Vec<&str> = features.iter().map(|f| f.name.as_str()).collect();
+
+        // domain/ and its children should NOT appear as features
+        assert!(!feature_names.contains(&"domain"), "domain/ should be excluded");
+        assert!(!feature_names.contains(&"commands"), "domain/commands/ should be excluded");
+        assert!(!feature_names.contains(&"events"), "domain/events/ should be excluded");
+        assert!(
+            !feature_names.contains(&"aggregate_order"),
+            "domain/aggregate_order/ should be excluded"
+        );
+
+        // slices/ and its children SHOULD appear
+        assert!(feature_names.contains(&"slices"), "slices/ should be a feature");
+        assert!(feature_names.contains(&"place_order"), "slices/place_order/ should be a feature");
+        assert!(feature_names.contains(&"list_orders"), "slices/list_orders/ should be a feature");
+
+        // _shared should be excluded (starts with _)
+        assert!(!feature_names.contains(&"_shared"), "_shared/ should be excluded");
+    }
+
+    #[test]
+    fn test_scan_features_without_domain_config_includes_all() {
+        let temp_dir = TempDir::new().unwrap();
+        let context_path = temp_dir.path().to_path_buf();
+
+        // Same structure
+        std::fs::create_dir_all(context_path.join("domain/commands")).unwrap();
+        std::fs::create_dir_all(context_path.join("slices/place_order")).unwrap();
+
+        // Config WITHOUT DomainConfig — domain/ should still be included (legacy behavior)
+        let config = create_test_config(context_path.clone());
+        assert!(config.domain.is_none());
+
+        let scanner = Scanner::new(config, context_path.clone());
+        let features = scanner.scan_features(&context_path).unwrap();
+
+        let feature_names: Vec<&str> = features.iter().map(|f| f.name.as_str()).collect();
+
+        // Without DomainConfig, domain/ IS treated as a feature (legacy behavior)
+        assert!(feature_names.contains(&"domain"), "domain/ should be included without DomainConfig");
+        assert!(
+            feature_names.contains(&"commands"),
+            "domain/commands/ should be included without DomainConfig"
+        );
     }
 }
