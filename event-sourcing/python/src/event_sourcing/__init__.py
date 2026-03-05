@@ -29,6 +29,7 @@ from event_sourcing.core.event import (
     GenericDomainEvent,
 )
 from event_sourcing.core.projection import (
+    AutoDispatchProjection,
     CheckpointedProjection,
     ProjectionCheckpoint,
     ProjectionCheckpointStore,
@@ -75,6 +76,7 @@ __all__ = [
     "QueryHandler",
     "QueryBus",
     # Projections (ADR-014 Checkpoint Architecture)
+    "AutoDispatchProjection",
     "CheckpointedProjection",
     "ProjectionCheckpoint",
     "ProjectionCheckpointStore",

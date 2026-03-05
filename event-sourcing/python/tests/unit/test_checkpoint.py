@@ -6,10 +6,12 @@ from typing import Any
 import pytest
 
 from event_sourcing.core.checkpoint import (
+    AutoDispatchProjection,
     CheckpointedProjection,
     ProjectionCheckpoint,
     ProjectionCheckpointStore,
     ProjectionResult,
+    _snake_to_camel,
 )
 from event_sourcing.core.event import DomainEvent, EventEnvelope, EventMetadata
 
@@ -476,3 +478,196 @@ class TestProjectionWorkflow:
         checkpoint = await store.get_checkpoint("test_projection")
         assert checkpoint is not None
         assert checkpoint.global_position == 1
+
+
+# ============================================================================
+# _snake_to_camel Tests
+# ============================================================================
+
+
+class TestSnakeToCamel:
+    """Tests for the _snake_to_camel helper."""
+
+    def test_single_word(self) -> None:
+        assert _snake_to_camel("started") == "Started"
+
+    def test_multi_word(self) -> None:
+        assert _snake_to_camel("workflow_execution_started") == "WorkflowExecutionStarted"
+
+    def test_two_words(self) -> None:
+        assert _snake_to_camel("phase_started") == "PhaseStarted"
+
+
+# ============================================================================
+# AutoDispatchProjection Tests
+# ============================================================================
+
+
+class SampleAutoProjection(AutoDispatchProjection):
+    """Concrete AutoDispatchProjection for testing."""
+
+    def __init__(self) -> None:
+        self.handled_events: list[dict[str, Any]] = []
+        self.cleared = False
+
+    def get_name(self) -> str:
+        return "sample_auto"
+
+    def get_version(self) -> int:
+        return 1
+
+    async def on_test_event(self, data: dict[str, Any]) -> None:
+        self.handled_events.append(data)
+
+    async def on_another_event(self, data: dict[str, Any]) -> None:
+        self.handled_events.append(data)
+
+    async def clear_all_data(self) -> None:
+        self.cleared = True
+        self.handled_events.clear()
+
+
+class FailingAutoProjection(AutoDispatchProjection):
+    """AutoDispatchProjection that raises on every event."""
+
+    def get_name(self) -> str:
+        return "failing_auto"
+
+    def get_version(self) -> int:
+        return 1
+
+    async def on_test_event(self, data: dict[str, Any]) -> None:
+        raise RuntimeError("handler exploded")
+
+
+class TestAutoDispatchProjection:
+    """Tests for AutoDispatchProjection base class."""
+
+    def test_discover_handlers(self) -> None:
+        """Should discover on_* methods and map to CamelCase event types."""
+        handlers = SampleAutoProjection._discover_handlers()
+
+        assert "TestEvent" in handlers
+        assert handlers["TestEvent"] == "on_test_event"
+        assert "AnotherEvent" in handlers
+        assert handlers["AnotherEvent"] == "on_another_event"
+
+    def test_get_subscribed_event_types(self) -> None:
+        """Should derive subscribed types from on_* methods."""
+        proj = SampleAutoProjection()
+        types = proj.get_subscribed_event_types()
+
+        assert types == {"TestEvent", "AnotherEvent"}
+
+    @pytest.mark.asyncio
+    async def test_handle_event_dispatches(self) -> None:
+        """Should dispatch to the correct on_* handler."""
+        proj = SampleAutoProjection()
+        store = InMemoryCheckpointStore()
+        envelope = _make_envelope(TestEvent(value="hello"), global_nonce=10)
+
+        result = await proj.handle_event(envelope, store)
+
+        assert result == ProjectionResult.SUCCESS
+        assert len(proj.handled_events) == 1
+        assert proj.handled_events[0]["value"] == "hello"
+
+    @pytest.mark.asyncio
+    async def test_handle_event_saves_checkpoint(self) -> None:
+        """Should save checkpoint after successful dispatch."""
+        proj = SampleAutoProjection()
+        store = InMemoryCheckpointStore()
+        envelope = _make_envelope(TestEvent(value="test"), global_nonce=42)
+
+        await proj.handle_event(envelope, store)
+
+        checkpoint = await store.get_checkpoint("sample_auto")
+        assert checkpoint is not None
+        assert checkpoint.global_position == 42
+        assert checkpoint.version == 1
+
+    @pytest.mark.asyncio
+    async def test_handle_event_returns_failure_on_error(self) -> None:
+        """Should return FAILURE and log when handler raises."""
+        proj = FailingAutoProjection()
+        store = InMemoryCheckpointStore()
+        envelope = _make_envelope(TestEvent(value="boom"), global_nonce=5)
+
+        result = await proj.handle_event(envelope, store)
+
+        assert result == ProjectionResult.FAILURE
+        # Checkpoint should NOT be saved on failure
+        checkpoint = await store.get_checkpoint("failing_auto")
+        assert checkpoint is None
+
+    def test_discover_handlers_cached(self) -> None:
+        """Handler discovery should be cached (same dict object on repeated calls)."""
+        h1 = SampleAutoProjection._discover_handlers()
+        h2 = SampleAutoProjection._discover_handlers()
+
+        assert h1 is h2
+
+
+# ============================================================================
+# SubscriptionCoordinator _get_minimum_position Tests
+# ============================================================================
+
+
+class TestCoordinatorGetMinimumPosition:
+    """Tests for SubscriptionCoordinator._get_minimum_position edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_all_version_mismatched_projections_get_cleared(self) -> None:
+        """All version-mismatched projections should get clear_all_data() called."""
+        from event_sourcing.subscriptions.coordinator import SubscriptionCoordinator
+
+        class VersionedProjection(TestProjection):
+            def __init__(self, name: str, version: int) -> None:
+                super().__init__(name)
+                self._version = version
+                self.cleared = False
+
+            def get_version(self) -> int:
+                return self._version
+
+            async def clear_all_data(self) -> None:
+                self.cleared = True
+
+        proj_a = VersionedProjection("proj_a", version=2)
+        proj_b = VersionedProjection("proj_b", version=3)
+
+        store = InMemoryCheckpointStore()
+        # Stored checkpoints have old versions (1)
+        await store.save_checkpoint(
+            ProjectionCheckpoint(
+                projection_name="proj_a",
+                global_position=50,
+                updated_at=datetime.now(UTC),
+                version=1,
+            )
+        )
+        await store.save_checkpoint(
+            ProjectionCheckpoint(
+                projection_name="proj_b",
+                global_position=100,
+                updated_at=datetime.now(UTC),
+                version=1,
+            )
+        )
+
+        # Use a dummy event store — we only test _get_minimum_position
+        coordinator = SubscriptionCoordinator(
+            event_store=None,  # type: ignore[arg-type]
+            checkpoint_store=store,
+            projections=[proj_a, proj_b],
+        )
+
+        min_pos = await coordinator._get_minimum_position()
+
+        assert min_pos == 0
+        assert proj_a.cleared is True
+        assert proj_b.cleared is True
+
+        # Checkpoints should be deleted
+        assert await store.get_checkpoint("proj_a") is None
+        assert await store.get_checkpoint("proj_b") is None
