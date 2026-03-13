@@ -4,7 +4,7 @@ A comprehensive event sourcing platform that packages a robust event store with 
 
 [![CI](https://github.com/NeuralEmpowerment/event-sourcing-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/NeuralEmpowerment/event-sourcing-platform/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/NeuralEmpowerment/event-sourcing-platform/actions/workflows/codeql.yml/badge.svg)](https://github.com/NeuralEmpowerment/event-sourcing-platform/actions/workflows/codeql.yml)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## 📋 Table of Contents
 
@@ -290,7 +290,7 @@ We welcome contributions! Please see our contributing guidelines and code of con
 
 ## 📄 License
 
-This project is licensed under the Apache License 2.0 - see the LICENSE file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## 🏷️ Status
 
