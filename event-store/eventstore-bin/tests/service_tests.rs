@@ -137,6 +137,7 @@ impl EventStore for Service {
         request: Request<SubscribeRequest>,
     ) -> Result<Response<Self::SubscribeStream>, Status> {
         let req = request.into_inner();
+        #[allow(clippy::result_large_err)]
         let stream = self
             .store
             .subscribe(req)

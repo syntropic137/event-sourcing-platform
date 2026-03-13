@@ -108,6 +108,7 @@ impl EventStore for Service {
         request: Request<proto::SubscribeRequest>,
     ) -> Result<Response<Self::SubscribeStream>, Status> {
         let req = request.into_inner();
+        #[allow(clippy::result_large_err)] // tonic::Status is required by the gRPC trait
         let stream = self.store.subscribe(req).map(|res| {
             res.map_err(|e| {
                 error!(error = %e, "subscribe stream error");
@@ -130,10 +131,7 @@ pub async fn resolve_backend() -> anyhow::Result<Arc<dyn EventStoreTrait>> {
             let store = eventstore_backend_postgres::PostgresStore::connect(&url).await?;
             Ok(store)
         }
-        other => anyhow::bail!(
-            "unsupported BACKEND '{}'. Supported: memory, postgres",
-            other
-        ),
+        other => anyhow::bail!("unsupported BACKEND '{other}'. Supported: memory, postgres"),
     }
 }
 
