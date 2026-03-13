@@ -134,10 +134,12 @@ jobs:
           cache: pnpm
 
       - name: Setup protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "25.x"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PB_REL="https://github.com/protocolbuffers/protobuf/releases"
+          curl -Lo protoc.zip "$PB_REL/download/v27.3/protoc-27.3-linux-x86_64.zip"
+          sudo unzip -o protoc.zip -d /usr/local bin/protoc 'include/*'
+          rm protoc.zip
+          protoc --version
 
       - name: Cache generated protobuf files
         uses: actions/cache@v4
@@ -213,10 +215,12 @@ jobs:
           cache: pnpm
 
       - name: Setup protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "25.x"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PB_REL="https://github.com/protocolbuffers/protobuf/releases"
+          curl -Lo protoc.zip "$PB_REL/download/v27.3/protoc-27.3-linux-x86_64.zip"
+          sudo unzip -o protoc.zip -d /usr/local bin/protoc 'include/*'
+          rm protoc.zip
+          protoc --version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
