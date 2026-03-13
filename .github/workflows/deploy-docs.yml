@@ -33,8 +33,10 @@ jobs:
 
       - name: Install Protocol Buffers compiler
         run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+          PB_REL="https://github.com/protocolbuffers/protobuf/releases"
+          curl -Lo protoc.zip "$PB_REL/download/v27.3/protoc-27.3-linux-x86_64.zip"
+          sudo unzip -o protoc.zip -d /usr/local bin/protoc 'include/*'
+          rm protoc.zip
           protoc --version
 
       - name: Install dependencies
