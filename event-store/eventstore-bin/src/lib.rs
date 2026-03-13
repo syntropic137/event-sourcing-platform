@@ -108,8 +108,8 @@ impl EventStore for Service {
         request: Request<proto::SubscribeRequest>,
     ) -> Result<Response<Self::SubscribeStream>, Status> {
         let req = request.into_inner();
+        #[allow(clippy::result_large_err)] // tonic::Status is required by the gRPC trait
         let stream = self.store.subscribe(req).map(|res| {
-            #[allow(clippy::result_large_err)] // tonic::Status is required by the gRPC trait
             res.map_err(|e| {
                 error!(error = %e, "subscribe stream error");
                 e.to_status()
