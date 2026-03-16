@@ -8,3 +8,10 @@ members = [
   "eventstore-bin",
   "sdks/sdk-rs",
 ]
+
+[workspace.package]
+version = "0.2.1"
+edition = "2021"
+authors = ["Event Sourcing Platform Team"]
+license = "MIT"
+repository = "https://github.com/syntropic137/event-sourcing-platform"
