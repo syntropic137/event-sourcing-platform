@@ -656,6 +656,15 @@ pub struct ValidationConfig {
     /// Fail on errors
     #[serde(default = "default_true")]
     pub fail_on_errors: bool,
+
+    /// Slices excluded from cross-slice isolation checks (shared read models consumed by sibling slices)
+    #[serde(default)]
+    pub exclude_from_isolation: Option<Vec<String>>,
+
+    /// When true, commands at domain/commands/ level are expected (handlers live in slices/).
+    /// Disables "commands without handler" validation for domain-level command directories.
+    #[serde(default)]
+    pub domain_level_commands: Option<bool>,
 }
 
 impl Default for ValidationConfig {
@@ -676,6 +685,8 @@ impl Default for ValidationConfig {
             allow_nested_features: true,
             max_warnings: Some(10),
             fail_on_errors: true,
+            exclude_from_isolation: None,
+            domain_level_commands: None,
         }
     }
 }

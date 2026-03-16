@@ -61,6 +61,11 @@ impl ValidationRule for NoCrossSliceImportsRule {
                     continue;
                 }
 
+                // Skip test files and conftest (test infrastructure may legitimately cross slice boundaries)
+                if is_test_or_conftest_name(&file.name) {
+                    continue;
+                }
+
                 // Read file and check for cross-slice imports
                 if let Ok(content) = fs::read_to_string(&file.path) {
                     let violations = detect_cross_slice_imports(
@@ -196,6 +201,19 @@ impl ValidationRule for ThinAdapterRule {
 struct ImportViolation {
     imported_slice: String,
     import_path: String,
+}
+
+/// Test files and pytest conftest are test infrastructure —
+/// they legitimately cross slice boundaries for integration testing.
+fn is_test_or_conftest_name(name: &str) -> bool {
+    name.starts_with("test_")
+        || name.ends_with("_test.py")
+        || name.ends_with("_test.rs")
+        || name.ends_with(".test.ts")
+        || name.ends_with(".test.tsx")
+        || name.ends_with(".spec.ts")
+        || name.ends_with(".spec.tsx")
+        || name == "conftest.py"
 }
 
 /// Check if a file is a source file

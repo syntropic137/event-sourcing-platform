@@ -15,7 +15,8 @@ use super::{
 };
 use crate::error::Result;
 use crate::scanner::Scanner;
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 // ============================================================================
 // VSA027: Domain Purity Rule
@@ -474,6 +475,24 @@ impl ApplicationIsolationRule {
 }
 
 // ============================================================================
+// Shared helpers
+// ============================================================================
+
+/// Test files and pytest conftest are test infrastructure —
+/// they legitimately cross slice boundaries for integration testing.
+fn is_test_or_conftest(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    name.starts_with("test_")
+        || name.ends_with("_test.py")
+        || name.ends_with("_test.rs")
+        || name.ends_with(".test.ts")
+        || name.ends_with(".test.tsx")
+        || name.ends_with(".spec.ts")
+        || name.ends_with(".spec.tsx")
+        || name == "conftest.py"
+}
+
+// ============================================================================
 // VSA031: Slice Isolation Rule
 // ============================================================================
 
@@ -497,6 +516,15 @@ impl ValidationRule for SliceIsolationRule {
         let scanner = Scanner::new(ctx.config.clone(), ctx.root.clone());
         let contexts = scanner.scan_contexts()?;
 
+        // Slices excluded from isolation checks (shared read models)
+        let excluded: HashSet<&str> = ctx
+            .config
+            .validation
+            .exclude_from_isolation
+            .as_ref()
+            .map(|v| v.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
+
         for context in contexts {
             let slices_path = context.path.join("slices");
             if !slices_path.exists() {
@@ -513,15 +541,24 @@ impl ValidationRule for SliceIsolationRule {
                 .map(|e| e.path())
                 .collect();
 
+            // Collect real slice names for target validation
+            let real_slice_names: HashSet<String> = slice_dirs
+                .iter()
+                .filter_map(|d| d.file_name())
+                .filter_map(|n| n.to_str())
+                .map(|s| s.to_string())
+                .collect();
+
             // Check each slice
             for slice_dir in &slice_dirs {
                 let slice_name = slice_dir.file_name().unwrap().to_string_lossy();
 
-                // Scan all files in this slice recursively
+                // Scan all files in this slice recursively, skipping test files and conftest
                 for entry in walkdir::WalkDir::new(slice_dir)
                     .into_iter()
                     .filter_map(|e| e.ok())
                     .filter(|e| e.file_type().is_file())
+                    .filter(|e| !is_test_or_conftest(e.path()))
                 {
                     let file_path = entry.path();
 
@@ -535,7 +572,11 @@ impl ValidationRule for SliceIsolationRule {
                     for import in imports {
                         // Check if import targets another slice
                         if let Some(target_slice) = Self::extract_slice_name(&import.module) {
-                            if target_slice != slice_name {
+                            // Only flag if target is a different REAL slice and not excluded
+                            if target_slice != *slice_name
+                                && real_slice_names.contains(&target_slice)
+                                && !excluded.contains(target_slice.as_str())
+                            {
                                 report.errors.push(ValidationIssue {
                                     path: file_path.to_path_buf(),
                                     code: self.code().to_string(),
@@ -895,5 +936,194 @@ mod tests {
         rule.validate(&ctx, &mut report).unwrap();
 
         assert_eq!(report.errors.len(), 0);
+    }
+
+    #[test]
+    fn test_vsa031_test_files_skipped_in_cross_slice_check() {
+        let (_temp_dir, ctx) = create_test_context();
+        let context_path = create_context_structure(ctx.root.as_path(), "workflows");
+
+        // Test file imports from another slice — should NOT be flagged
+        let test_file = context_path.join("slices/slice1/test_integration.py");
+        std::fs::write(
+            &test_file,
+            "from slices.slice2.handler import Slice2Handler\n",
+        )
+        .unwrap();
+
+        let rule = SliceIsolationRule;
+        let mut report = EnhancedValidationReport::default();
+
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.errors.len(), 0, "Test files should be skipped in cross-slice checks");
+    }
+
+    #[test]
+    fn test_vsa031_conftest_skipped_in_cross_slice_check() {
+        let (_temp_dir, ctx) = create_test_context();
+        let context_path = create_context_structure(ctx.root.as_path(), "workflows");
+
+        // conftest.py imports from another slice — should NOT be flagged
+        let conftest_file = context_path.join("slices/slice1/conftest.py");
+        std::fs::write(
+            &conftest_file,
+            "from slices.slice2.handler import Slice2Handler\n",
+        )
+        .unwrap();
+
+        let rule = SliceIsolationRule;
+        let mut report = EnhancedValidationReport::default();
+
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.errors.len(), 0, "conftest.py should be skipped in cross-slice checks");
+    }
+
+    #[test]
+    fn test_vsa031_conftest_as_target_not_flagged() {
+        let (_temp_dir, ctx) = create_test_context();
+        let context_path = create_context_structure(ctx.root.as_path(), "workflows");
+
+        // Source file imports from slices.conftest — "conftest" is not a real slice
+        let handler_file = context_path.join("slices/slice1/handler.py");
+        std::fs::write(
+            &handler_file,
+            "from slices.conftest import some_fixture\n",
+        )
+        .unwrap();
+
+        let rule = SliceIsolationRule;
+        let mut report = EnhancedValidationReport::default();
+
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(
+            report.errors.len(),
+            0,
+            "Import from slices.conftest should not be flagged — 'conftest' is not a real slice"
+        );
+    }
+
+    #[test]
+    fn test_vsa031_excluded_slices_not_flagged() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut config = VsaConfig {
+            version: 2,
+            architecture: crate::config::ArchitectureType::HexagonalEventSourcedVsa,
+            root: temp_dir.path().to_path_buf(),
+            language: "python".to_string(),
+            domain: Some(crate::config::DomainConfig::default()),
+            slices: Some(crate::config::SlicesConfig::default()),
+            infrastructure: Some(crate::config::InfrastructureConfig::default()),
+            framework: None,
+            contexts: HashMap::new(),
+            validation: crate::config::ValidationConfig::default(),
+            patterns: crate::config::PatternsConfig::default(),
+        };
+        config.validation.exclude_from_isolation =
+            Some(vec!["list_repos".to_string()]);
+        let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
+
+        // Create context with slices including the excluded one
+        let context_path = temp_dir.path().join("org");
+        std::fs::create_dir_all(context_path.join("domain")).unwrap();
+        std::fs::create_dir_all(context_path.join("slices/get_repo_detail")).unwrap();
+        std::fs::create_dir_all(context_path.join("slices/list_repos")).unwrap();
+
+        // get_repo_detail imports from list_repos (excluded) — should NOT be flagged
+        let handler_file = context_path.join("slices/get_repo_detail/handler.py");
+        std::fs::write(
+            &handler_file,
+            "from slices.list_repos.projection import RepoListProjection\n",
+        )
+        .unwrap();
+
+        let rule = SliceIsolationRule;
+        let mut report = EnhancedValidationReport::default();
+
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(
+            report.errors.len(),
+            0,
+            "Imports from excluded slices should not be flagged"
+        );
+    }
+
+    #[test]
+    fn test_vsa031_real_cross_slice_still_caught() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut config = VsaConfig {
+            version: 2,
+            architecture: crate::config::ArchitectureType::HexagonalEventSourcedVsa,
+            root: temp_dir.path().to_path_buf(),
+            language: "python".to_string(),
+            domain: Some(crate::config::DomainConfig::default()),
+            slices: Some(crate::config::SlicesConfig::default()),
+            infrastructure: Some(crate::config::InfrastructureConfig::default()),
+            framework: None,
+            contexts: HashMap::new(),
+            validation: crate::config::ValidationConfig::default(),
+            patterns: crate::config::PatternsConfig::default(),
+        };
+        // Exclude list_repos but NOT other_slice
+        config.validation.exclude_from_isolation =
+            Some(vec!["list_repos".to_string()]);
+        let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
+
+        let context_path = temp_dir.path().join("org");
+        std::fs::create_dir_all(context_path.join("domain")).unwrap();
+        std::fs::create_dir_all(context_path.join("slices/slice_a")).unwrap();
+        std::fs::create_dir_all(context_path.join("slices/slice_b")).unwrap();
+
+        // slice_a imports from slice_b (NOT excluded) — SHOULD be flagged
+        let handler_file = context_path.join("slices/slice_a/handler.py");
+        std::fs::write(
+            &handler_file,
+            "from slices.slice_b.handler import SliceBHandler\n",
+        )
+        .unwrap();
+
+        let rule = SliceIsolationRule;
+        let mut report = EnhancedValidationReport::default();
+
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(
+            report.errors.len(),
+            1,
+            "Real cross-slice violations (non-excluded) must still be caught"
+        );
+        assert_eq!(report.errors[0].code, "VSA031");
+    }
+
+    #[test]
+    fn test_is_test_or_conftest() {
+        // Test files
+        assert!(is_test_or_conftest(Path::new("test_something.py")));
+        assert!(is_test_or_conftest(Path::new("dir/test_integration.py")));
+        assert!(is_test_or_conftest(Path::new("something_test.py")));
+        assert!(is_test_or_conftest(Path::new("something_test.rs")));
+        assert!(is_test_or_conftest(Path::new("Component.test.ts")));
+        assert!(is_test_or_conftest(Path::new("Component.test.tsx")));
+        assert!(is_test_or_conftest(Path::new("Component.spec.ts")));
+        assert!(is_test_or_conftest(Path::new("Component.spec.tsx")));
+        assert!(is_test_or_conftest(Path::new("conftest.py")));
+
+        // Non-test files
+        assert!(!is_test_or_conftest(Path::new("handler.py")));
+        assert!(!is_test_or_conftest(Path::new("projection.py")));
+        assert!(!is_test_or_conftest(Path::new("utils.py")));
+        // test_utils.py starts with test_ — correctly classified as test infrastructure
+        assert!(is_test_or_conftest(Path::new("test_utils.py")));
+    }
+
+    #[test]
+    fn test_extract_slice_name_conftest() {
+        // extract_slice_name returns "conftest" for slices.conftest imports
+        // but our validation now checks if target is a real slice directory
+        let result = SliceIsolationRule::extract_slice_name("slices.conftest");
+        assert_eq!(result, Some("conftest".to_string()));
     }
 }
