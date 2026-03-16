@@ -10,13 +10,13 @@
 
 use super::import_parser::parse_imports;
 use super::{
-    EnhancedValidationReport, Severity, Suggestion, ValidationContext, ValidationIssue,
-    ValidationRule,
+    is_test_or_conftest, EnhancedValidationReport, Severity, Suggestion, ValidationContext,
+    ValidationIssue, ValidationRule,
 };
 use crate::error::Result;
 use crate::scanner::Scanner;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 // ============================================================================
 // VSA027: Domain Purity Rule
@@ -475,24 +475,6 @@ impl ApplicationIsolationRule {
 }
 
 // ============================================================================
-// Shared helpers
-// ============================================================================
-
-/// Test files and pytest conftest are test infrastructure —
-/// they legitimately cross slice boundaries for integration testing.
-fn is_test_or_conftest(path: &Path) -> bool {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    name.starts_with("test_")
-        || name.ends_with("_test.py")
-        || name.ends_with("_test.rs")
-        || name.ends_with(".test.ts")
-        || name.ends_with(".test.tsx")
-        || name.ends_with(".spec.ts")
-        || name.ends_with(".spec.tsx")
-        || name == "conftest.py"
-}
-
-// ============================================================================
 // VSA031: Slice Isolation Rule
 // ============================================================================
 
@@ -521,9 +503,9 @@ impl ValidationRule for SliceIsolationRule {
             .config
             .validation
             .exclude_from_isolation
-            .as_ref()
-            .map(|v| v.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_default();
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
 
         for context in contexts {
             let slices_path = context.path.join("slices");
@@ -1022,7 +1004,7 @@ mod tests {
             patterns: crate::config::PatternsConfig::default(),
         };
         config.validation.exclude_from_isolation =
-            Some(vec!["list_repos".to_string()]);
+            vec!["list_repos".to_string()];
         let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
 
         // Create context with slices including the excluded one
@@ -1069,7 +1051,7 @@ mod tests {
         };
         // Exclude list_repos but NOT other_slice
         config.validation.exclude_from_isolation =
-            Some(vec!["list_repos".to_string()]);
+            vec!["list_repos".to_string()];
         let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
 
         let context_path = temp_dir.path().join("org");

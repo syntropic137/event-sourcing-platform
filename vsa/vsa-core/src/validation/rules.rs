@@ -202,8 +202,7 @@ impl ValidationRule for RequireHandlerForCommandRule {
             ctx.config.file_extension().to_string(),
         );
 
-        let domain_level_commands =
-            ctx.config.validation.domain_level_commands.unwrap_or(false);
+        let domain_level_commands = ctx.config.validation.domain_level_commands;
 
         let contexts = scanner.scan_contexts()?;
 
@@ -211,13 +210,23 @@ impl ValidationRule for RequireHandlerForCommandRule {
             let features = scanner.scan_features(&context.path)?;
 
             for feature in features {
-                // When domain_level_commands is true, skip features under domain/ paths.
-                // Commands live at domain/commands/ with handlers in slices/ — this is the
-                // DDD convention per ADR-020, not a missing handler.
-                if domain_level_commands
-                    && feature.path.components().any(|c| c.as_os_str() == "domain")
-                {
-                    continue;
+                // When domain_level_commands is true, skip features under the configured
+                // domain path. Commands live at domain/commands/ with handlers in slices/ —
+                // this is the DDD convention per ADR-020, not a missing handler.
+                if domain_level_commands {
+                    let domain_dir = ctx
+                        .config
+                        .domain
+                        .as_ref()
+                        .map(|d| d.path.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "domain".to_string());
+                    if feature
+                        .path
+                        .components()
+                        .any(|c| c.as_os_str() == domain_dir.as_str())
+                    {
+                        continue;
+                    }
                 }
 
                 let files = scanner.scan_feature_files(&feature.path)?;
