@@ -4,7 +4,10 @@
 //! - VSA010: No cross-slice imports (slices cannot import from sibling slices)
 //! - VSA011: Thin adapter validation (controllers/adapters should be small)
 
-use super::{EnhancedValidationReport, Severity, Suggestion, ValidationContext, ValidationIssue};
+use super::{
+    is_test_or_conftest_name, EnhancedValidationReport, Severity, Suggestion, ValidationContext,
+    ValidationIssue,
+};
 use crate::error::Result;
 use crate::scanners::SliceScanner;
 use regex::Regex;
@@ -58,6 +61,11 @@ impl ValidationRule for NoCrossSliceImportsRule {
             for file in &slice.files {
                 // Skip non-source files
                 if !is_source_file(&file.name) {
+                    continue;
+                }
+
+                // Skip test files and conftest (test infrastructure may legitimately cross slice boundaries)
+                if is_test_or_conftest_name(&file.name) {
                     continue;
                 }
 
@@ -572,6 +580,58 @@ export class CreateOrderController {}
         assert_eq!(report.errors.len(), 1);
         assert_eq!(report.errors[0].code, "VSA010");
         assert!(report.errors[0].message.contains("Cross-slice import"));
+    }
+
+    #[test]
+    fn test_vsa010_test_files_skipped() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        // Create two slices
+        let slice1 = root.join("slices/create_order");
+        let slice2 = root.join("slices/list_orders");
+        fs::create_dir_all(&slice1).unwrap();
+        fs::create_dir_all(&slice2).unwrap();
+
+        // Test file imports from sibling slice — should NOT be flagged
+        fs::write(
+            slice1.join("test_integration.py"),
+            "from slices.list_orders.projection import OrderListProjection\n",
+        )
+        .unwrap();
+
+        // conftest.py imports from sibling slice — should NOT be flagged
+        fs::write(
+            slice1.join("conftest.py"),
+            "from slices.list_orders.projection import OrderListProjection\n",
+        )
+        .unwrap();
+
+        // Non-test source file needed so the slice is detected
+        fs::write(
+            slice1.join("CreateOrderCommand.py"),
+            "class CreateOrderCommand: pass\n",
+        )
+        .unwrap();
+        fs::write(
+            slice2.join("OrderListProjection.py"),
+            "class OrderListProjection: pass\n",
+        )
+        .unwrap();
+
+        let mut config = create_test_config(root.clone());
+        config.language = "python".to_string();
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = NoCrossSliceImportsRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(
+            report.errors.len(),
+            0,
+            "Test files and conftest.py should be skipped in VSA010 cross-slice checks"
+        );
     }
 
     #[test]
