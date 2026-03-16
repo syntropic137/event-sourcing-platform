@@ -1,7 +1,10 @@
 [package]
 name = "eventstore-bin"
-version = "0.2.1"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 anyhow = "1"
