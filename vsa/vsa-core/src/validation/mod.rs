@@ -37,7 +37,26 @@ pub use structure_rules::{
 pub use suggestions::{Suggestion, SuggestionAction};
 
 use crate::config::VsaConfig;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Test files and pytest conftest are test infrastructure —
+/// they legitimately cross slice boundaries for integration testing.
+pub(crate) fn is_test_or_conftest(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    is_test_or_conftest_name(name)
+}
+
+/// Name-based variant for scanners that provide file names directly.
+pub(crate) fn is_test_or_conftest_name(name: &str) -> bool {
+    name.starts_with("test_")
+        || name.ends_with("_test.py")
+        || name.ends_with("_test.rs")
+        || name.ends_with(".test.ts")
+        || name.ends_with(".test.tsx")
+        || name.ends_with(".spec.ts")
+        || name.ends_with(".spec.tsx")
+        || name == "conftest.py"
+}
 
 /// Enhanced validation report with suggestions
 #[derive(Debug, Default)]
