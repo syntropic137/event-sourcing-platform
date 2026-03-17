@@ -285,3 +285,6 @@ examples/009-web-dashboard-ts/public/temp/
 .env.production.local
 # POC worktrees
 worktrees/
+
+# Agentic session artifacts (written by Claude CLI / agentic-primitives)
+.agentic/
