@@ -248,7 +248,7 @@ class AggregateRoot(BaseAggregate[TEvent]):
             try:
                 attr = getattr(cls, name)
                 if callable(attr) and hasattr(attr, "_event_type"):
-                    event_type: str = attr._event_type  # type: ignore[union-attr]  # dynamic decorator attribute
+                    event_type: str = attr._event_type
                     handlers[event_type] = attr
             except AttributeError:
                 # Skip attributes that can't be accessed
@@ -273,7 +273,7 @@ class AggregateRoot(BaseAggregate[TEvent]):
             try:
                 attr = getattr(cls, name)
                 if callable(attr) and hasattr(attr, "_command_type"):
-                    command_type: str = attr._command_type  # type: ignore[union-attr]  # dynamic decorator attribute
+                    command_type: str = attr._command_type
                     handlers[command_type] = name
             except AttributeError:
                 continue

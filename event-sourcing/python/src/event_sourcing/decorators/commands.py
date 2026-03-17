@@ -64,7 +64,7 @@ def aggregate(aggregate_type: str | None = None) -> Callable[[T], T]:
 
     def decorator(cls: T) -> T:
         # Attach metadata to the class
-        cls._aggregate_type = aggregate_type or cls.__name__  # type: ignore[union-attr]  # dynamic decorator attribute
+        cls._aggregate_type = aggregate_type or cls.__name__
         return cls
 
     return decorator
