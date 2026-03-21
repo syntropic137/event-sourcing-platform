@@ -30,7 +30,7 @@ class BaseAggregate(ABC, Generic[TEvent]):
     def __init__(self) -> None:
         self._id: str | None = None
         self._version: int = 0
-        self._uncommitted_events: list[EventEnvelope[TEvent]] = []
+        self._uncommitted_events: list[EventEnvelope[DomainEvent]] = []
 
     @property
     def id(self) -> str | None:
@@ -53,7 +53,7 @@ class BaseAggregate(ABC, Generic[TEvent]):
         ...
 
     @abstractmethod
-    def apply_event(self, event: TEvent) -> None:
+    def apply_event(self, event: DomainEvent) -> None:
         """
         Apply an event to update the aggregate's state.
 
@@ -65,7 +65,7 @@ class BaseAggregate(ABC, Generic[TEvent]):
         """
         ...
 
-    def get_uncommitted_events(self) -> list[EventEnvelope[TEvent]]:
+    def get_uncommitted_events(self) -> list[EventEnvelope[DomainEvent]]:
         """Get all uncommitted events."""
         return self._uncommitted_events.copy()
 
@@ -95,7 +95,7 @@ class BaseAggregate(ABC, Generic[TEvent]):
         self._id = aggregate_id
         self._version = 0
 
-    def _raise_event(self, event: TEvent) -> None:
+    def _raise_event(self, event: DomainEvent) -> None:
         """
         Raise and apply a new event.
 
@@ -130,7 +130,7 @@ class BaseAggregate(ABC, Generic[TEvent]):
         # Track uncommitted
         self._uncommitted_events.append(envelope)
 
-    def rehydrate(self, events: list[EventEnvelope[TEvent]]) -> None:
+    def rehydrate(self, events: list[EventEnvelope[DomainEvent]]) -> None:
         """
         Load the aggregate from an event history.
 
@@ -185,7 +185,7 @@ class AggregateRoot(BaseAggregate[TEvent]):
         """Get the aggregate identifier (alias for id)."""
         return self.id
 
-    def apply_event(self, event: TEvent) -> None:
+    def apply_event(self, event: DomainEvent) -> None:
         """
         Apply event using automatic method dispatch.
 
@@ -206,7 +206,7 @@ class AggregateRoot(BaseAggregate[TEvent]):
         else:
             self._handle_unknown_event(event)
 
-    def _handle_unknown_event(self, event: TEvent) -> None:
+    def _handle_unknown_event(self, event: DomainEvent) -> None:
         """
         Handle unknown events.
 
@@ -219,7 +219,7 @@ class AggregateRoot(BaseAggregate[TEvent]):
         event_type = self._get_event_type(event)
         logger.warning(f"No handler found for event type: {event_type}")
 
-    def _apply(self, event: TEvent) -> None:
+    def _apply(self, event: DomainEvent) -> None:
         """
         Apply an event (convenience method for use in command handlers).
 
@@ -231,7 +231,7 @@ class AggregateRoot(BaseAggregate[TEvent]):
         self._raise_event(event)
 
     @classmethod
-    def _get_event_handlers(cls) -> dict[str, Callable[[Any, TEvent], None]]:
+    def _get_event_handlers(cls) -> dict[str, Callable[..., Any]]:
         """
         Get event handler map from decorated methods.
 
@@ -241,14 +241,14 @@ class AggregateRoot(BaseAggregate[TEvent]):
         Returns:
             Dictionary mapping event types to handler methods
         """
-        handlers: dict[str, Callable[[Any, TEvent], None]] = {}
+        handlers: dict[str, Callable[..., Any]] = {}
 
         # Scan all attributes of the class
         for name in dir(cls):
             try:
                 attr = getattr(cls, name)
                 if callable(attr) and hasattr(attr, "_event_type"):
-                    event_type = attr._event_type
+                    event_type: str = attr._event_type
                     handlers[event_type] = attr
             except AttributeError:
                 # Skip attributes that can't be accessed
@@ -273,7 +273,7 @@ class AggregateRoot(BaseAggregate[TEvent]):
             try:
                 attr = getattr(cls, name)
                 if callable(attr) and hasattr(attr, "_command_type"):
-                    command_type = attr._command_type
+                    command_type: str = attr._command_type
                     handlers[command_type] = name
             except AttributeError:
                 continue
@@ -312,7 +312,7 @@ class AggregateRoot(BaseAggregate[TEvent]):
         handler(command)
 
     @staticmethod
-    def _get_event_type(event: TEvent) -> str:
+    def _get_event_type(event: DomainEvent) -> str:
         """
         Get the event type from an event.
 

@@ -44,7 +44,7 @@ def command_handler(command_type: str) -> Callable[[F], F]:
 # ============================================================================
 
 
-def aggregate(aggregate_type: str | None = None) -> Callable[[type[Any]], type[Any]]:
+def aggregate(aggregate_type: str | None = None) -> Callable[[T], T]:
     """
     Decorator for aggregate classes.
 
@@ -62,7 +62,7 @@ def aggregate(aggregate_type: str | None = None) -> Callable[[type[Any]], type[A
         Decorated class with aggregate_type metadata attached
     """
 
-    def decorator(cls: type[Any]) -> type[Any]:
+    def decorator(cls: T) -> T:
         # Attach metadata to the class
         cls._aggregate_type = aggregate_type or cls.__name__
         return cls
