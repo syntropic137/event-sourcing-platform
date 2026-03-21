@@ -95,6 +95,7 @@ class SubscriptionCoordinator:
         self._event_store = event_store
         self._checkpoint_store = checkpoint_store
         self._running = False
+        self._last_error: Exception | None = None
 
         # Validate for duplicate projection names
         self._projections: dict[str, CheckpointedProjection] = {}
@@ -115,23 +116,55 @@ class SubscriptionCoordinator:
             },
         )
 
+    @property
+    def is_healthy(self) -> bool:
+        """True if the coordinator is running and has no active error."""
+        return self._running and self._last_error is None
+
     async def start(self) -> None:
         """
-        Start the subscription coordinator.
+        Start the subscription coordinator with exponential-backoff retry.
 
-        This method:
-        1. Loads all projection checkpoints
-        2. Finds the minimum position across all projections
-        3. Starts subscription from that position
-        4. Routes events to projections
+        Retries on any transient error (e.g. RST_STREAM, connection reset).
+        Stops only on explicit stop() or CancelledError.
         """
         if self._running:
             logger.warning("Subscription coordinator already running")
             return
 
         self._running = True
+        backoff = 1.0
 
-        # Load checkpoints and find minimum position
+        while self._running:
+            try:
+                await self._subscribe_loop()
+                backoff = 1.0  # clean exit — reset backoff
+            except asyncio.CancelledError:
+                logger.info("Subscription cancelled")
+                raise
+            except Exception as e:
+                if not self._running:
+                    break
+                self._last_error = e
+                logger.warning(
+                    "Subscription error — retrying in %.1fs",
+                    backoff,
+                    extra={"error": str(e)},
+                    exc_info=True,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
+
+        logger.info("Subscription coordinator stopped")
+
+    async def _subscribe_loop(self) -> None:
+        """
+        Run a single subscription attempt.
+
+        Loads checkpoints, subscribes from the minimum position, and
+        dispatches events until the stream ends or self._running is False.
+        Clears _last_error on the first successful event dispatch.
+        """
         min_position = await self._get_minimum_position()
 
         logger.info(
@@ -142,24 +175,11 @@ class SubscriptionCoordinator:
             },
         )
 
-        try:
-            # Subscribe from minimum position
-            async for envelope in self._event_store.subscribe(from_global_nonce=min_position):
-                if not self._running:
-                    break
-
-                await self._dispatch_event(envelope)
-
-        except asyncio.CancelledError:
-            logger.info("Subscription cancelled")
-            raise
-        except Exception as e:
-            logger.error(
-                "Subscription error",
-                extra={"error": str(e)},
-                exc_info=True,
-            )
-            raise
+        async for envelope in self._event_store.subscribe(from_global_nonce=min_position):
+            if not self._running:
+                break
+            self._last_error = None
+            await self._dispatch_event(envelope)
 
     async def stop(self) -> None:
         """Stop the subscription coordinator gracefully.
