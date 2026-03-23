@@ -138,46 +138,50 @@ export class FlowsGenerator extends BaseGenerator {
   }
 
   /**
-   * Generate a sequence diagram for a flow
+   * Collect unique aggregate participants from flow steps.
    */
-  private generateFlowDiagram(flow: Flow): string {
+  private collectParticipants(steps: Flow['steps']): string {
     const aggregates = new Set<string>();
-    for (const step of flow.steps) {
-      if (step.type === 'aggregate') {
-        aggregates.add(step.name);
-      }
+    for (const step of steps) {
+      if (step.type === 'aggregate') aggregates.add(step.name);
     }
-
-    let diagram = `sequenceDiagram
-`;
-
-    // Add participants
+    let lines = '';
     for (const agg of aggregates) {
-      diagram += `    participant ${this.sanitizeId(agg)} as ${agg}\n`;
+      lines += `    participant ${this.sanitizeId(agg)} as ${agg}\n`;
     }
+    return lines;
+  }
 
-    diagram += '\n';
-
-    // Add flow steps
+  /**
+   * Render flow steps as Mermaid sequence diagram interactions.
+   */
+  private renderFlowSteps(steps: Flow['steps']): string {
+    let lines = '';
     let currentAggregate: string | null = null;
 
-    for (const step of flow.steps) {
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
       if (step.type === 'aggregate') {
         currentAggregate = step.name;
       } else if (step.type === 'event' && currentAggregate) {
-        // Event emitted
-        const sanitizedCurrent = this.sanitizeId(currentAggregate);
-        diagram += `    ${sanitizedCurrent}->>+${sanitizedCurrent}: Process\n`;
-        diagram += `    ${sanitizedCurrent}-->>-${sanitizedCurrent}: ${step.name}\n`;
+        const sanitized = this.sanitizeId(currentAggregate);
+        lines += `    ${sanitized}->>+${sanitized}: Process\n`;
+        lines += `    ${sanitized}-->>-${sanitized}: ${step.name}\n`;
 
-        // If there are handlers, show event propagation
-        const nextStep = flow.steps[flow.steps.indexOf(step) + 1];
+        const nextStep = steps[i + 1];
         if (nextStep && nextStep.type === 'aggregate' && nextStep.name !== currentAggregate) {
-          diagram += `    ${sanitizedCurrent}-)${this.sanitizeId(nextStep.name)}: ${step.name}\n`;
+          lines += `    ${sanitized}-)${this.sanitizeId(nextStep.name)}: ${step.name}\n`;
         }
       }
     }
+    return lines;
+  }
 
+  /**
+   * Generate a sequence diagram for a flow
+   */
+  private generateFlowDiagram(flow: Flow): string {
+    const diagram = `sequenceDiagram\n${this.collectParticipants(flow.steps)}\n${this.renderFlowSteps(flow.steps)}`;
     return this.wrapMermaid(diagram);
   }
 

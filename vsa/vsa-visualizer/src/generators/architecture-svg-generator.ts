@@ -399,6 +399,50 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
   }
   
   /**
+   * Render a labeled section with bullet-point items.
+   * Returns the updated Y position after rendering.
+   */
+  private renderItemSection(
+    svg: SvgBuilder,
+    x: number,
+    y: number,
+    header: string,
+    items: string[],
+    options?: { maxItems?: number; trailingGap?: number }
+  ): number {
+    if (items.length === 0) return y;
+
+    svg.text(
+      { x, y },
+      header,
+      { fontSize: this.FONT_SIZE_FEATURE, fontWeight: '600', fontFamily: this.FONT_HEADER, fill: this.colors.text.secondary }
+    );
+    let currentY = y + this.SECTION_HEADER_HEIGHT;
+
+    const maxItems = options?.maxItems;
+    const displayItems = maxItems ? items.slice(0, maxItems) : items;
+    for (const item of displayItems) {
+      svg.text(
+        { x: x + 5, y: currentY },
+        `• ${item}`,
+        { fontSize: this.FONT_SIZE_FEATURE, fontFamily: this.FONT_HEADER, fill: this.colors.text.primary }
+      );
+      currentY += this.FEATURE_LINE_HEIGHT;
+    }
+
+    if (maxItems && items.length > maxItems) {
+      svg.text(
+        { x: x + 5, y: currentY },
+        `• ... and ${items.length - maxItems} more`,
+        { fontSize: this.FONT_SIZE_FEATURE, fontFamily: this.FONT_HEADER, fill: this.colors.text.tertiary }
+      );
+      currentY += this.FEATURE_LINE_HEIGHT;
+    }
+
+    return currentY + (options?.trailingGap ?? 0);
+  }
+
+  /**
    * Render a single context box
    */
   private renderContext(
@@ -409,188 +453,30 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     height: number,
     index: number
   ): void {
-    // Cycle through colors
-    const colorIndex = index % 3;
-    const fillColors = [
-      this.colors.context.primary,
-      this.colors.context.secondary,
-      this.colors.context.tertiary
-    ];
-    
-    // Context box
-    svg.rect(
-      pos,
-      { width, height },
-      {
-        fill: fillColors[colorIndex],
-        stroke: this.colors.border.medium,
-        strokeWidth: 1.5,
-        rx: 8,
-        shadow: true
-      }
-    );
-    
-    // Context name
+    const fillColors = [this.colors.context.primary, this.colors.context.secondary, this.colors.context.tertiary];
+
+    svg.rect(pos, { width, height }, {
+      fill: fillColors[index % 3], stroke: this.colors.border.medium, strokeWidth: 1.5, rx: 8, shadow: true
+    });
+
     svg.text(
-      { x: pos.x + 15, y: pos.y + 25 },
-      context.name,
-      {
-        fontSize: this.FONT_SIZE_CONTEXT,
-        fontWeight: 'bold',
-        fontFamily: this.FONT_HEADER,
-        fill: this.colors.text.primary
-      }
+      { x: pos.x + 15, y: pos.y + 25 }, context.name,
+      { fontSize: this.FONT_SIZE_CONTEXT, fontWeight: 'bold', fontFamily: this.FONT_HEADER, fill: this.colors.text.primary }
     );
-    
-    // Aggregates section (v2.3.0 - show as proper section with header)
-    const contextAggregates = (this.manifest.domain?.aggregates || [])
-      .filter(agg => agg.context === context.name)
-      .map(agg => agg.name.replace(/Aggregate$/, ''));
-    
+
+    const aggregateNames = (this.manifest.domain?.aggregates || [])
+      .filter(agg => agg.context === context.name).map(agg => agg.name.replace(/Aggregate$/, ''));
+    const featureNames = this.filterFeatures(context.features || []).map(f => f.name);
+    const commandNames = (this.manifest.domain?.commands || [])
+      .filter(cmd => cmd.context === context.name).map(cmd => cmd.name.replace(/Command$/, ''));
+    const eventNames = (this.manifest.domain?.events || [])
+      .filter(evt => evt.context === context.name).map(evt => evt.name.replace(/Event$/, ''));
+
     let currentY = pos.y + 50;
-    
-    if (contextAggregates.length > 0) {
-      // Section header
-      svg.text(
-        { x: pos.x + 15, y: currentY },
-        'Aggregates:',
-        {
-          fontSize: this.FONT_SIZE_FEATURE,
-          fontWeight: '600',
-          fontFamily: this.FONT_HEADER,
-          fill: this.colors.text.secondary
-        }
-      );
-      currentY += this.SECTION_HEADER_HEIGHT;
-      
-      // List aggregates
-      contextAggregates.forEach(aggName => {
-        svg.text(
-          { x: pos.x + 20, y: currentY },
-          `• ${aggName}`,
-          {
-            fontSize: this.FONT_SIZE_FEATURE,
-            fontFamily: this.FONT_HEADER,
-            fill: this.colors.text.primary
-          }
-        );
-        currentY += this.FEATURE_LINE_HEIGHT;
-      });
-      
-      currentY += 5; // Small gap before features
-    }
-    
-    // Features section (flat list of all slices)
-    const features = this.filterFeatures(context.features || []);
-    const maxFeaturesPerSection = this.visualizeConfig.maxFeaturesPerSection;
-
-    if (features.length > 0) {
-      svg.text(
-        { x: pos.x + 15, y: currentY },
-        '📋 Features',
-        {
-          fontSize: this.FONT_SIZE_FEATURE,
-          fontWeight: '600',
-          fontFamily: this.FONT_HEADER,
-          fill: this.colors.text.secondary
-        }
-      );
-      currentY += this.SECTION_HEADER_HEIGHT;
-
-      const displayFeatures = maxFeaturesPerSection
-        ? features.slice(0, maxFeaturesPerSection)
-        : features;
-
-      displayFeatures.forEach(feature => {
-        svg.text(
-          { x: pos.x + 20, y: currentY },
-          `• ${feature.name}`,
-          {
-            fontSize: this.FONT_SIZE_FEATURE,
-            fontFamily: this.FONT_HEADER,
-            fill: this.colors.text.primary
-          }
-        );
-        currentY += this.FEATURE_LINE_HEIGHT;
-      });
-
-      if (maxFeaturesPerSection && features.length > maxFeaturesPerSection) {
-        svg.text(
-          { x: pos.x + 20, y: currentY },
-          `• ... and ${features.length - maxFeaturesPerSection} more`,
-          {
-            fontSize: this.FONT_SIZE_FEATURE,
-            fontFamily: this.FONT_HEADER,
-            fill: this.colors.text.tertiary
-          }
-        );
-        currentY += this.FEATURE_LINE_HEIGHT;
-      }
-    }
-
-    // Commands section (from domain.commands filtered by context)
-    const contextCommands = (this.manifest.domain?.commands || [])
-      .filter(cmd => cmd.context === context.name)
-      .map(cmd => cmd.name.replace(/Command$/, ''));
-
-    if (contextCommands.length > 0) {
-      svg.text(
-        { x: pos.x + 15, y: currentY },
-        '⚡ Commands',
-        {
-          fontSize: this.FONT_SIZE_FEATURE,
-          fontWeight: '600',
-          fontFamily: this.FONT_HEADER,
-          fill: this.colors.text.secondary
-        }
-      );
-      currentY += this.SECTION_HEADER_HEIGHT;
-
-      contextCommands.forEach(cmdName => {
-        svg.text(
-          { x: pos.x + 20, y: currentY },
-          `• ${cmdName}`,
-          {
-            fontSize: this.FONT_SIZE_FEATURE,
-            fontFamily: this.FONT_HEADER,
-            fill: this.colors.text.primary
-          }
-        );
-        currentY += this.FEATURE_LINE_HEIGHT;
-      });
-    }
-
-    // Events section (from domain.events filtered by context)
-    const contextEvents = (this.manifest.domain?.events || [])
-      .filter(evt => evt.context === context.name)
-      .map(evt => evt.name.replace(/Event$/, ''));
-
-    if (contextEvents.length > 0) {
-      svg.text(
-        { x: pos.x + 15, y: currentY },
-        '📨 Events',
-        {
-          fontSize: this.FONT_SIZE_FEATURE,
-          fontWeight: '600',
-          fontFamily: this.FONT_HEADER,
-          fill: this.colors.text.secondary
-        }
-      );
-      currentY += this.SECTION_HEADER_HEIGHT;
-
-      contextEvents.forEach(evtName => {
-        svg.text(
-          { x: pos.x + 20, y: currentY },
-          `• ${evtName}`,
-          {
-            fontSize: this.FONT_SIZE_FEATURE,
-            fontFamily: this.FONT_HEADER,
-            fill: this.colors.text.primary
-          }
-        );
-        currentY += this.FEATURE_LINE_HEIGHT;
-      });
-    }
+    currentY = this.renderItemSection(svg, pos.x + 15, currentY, 'Aggregates:', aggregateNames, { trailingGap: 5 });
+    currentY = this.renderItemSection(svg, pos.x + 15, currentY, '📋 Features', featureNames, { maxItems: this.visualizeConfig.maxFeaturesPerSection });
+    currentY = this.renderItemSection(svg, pos.x + 15, currentY, '⚡ Commands', commandNames);
+    this.renderItemSection(svg, pos.x + 15, currentY, '📨 Events', eventNames);
   }
   
   /**
@@ -667,114 +553,84 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
   }
   
   /**
+   * Render packages list in sidebar.
+   */
+  private renderPackagesSection(svg: SvgBuilder, sidebarX: number, startY: number, packages: string[]): number {
+    if (packages.length === 0) return startY;
+
+    const sidebarContentWidth = this.SIDEBAR_WIDTH - this.SECTION_MARGIN * 2;
+    svg.text(
+      { x: sidebarX, y: startY }, 'Packages',
+      { fontSize: this.FONT_SIZE_SECTION, fontWeight: 'bold', fontFamily: this.FONT_HEADER, fill: this.colors.text.secondary }
+    );
+    let currentY = startY + 20;
+
+    const packageBoxHeight = packages.length * 22 + 20;
+    svg.rect(
+      { x: sidebarX, y: currentY }, { width: sidebarContentWidth, height: packageBoxHeight },
+      { fill: this.colors.ecosystem.primary, stroke: this.colors.border.light, strokeWidth: 1, rx: 6 }
+    );
+    currentY += 20;
+
+    for (const pkg of packages) {
+      svg.text(
+        { x: sidebarX + 15, y: currentY }, `• ${pkg}`,
+        { fontSize: this.FONT_SIZE_FEATURE, fontFamily: this.FONT_HEADER, fill: this.colors.text.primary }
+      );
+      currentY += 22;
+    }
+    return currentY + 20;
+  }
+
+  /**
+   * Render libraries list in sidebar.
+   */
+  private renderLibrariesSection(
+    svg: SvgBuilder, sidebarX: number, startY: number,
+    libraries: Array<{ name: string; repo?: string }>
+  ): number {
+    if (libraries.length === 0) return startY;
+
+    const sidebarContentWidth = this.SIDEBAR_WIDTH - this.SECTION_MARGIN * 2;
+    svg.text(
+      { x: sidebarX, y: startY }, 'Libraries',
+      { fontSize: this.FONT_SIZE_SECTION, fontWeight: 'bold', fontFamily: this.FONT_HEADER, fill: this.colors.text.secondary }
+    );
+    let currentY = startY + 20;
+
+    for (const lib of libraries) {
+      const boxHeight = lib.repo ? 65 : 45;
+      svg.rect(
+        { x: sidebarX, y: currentY }, { width: sidebarContentWidth, height: boxHeight },
+        { fill: this.colors.ecosystem.secondary, stroke: this.colors.border.light, strokeWidth: 1, rx: 6 }
+      );
+      svg.text(
+        { x: sidebarX + 15, y: currentY + 25 }, lib.name,
+        { fontSize: this.FONT_SIZE_CONTEXT, fontWeight: '500', fontFamily: this.FONT_HEADER, fill: this.colors.text.primary }
+      );
+      if (lib.repo) {
+        svg.text(
+          { x: sidebarX + 15, y: currentY + 45 }, lib.repo,
+          { fontSize: this.FONT_SIZE_FEATURE - 1, fontFamily: this.FONT_HEADER, fill: this.colors.text.tertiary }
+        );
+      }
+      currentY += boxHeight + 10;
+    }
+    return currentY;
+  }
+
+  /**
    * Render ecosystem sidebar (packages and libraries)
    */
   private renderEcosystemSidebar(svg: SvgBuilder): void {
     const sidebarX = this.CANVAS_WIDTH - this.SIDEBAR_WIDTH + this.SECTION_MARGIN;
-    let currentY = this.PADDING + 60; // Start below header
-    
     const packages = this.layerConfig.packages || [];
     const libraries = this.layerConfig.libraries || [];
-    
     if (packages.length === 0 && libraries.length === 0) return;
-    
-    // Packages section
-    if (packages.length > 0) {
-      svg.text(
-        { x: sidebarX, y: currentY },
-        'Packages',
-        {
-          fontSize: this.FONT_SIZE_SECTION,
-          fontWeight: 'bold',
-          fontFamily: this.FONT_HEADER,
-          fill: this.colors.text.secondary
-        }
-      );
-      currentY += 20;
-      
-      const packageBoxHeight = packages.length * 22 + 20;
-      svg.rect(
-        { x: sidebarX, y: currentY },
-        { width: this.SIDEBAR_WIDTH - this.SECTION_MARGIN * 2, height: packageBoxHeight },
-        {
-          fill: this.colors.ecosystem.primary,
-          stroke: this.colors.border.light,
-          strokeWidth: 1,
-          rx: 6
-        }
-      );
-      
-      currentY += 20;
-      packages.forEach(pkg => {
-        svg.text(
-          { x: sidebarX + 15, y: currentY },
-          `• ${pkg}`,
-          {
-            fontSize: this.FONT_SIZE_FEATURE,
-            fontFamily: this.FONT_HEADER,
-            fill: this.colors.text.primary
-          }
-        );
-        currentY += 22;
-      });
-      
-      currentY += 20;
-    }
-    
-    // Libraries section
-    if (libraries.length > 0) {
-      svg.text(
-        { x: sidebarX, y: currentY },
-        'Libraries',
-        {
-          fontSize: this.FONT_SIZE_SECTION,
-          fontWeight: 'bold',
-          fontFamily: this.FONT_HEADER,
-          fill: this.colors.text.secondary
-        }
-      );
-      currentY += 20;
-      
-      libraries.forEach(lib => {
-        const boxHeight = lib.repo ? 65 : 45;
-        
-        svg.rect(
-          { x: sidebarX, y: currentY },
-          { width: this.SIDEBAR_WIDTH - this.SECTION_MARGIN * 2, height: boxHeight },
-          {
-            fill: this.colors.ecosystem.secondary,
-            stroke: this.colors.border.light,
-            strokeWidth: 1,
-            rx: 6
-          }
-        );
-        
-        svg.text(
-          { x: sidebarX + 15, y: currentY + 25 },
-          lib.name,
-          {
-            fontSize: this.FONT_SIZE_CONTEXT,
-            fontWeight: '500',
-            fontFamily: this.FONT_HEADER,
-            fill: this.colors.text.primary
-          }
-        );
-        
-        if (lib.repo) {
-          svg.text(
-            { x: sidebarX + 15, y: currentY + 45 },
-            lib.repo,
-            {
-              fontSize: this.FONT_SIZE_FEATURE - 1,
-              fontFamily: this.FONT_HEADER,
-              fill: this.colors.text.tertiary
-            }
-          );
-        }
-        
-        currentY += boxHeight + 10;
-      });
-    }
+
+    let currentY = this.PADDING + 60;
+    currentY = this.renderPackagesSection(svg, sidebarX, currentY, packages);
+    this.renderLibrariesSection(svg, sidebarX, currentY, libraries);
   }
   
   /**

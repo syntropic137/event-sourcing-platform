@@ -309,130 +309,84 @@ export class AggregateRelationshipGenerator {
     return maxY + this.AGGREGATE_SPACING_Y;
   }
 
-  /** Render a single aggregate box */
-  private renderAggregate(svg: SvgBuilder, layout: AggregateLayout): void {
+  /** Render aggregate header (name, folder) */
+  private renderAggregateHeader(svg: SvgBuilder, layout: AggregateLayout): void {
     const { aggregate, x, y, width, height } = layout;
+    svg.rect({ x, y }, { width, height }, {
+      fill: AggregateColors.root, stroke: AggregateColors.border, strokeWidth: 2, rx: 8, shadow: true,
+    });
 
-    // Background rectangle
-    svg.rect(
-      { x, y },
-      { width, height },
-      {
-        fill: AggregateColors.root,
-        stroke: AggregateColors.border,
-        strokeWidth: 2,
-        rx: 8,
-        shadow: true,
-      }
-    );
-
-    // Aggregate name (root indicator)
     const displayName = aggregate.name.replace(/Aggregate$/, '');
     svg.text(
-      { x: x + this.AGGREGATE_PADDING, y: y + 25 },
-      `🔷 ${displayName}`,
-      {
-        fontSize: 14,
-        fontWeight: 'bold',
-        fill: AggregateColors.text.primary,
-      }
+      { x: x + this.AGGREGATE_PADDING, y: y + 25 }, `🔷 ${displayName}`,
+      { fontSize: 14, fontWeight: 'bold', fill: AggregateColors.text.primary }
     );
 
-    // Folder name if present
     if (aggregate.folder_name) {
       svg.text(
-        { x: x + this.AGGREGATE_PADDING, y: y + 42 },
-        `(${aggregate.folder_name})`,
-        {
-          fontSize: 10,
-          fill: AggregateColors.text.tertiary,
-        }
+        { x: x + this.AGGREGATE_PADDING, y: y + 42 }, `(${aggregate.folder_name})`,
+        { fontSize: 10, fill: AggregateColors.text.tertiary }
       );
     }
+  }
 
+  /** Render a detail section (entities, value objects, or event handlers) */
+  private renderDetailSection(
+    svg: SvgBuilder,
+    x: number,
+    startY: number,
+    header: string,
+    items: Array<{ render: (itemX: number, itemY: number) => void }>,
+    options?: { maxItems?: number }
+  ): number {
+    if (items.length === 0) return startY;
+
+    svg.text(
+      { x: x + this.AGGREGATE_PADDING, y: startY }, header,
+      { fontSize: 11, fontWeight: 'bold', fill: AggregateColors.text.secondary }
+    );
+    let currentY = startY + 18;
+
+    const maxItems = options?.maxItems;
+    const displayItems = maxItems ? items.slice(0, maxItems) : items;
+    for (const item of displayItems) {
+      item.render(x + this.AGGREGATE_PADDING + 5, currentY);
+      currentY += this.ENTITY_HEIGHT;
+    }
+
+    if (maxItems && items.length > maxItems) {
+      svg.text(
+        { x: x + this.AGGREGATE_PADDING + 5, y: currentY },
+        `... and ${items.length - maxItems} more`,
+        { fontSize: 10, fill: AggregateColors.text.tertiary }
+      );
+      currentY += this.ENTITY_HEIGHT;
+    }
+
+    return currentY + 5;
+  }
+
+  /** Render a single aggregate box */
+  private renderAggregate(svg: SvgBuilder, layout: AggregateLayout): void {
+    this.renderAggregateHeader(svg, layout);
     if (!this.config.showDetails) return;
 
+    const { aggregate, x, y } = layout;
     let currentY = y + this.HEADER_HEIGHT;
 
-    // Entities section
-    const entities = aggregate.entities || [];
-    if (entities.length > 0) {
-      svg.text(
-        { x: x + this.AGGREGATE_PADDING, y: currentY },
-        'Entities:',
-        {
-          fontSize: 11,
-          fontWeight: 'bold',
-          fill: AggregateColors.text.secondary,
-        }
-      );
-      currentY += 18;
-
-      for (const entity of entities) {
-        this.renderEntity(svg, entity, x + this.AGGREGATE_PADDING + 5, currentY);
-        currentY += this.ENTITY_HEIGHT;
-      }
-      currentY += 5;
-    }
-
-    // Value Objects section
-    const valueObjects = aggregate.value_objects || [];
-    if (valueObjects.length > 0) {
-      svg.text(
-        { x: x + this.AGGREGATE_PADDING, y: currentY },
-        'Value Objects:',
-        {
-          fontSize: 11,
-          fontWeight: 'bold',
-          fill: AggregateColors.text.secondary,
-        }
-      );
-      currentY += 18;
-
-      for (const vo of valueObjects) {
-        this.renderValueObject(svg, vo, x + this.AGGREGATE_PADDING + 5, currentY);
-        currentY += this.ENTITY_HEIGHT;
-      }
-      currentY += 5;
-    }
-
-    // Event handlers (subscriptions)
-    if (aggregate.event_handlers.length > 0) {
-      svg.text(
-        { x: x + this.AGGREGATE_PADDING, y: currentY },
-        'Subscribes to:',
-        {
-          fontSize: 11,
-          fontWeight: 'bold',
-          fill: AggregateColors.text.secondary,
-        }
-      );
-      currentY += 18;
-
-      const handlers = aggregate.event_handlers.slice(0, 3);
-      for (const handler of handlers) {
-        svg.text(
-          { x: x + this.AGGREGATE_PADDING + 5, y: currentY },
-          `← ${handler.event_type}`,
-          {
-            fontSize: 10,
-            fill: AggregateColors.subscribes,
-          }
-        );
-        currentY += this.ENTITY_HEIGHT;
-      }
-
-      if (aggregate.event_handlers.length > 3) {
-        svg.text(
-          { x: x + this.AGGREGATE_PADDING + 5, y: currentY },
-          `... and ${aggregate.event_handlers.length - 3} more`,
-          {
-            fontSize: 10,
-            fill: AggregateColors.text.tertiary,
-          }
-        );
-      }
-    }
+    currentY = this.renderDetailSection(svg, x, currentY, 'Entities:', (aggregate.entities || []).map(
+      entity => ({ render: (ix, iy) => this.renderEntity(svg, entity, ix, iy) })
+    ));
+    currentY = this.renderDetailSection(svg, x, currentY, 'Value Objects:', (aggregate.value_objects || []).map(
+      vo => ({ render: (ix, iy) => this.renderValueObject(svg, vo, ix, iy) })
+    ));
+    this.renderDetailSection(svg, x, currentY, 'Subscribes to:', aggregate.event_handlers.map(
+      handler => ({
+        render: (ix: number, iy: number) => svg.text(
+          { x: ix, y: iy }, `← ${handler.event_type}`, { fontSize: 10, fill: AggregateColors.subscribes }
+        )
+      })
+    ), { maxItems: 3 });
   }
 
   /** Render an entity indicator */
@@ -479,38 +433,39 @@ export class AggregateRelationshipGenerator {
     );
   }
 
-  /** Render event flow arrows between aggregates */
-  private renderEventFlows(svg: SvgBuilder, layouts: AggregateLayout[]): void {
-    // Build event emission map
-    const eventEmitters = new Map<string, AggregateLayout>();
-    const eventSubscribers = new Map<string, AggregateLayout[]>();
+  /** Build maps of event emitters and subscribers from aggregate layouts */
+  private buildEventFlowMaps(layouts: AggregateLayout[]): {
+    emitters: Map<string, AggregateLayout>;
+    subscribers: Map<string, AggregateLayout[]>;
+  } {
+    const emitters = new Map<string, AggregateLayout>();
+    const subscribers = new Map<string, AggregateLayout[]>();
 
     for (const layout of layouts) {
-      // Track what events this aggregate emits
       for (const handler of layout.aggregate.command_handlers) {
         for (const event of handler.emits_events) {
-          eventEmitters.set(event, layout);
+          emitters.set(event, layout);
         }
       }
-
-      // Track what events this aggregate subscribes to
       for (const handler of layout.aggregate.event_handlers) {
-        if (!eventSubscribers.has(handler.event_type)) {
-          eventSubscribers.set(handler.event_type, []);
+        if (!subscribers.has(handler.event_type)) {
+          subscribers.set(handler.event_type, []);
         }
-        eventSubscribers.get(handler.event_type)!.push(layout);
+        subscribers.get(handler.event_type)!.push(layout);
       }
     }
+    return { emitters, subscribers };
+  }
 
-    // Draw arrows from emitters to subscribers
-    for (const [eventType, emitter] of eventEmitters) {
-      const subscribers = eventSubscribers.get(eventType) || [];
+  /** Render event flow arrows between aggregates */
+  private renderEventFlows(svg: SvgBuilder, layouts: AggregateLayout[]): void {
+    const { emitters, subscribers } = this.buildEventFlowMaps(layouts);
 
-      for (const subscriber of subscribers) {
-        // Don't draw self-loops
-        if (emitter.aggregate.name === subscriber.aggregate.name) continue;
-
-        this.renderArrow(svg, emitter, subscriber, eventType);
+    for (const [eventType, emitter] of emitters) {
+      for (const subscriber of subscribers.get(eventType) || []) {
+        if (emitter.aggregate.name !== subscriber.aggregate.name) {
+          this.renderArrow(svg, emitter, subscriber, eventType);
+        }
       }
     }
   }
