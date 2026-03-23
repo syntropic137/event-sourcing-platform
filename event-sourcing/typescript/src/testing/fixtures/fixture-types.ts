@@ -102,22 +102,40 @@ export class FixtureValidationError extends Error {
 }
 
 /**
+ * Validate a single fixture event entry
+ */
+function validateFixtureEvent(event: unknown, index: number): string[] {
+  if (!event || typeof event !== 'object') {
+    return [`events[${index}] must be an object`];
+  }
+  const e = event as Record<string, unknown>;
+  const issues: string[] = [];
+  if (typeof e.type !== 'string') {
+    issues.push(`events[${index}].type must be a string`);
+  }
+  if (typeof e.version !== 'string') {
+    issues.push(`events[${index}].version must be a string`);
+  }
+  if (!e.data || typeof e.data !== 'object') {
+    issues.push(`events[${index}].data must be an object`);
+  }
+  return issues;
+}
+
+/**
  * Validates a fixture structure
  */
 export function validateFixture(fixture: unknown, filePath: string): TestFixture {
-  const issues: string[] = [];
-
   if (!fixture || typeof fixture !== 'object') {
     throw new FixtureValidationError(filePath, ['Fixture must be an object']);
   }
 
   const f = fixture as Record<string, unknown>;
+  const issues: string[] = [];
 
-  // Required fields
   if (typeof f.description !== 'string') {
     issues.push('description must be a string');
   }
-
   if (typeof f.aggregateType !== 'string') {
     issues.push('aggregateType must be a string');
   }
@@ -126,26 +144,12 @@ export function validateFixture(fixture: unknown, filePath: string): TestFixture
     issues.push('events must be an array');
   } else {
     f.events.forEach((event, index) => {
-      if (!event || typeof event !== 'object') {
-        issues.push(`events[${index}] must be an object`);
-      } else {
-        const e = event as Record<string, unknown>;
-        if (typeof e.type !== 'string') {
-          issues.push(`events[${index}].type must be a string`);
-        }
-        if (typeof e.version !== 'string') {
-          issues.push(`events[${index}].version must be a string`);
-        }
-        if (!e.data || typeof e.data !== 'object') {
-          issues.push(`events[${index}].data must be an object`);
-        }
-      }
+      issues.push(...validateFixtureEvent(event, index));
     });
   }
 
   if (issues.length > 0) {
     throw new FixtureValidationError(filePath, issues);
   }
-
   return fixture as TestFixture;
 }

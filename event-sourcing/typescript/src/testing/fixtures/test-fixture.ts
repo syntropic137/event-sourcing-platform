@@ -13,6 +13,40 @@ import {
 } from './fixture-types';
 
 /**
+ * Parse fixture content based on file extension
+ */
+function parseFixtureContent(
+  content: string,
+  ext: string,
+  resolvedPath: string
+): { parsed: unknown; format: 'json' | 'yaml' } {
+  if (ext === '.json') {
+    try {
+      return { parsed: JSON.parse(content), format: 'json' };
+    } catch {
+      throw new Error(`Invalid JSON in fixture file: ${resolvedPath}`);
+    }
+  }
+
+  if (ext === '.yaml' || ext === '.yml') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const yaml = require('js-yaml');
+      return { parsed: yaml.load(content), format: 'yaml' };
+    } catch (error) {
+      if ((error as Error).message?.includes("Cannot find module 'js-yaml'")) {
+        throw new Error(
+          'YAML fixtures require js-yaml package. Install with: npm install js-yaml'
+        );
+      }
+      throw new Error(`Invalid YAML in fixture file: ${resolvedPath}`);
+    }
+  }
+
+  throw new Error(`Unsupported fixture format: ${ext}. Use .json or .yaml/.yml`);
+}
+
+/**
  * Load a fixture from a JSON or YAML file
  *
  * @param filePath - Path to the fixture file
@@ -29,62 +63,24 @@ export async function loadFixture(
   options: LoadFixtureOptions = {}
 ): Promise<LoadedFixture> {
   const { baseDir = process.cwd(), validate = true } = options;
-
-  // Resolve path
   const resolvedPath = path.isAbsolute(filePath) ? filePath : path.join(baseDir, filePath);
 
-  // Check file exists
   if (!fs.existsSync(resolvedPath)) {
     throw new Error(`Fixture file not found: ${resolvedPath}`);
   }
 
-  // Determine format from extension
-  const ext = path.extname(resolvedPath).toLowerCase();
-  let format: 'json' | 'yaml';
   let content: string;
-  let parsed: unknown;
-
   try {
     content = fs.readFileSync(resolvedPath, 'utf-8');
   } catch (error) {
     throw new Error(`Failed to read fixture file: ${resolvedPath}`);
   }
 
-  if (ext === '.json') {
-    format = 'json';
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      throw new Error(`Invalid JSON in fixture file: ${resolvedPath}`);
-    }
-  } else if (ext === '.yaml' || ext === '.yml') {
-    format = 'yaml';
-    // YAML support requires js-yaml, make it optional
-    try {
-      // Dynamic import to make js-yaml optional
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const yaml = require('js-yaml');
-      parsed = yaml.load(content);
-    } catch (error) {
-      if ((error as Error).message?.includes("Cannot find module 'js-yaml'")) {
-        throw new Error(
-          'YAML fixtures require js-yaml package. Install with: npm install js-yaml'
-        );
-      }
-      throw new Error(`Invalid YAML in fixture file: ${resolvedPath}`);
-    }
-  } else {
-    throw new Error(`Unsupported fixture format: ${ext}. Use .json or .yaml/.yml`);
-  }
-
-  // Validate if requested
+  const ext = path.extname(resolvedPath).toLowerCase();
+  const { parsed, format } = parseFixtureContent(content, ext, resolvedPath);
   const fixture = validate ? validateFixture(parsed, resolvedPath) : (parsed as TestFixture);
 
-  return {
-    ...fixture,
-    filePath: resolvedPath,
-    format,
-  };
+  return { ...fixture, filePath: resolvedPath, format };
 }
 
 /**
