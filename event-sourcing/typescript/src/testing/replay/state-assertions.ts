@@ -147,6 +147,26 @@ function diffObjects(
 }
 
 /**
+ * Diff two Date instances by time value
+ */
+function diffDates(
+  expected: Date,
+  actual: Date,
+  path: string
+): StateDifference[] {
+  return expected.getTime() === actual.getTime()
+    ? []
+    : [{ path: path || 'root', expected, actual }];
+}
+
+/**
+ * Build a single-item mismatch diff
+ */
+function mismatch(expected: unknown, actual: unknown, path: string): StateDifference[] {
+  return expected === actual ? [] : [{ path: path || 'root', expected, actual }];
+}
+
+/**
  * Create a diff between expected and actual values
  */
 export function createDiff(
@@ -156,20 +176,16 @@ export function createDiff(
 ): StateDifference[] {
   if (expected === actual) return [];
 
-  // Handle null/undefined or type mismatch
   if (expected == null || actual == null || typeof expected !== typeof actual) {
-    return expected === actual ? [] : [{ path: path || 'root', expected, actual }];
+    return mismatch(expected, actual, path);
   }
 
-  // Delegate to type-specific diff functions
   if (Array.isArray(expected) && Array.isArray(actual)) {
     return diffArrays(expected, actual, path);
   }
 
   if (expected instanceof Date && actual instanceof Date) {
-    return expected.getTime() === actual.getTime()
-      ? []
-      : [{ path: path || 'root', expected, actual }];
+    return diffDates(expected, actual, path);
   }
 
   if (typeof expected === 'object' && typeof actual === 'object') {
@@ -180,8 +196,7 @@ export function createDiff(
     );
   }
 
-  // Primitive mismatch
-  return expected === actual ? [] : [{ path: path || 'root', expected, actual }];
+  return mismatch(expected, actual, path);
 }
 
 /**
