@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 
 export class VsaCodeActionProvider implements vscode.CodeActionProvider {
@@ -109,67 +110,53 @@ export class VsaCodeActionProvider implements vscode.CodeActionProvider {
     }
 }
 
-export function registerCodeActionCommands(context: vscode.ExtensionContext) {
-    // Command: Create missing file
+function registerCreateMissingFileCommand(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand(
             'vsa.createMissingFile',
             async (uri: vscode.Uri, filename: string) => {
-                const dirPath = uri.fsPath.substring(0, uri.fsPath.lastIndexOf('/'));
-                const newFilePath = `${dirPath}/${filename}`;
-                const newUri = vscode.Uri.file(newFilePath);
+                const dirPath = path.dirname(uri.fsPath);
+                const newUri = vscode.Uri.file(path.join(dirPath, filename));
 
                 try {
-                    // Create empty file
-                    await vscode.workspace.fs.writeFile(
-                        newUri,
-                        Buffer.from(getFileTemplate(filename), 'utf-8')
-                    );
-
-                    // Open the new file
+                    await vscode.workspace.fs.writeFile(newUri, Buffer.from(getFileTemplate(filename), 'utf-8'));
                     const doc = await vscode.workspace.openTextDocument(newUri);
                     await vscode.window.showTextDocument(doc);
-
                     vscode.window.showInformationMessage(`Created ${filename}`);
                 } catch (error) {
-                    vscode.window.showErrorMessage(
-                        `Failed to create file: ${error instanceof Error ? error.message : String(error)}`
-                    );
+                    vscode.window.showErrorMessage(`Failed to create file: ${error instanceof Error ? error.message : String(error)}`);
                 }
             }
         )
     );
+}
 
-    // Command: Rename file
+function registerRenameFileCommand(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand(
             'vsa.renameFile',
             async (uri: vscode.Uri, expectedName: string) => {
-                const dirPath = uri.fsPath.substring(0, uri.fsPath.lastIndexOf('/'));
-                const newPath = `${dirPath}/${expectedName}`;
-                const newUri = vscode.Uri.file(newPath);
+                const dirPath = path.dirname(uri.fsPath);
+                const newUri = vscode.Uri.file(path.join(dirPath, expectedName));
 
                 try {
                     await vscode.workspace.fs.rename(uri, newUri);
                     vscode.window.showInformationMessage(`Renamed to ${expectedName}`);
                 } catch (error) {
-                    vscode.window.showErrorMessage(
-                        `Failed to rename file: ${error instanceof Error ? error.message : String(error)}`
-                    );
+                    vscode.window.showErrorMessage(`Failed to rename file: ${error instanceof Error ? error.message : String(error)}`);
                 }
             }
         )
     );
+}
 
-    // Command: Generate test
+function registerGenerateTestCommand(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand(
             'vsa.generateTest',
             async (uri: vscode.Uri) => {
-                const filename = uri.fsPath.substring(uri.fsPath.lastIndexOf('/') + 1);
-                const dirPath = uri.fsPath.substring(0, uri.fsPath.lastIndexOf('/'));
-                
-                // Extract operation name from filename
+                const filename = path.basename(uri.fsPath);
+                const dirPath = path.dirname(uri.fsPath);
                 const match = filename.match(/^(.+?)(Command|Handler|Event)/);
                 if (!match) {
                     vscode.window.showErrorMessage('Could not determine operation name');
@@ -179,27 +166,25 @@ export function registerCodeActionCommands(context: vscode.ExtensionContext) {
                 const operationName = match[1];
                 const extension = filename.substring(filename.lastIndexOf('.'));
                 const testFilename = `${operationName}.test${extension}`;
-                const testPath = `${dirPath}/${testFilename}`;
-                const testUri = vscode.Uri.file(testPath);
+                const testUri = vscode.Uri.file(path.join(dirPath, testFilename));
 
                 try {
-                    await vscode.workspace.fs.writeFile(
-                        testUri,
-                        Buffer.from(getTestTemplate(operationName, extension), 'utf-8')
-                    );
-
+                    await vscode.workspace.fs.writeFile(testUri, Buffer.from(getTestTemplate(operationName, extension), 'utf-8'));
                     const doc = await vscode.workspace.openTextDocument(testUri);
                     await vscode.window.showTextDocument(doc);
-
                     vscode.window.showInformationMessage(`Created ${testFilename}`);
                 } catch (error) {
-                    vscode.window.showErrorMessage(
-                        `Failed to create test: ${error instanceof Error ? error.message : String(error)}`
-                    );
+                    vscode.window.showErrorMessage(`Failed to create test: ${error instanceof Error ? error.message : String(error)}`);
                 }
             }
         )
     );
+}
+
+export function registerCodeActionCommands(context: vscode.ExtensionContext) {
+    registerCreateMissingFileCommand(context);
+    registerRenameFileCommand(context);
+    registerGenerateTestCommand(context);
 }
 
 function getFileTemplate(filename: string): string {

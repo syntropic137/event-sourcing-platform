@@ -228,6 +228,42 @@ export class InvariantChecker<TAggregate extends AggregateRoot<DomainEvent>> {
   }
 
   /**
+   * Build snapshot from invariant check results.
+   */
+  private buildSnapshot(
+    results: InvariantCheckResult[],
+    eventIndex: number,
+    eventType?: string
+  ): InvariantSnapshot {
+    return {
+      eventIndex,
+      eventType,
+      results,
+      allErrorsPass: results.every((r) => r.holds || r.severity !== 'error'),
+      allPass: results.every((r) => r.holds),
+    };
+  }
+
+  /**
+   * Collect violations from invariant check results.
+   */
+  private collectViolations(
+    results: InvariantCheckResult[],
+    eventIndex: number,
+    eventType: string
+  ): InvariantViolation[] {
+    return results
+      .filter((r) => !r.holds)
+      .map((r) => ({
+        eventIndex,
+        eventType,
+        invariantDescription: r.description,
+        methodName: r.methodName,
+        severity: r.severity,
+      }));
+  }
+
+  /**
    * Verify invariants after each event in a sequence
    */
   async verifyAfterEachEvent(
@@ -237,30 +273,18 @@ export class InvariantChecker<TAggregate extends AggregateRoot<DomainEvent>> {
     const violations: InvariantViolation[] = [];
     const snapshots: InvariantSnapshot[] = [];
     const aggregate = new this.AggregateClass();
-
     const invariantCount = this.invariants.size + (this.additionalInvariants?.length ?? 0);
 
     // Check initial state
     const initialResults = this.checkInvariants(aggregate);
-    const initialSnapshot: InvariantSnapshot = {
-      eventIndex: -1,
-      results: initialResults,
-      allErrorsPass: initialResults.every((r) => r.holds || r.severity !== 'error'),
-      allPass: initialResults.every((r) => r.holds),
-    };
-
     if (this.options.includeSnapshots) {
-      snapshots.push(initialSnapshot);
+      snapshots.push(this.buildSnapshot(initialResults, -1));
     }
 
-    // Process each event
     for (let i = 0; i < events.length; i++) {
       const fixtureEvent = events[i];
-      const event = this.options.eventFactory(fixtureEvent);
-
-      // Apply event to aggregate
       try {
-        aggregate.applyEvent(event);
+        aggregate.applyEvent(this.options.eventFactory(fixtureEvent));
       } catch (error) {
         violations.push({
           eventIndex: i,
@@ -269,51 +293,21 @@ export class InvariantChecker<TAggregate extends AggregateRoot<DomainEvent>> {
           methodName: '<apply>',
           severity: 'error',
         });
-
-        if (this.options.stopOnFirstViolation) {
-          break;
-        }
+        if (this.options.stopOnFirstViolation) break;
         continue;
       }
 
-      // Check invariants after this event
       const results = this.checkInvariants(aggregate);
-
-      const snapshot: InvariantSnapshot = {
-        eventIndex: i,
-        eventType: fixtureEvent.type,
-        results,
-        allErrorsPass: results.every((r) => r.holds || r.severity !== 'error'),
-        allPass: results.every((r) => r.holds),
-      };
-
       if (this.options.includeSnapshots) {
-        snapshots.push(snapshot);
+        snapshots.push(this.buildSnapshot(results, i, fixtureEvent.type));
       }
+      violations.push(...this.collectViolations(results, i, fixtureEvent.type));
 
-      // Record violations
-      for (const result of results) {
-        if (!result.holds) {
-          violations.push({
-            eventIndex: i,
-            eventType: fixtureEvent.type,
-            invariantDescription: result.description,
-            methodName: result.methodName,
-            severity: result.severity,
-          });
-        }
-      }
-
-      if (this.options.stopOnFirstViolation && violations.length > 0) {
-        break;
-      }
+      if (this.options.stopOnFirstViolation && violations.length > 0) break;
     }
 
-    // Determine if passed (only error-level violations count)
-    const errorViolations = violations.filter((v) => v.severity === 'error');
-
     return {
-      passed: errorViolations.length === 0,
+      passed: violations.filter((v) => v.severity === 'error').length === 0,
       invariantCount,
       eventCount: events.length,
       violations,

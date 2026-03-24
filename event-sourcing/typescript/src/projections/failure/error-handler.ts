@@ -159,13 +159,39 @@ export class ProjectionErrorHandler {
    * @param processFn - The processing function
    * @returns Processing result
    */
+  /**
+   * Attempt retry via handleError; returns failure result if retries exhausted.
+   */
+  private async attemptRetry(
+    envelope: EventEnvelope<DomainEvent>,
+    projectionName: string,
+    error: Error,
+    attemptCount: number
+  ): Promise<{ shouldContinue: boolean; failureResult?: ErrorHandleResult }> {
+    const { shouldRetry, delayMs } = await this.handleError(
+      envelope, projectionName, error, attemptCount
+    );
+    if (!shouldRetry) {
+      return {
+        shouldContinue: false,
+        failureResult: {
+          result: ProjectionResult.FAILURE,
+          retryCount: attemptCount,
+          sentToDLQ: true,
+          error,
+        },
+      };
+    }
+    await sleep(delayMs);
+    return { shouldContinue: true };
+  }
+
   async executeWithRetry(
     envelope: EventEnvelope<DomainEvent>,
     projectionName: string,
     processFn: () => Promise<ProjectionResult>
   ): Promise<ErrorHandleResult> {
     let attemptCount = 0;
-    let lastError: Error | undefined;
 
     while (true) {
       try {
@@ -173,68 +199,24 @@ export class ProjectionErrorHandler {
 
         if (result === ProjectionResult.SUCCESS || result === ProjectionResult.SKIP) {
           this.reportSuccess(envelope);
-          return {
-            result,
-            retryCount: attemptCount,
-            sentToDLQ: false,
-          };
+          return { result, retryCount: attemptCount, sentToDLQ: false };
         }
 
         if (result === ProjectionResult.FAILURE) {
-          // Explicit failure - send to DLQ
           const error = new Error('Projection returned FAILURE result');
           await this.sendToDLQ(envelope, projectionName, error, attemptCount);
-          return {
-            result: ProjectionResult.FAILURE,
-            retryCount: attemptCount,
-            sentToDLQ: true,
-            error,
-          };
+          return { result: ProjectionResult.FAILURE, retryCount: attemptCount, sentToDLQ: true, error };
         }
 
-        if (result === ProjectionResult.RETRY) {
-          // Explicit retry request
-          lastError = new Error('Projection returned RETRY result');
-          const { shouldRetry, delayMs } = await this.handleError(
-            envelope,
-            projectionName,
-            lastError,
-            attemptCount
-          );
-
-          if (!shouldRetry) {
-            return {
-              result: ProjectionResult.FAILURE,
-              retryCount: attemptCount,
-              sentToDLQ: true,
-              error: lastError,
-            };
-          }
-
-          attemptCount++;
-          await sleep(delayMs);
-          continue;
-        }
-      } catch (error) {
-        lastError = error as Error;
-        const { shouldRetry, delayMs } = await this.handleError(
-          envelope,
-          projectionName,
-          lastError,
-          attemptCount
-        );
-
-        if (!shouldRetry) {
-          return {
-            result: ProjectionResult.FAILURE,
-            retryCount: attemptCount,
-            sentToDLQ: true,
-            error: lastError,
-          };
-        }
-
+        // RETRY result
+        const retryError = new Error('Projection returned RETRY result');
+        const retry = await this.attemptRetry(envelope, projectionName, retryError, attemptCount);
+        if (!retry.shouldContinue) return retry.failureResult!;
         attemptCount++;
-        await sleep(delayMs);
+      } catch (error) {
+        const retry = await this.attemptRetry(envelope, projectionName, error as Error, attemptCount);
+        if (!retry.shouldContinue) return retry.failureResult!;
+        attemptCount++;
       }
     }
   }

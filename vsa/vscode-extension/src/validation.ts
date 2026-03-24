@@ -73,45 +73,32 @@ export class ValidationService {
         });
     }
 
+    private classifyLine(
+        line: string,
+        currentFile: string | undefined
+    ): { valid?: boolean; error?: ValidationError; newContext?: string } {
+        const contextMatch = line.match(/^(✅|❌)\s+(.+)$/);
+        if (contextMatch) {
+            return { newContext: contextMatch[2].trim(), valid: line.includes('✅') || undefined };
+        }
+        if (line.includes('❌') || line.includes('⚠️')) {
+            return { error: this.parseErrorLine(line, currentFile) ?? undefined };
+        }
+        return {};
+    }
+
     private parseOutput(output: string): ValidationReport {
-        // Parse the CLI output
-        // For now, we'll use a simple text parsing approach
-        // TODO: Add JSON output mode to CLI and use that instead
-        
-        const report: ValidationReport = {
-            valid: 0,
-            errors: [],
-            warnings: []
-        };
-
-        const lines = output.split('\n');
+        const report: ValidationReport = { valid: 0, errors: [], warnings: [] };
         let currentFile: string | undefined;
-        
-        for (const line of lines) {
-            // Match error/warning patterns
-            // Example: "❌ warehouse/products/create-product"
-            // Example: "   └─ ⚠️  Missing: UpdateProduct.test.ts"
-            
-            if (line.includes('✅')) {
-                report.valid++;
-            } else if (line.includes('❌') || line.includes('⚠️')) {
-                const error = this.parseErrorLine(line, currentFile);
-                if (error) {
-                    if (error.severity === 'error') {
-                        report.errors.push(error);
-                    } else {
-                        report.warnings.push(error);
-                    }
-                }
-            }
 
-            // Track current context for multi-line errors
-            const contextMatch = line.match(/^(✅|❌)\s+(.+)$/);
-            if (contextMatch) {
-                currentFile = contextMatch[2].trim();
+        for (const line of output.split('\n')) {
+            const classified = this.classifyLine(line, currentFile);
+            if (classified.newContext) currentFile = classified.newContext;
+            if (classified.valid) report.valid++;
+            if (classified.error) {
+                (classified.error.severity === 'error' ? report.errors : report.warnings).push(classified.error);
             }
         }
-
         return report;
     }
 

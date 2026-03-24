@@ -107,6 +107,66 @@ export function partialMatch(expected: unknown, actual: unknown): boolean {
 }
 
 /**
+ * Diff two arrays element-by-element (only checks expected indices)
+ */
+function diffArrays(
+  expected: unknown[],
+  actual: unknown[],
+  path: string
+): StateDifference[] {
+  const differences: StateDifference[] = [];
+  expected.forEach((item, index) => {
+    const itemPath = path ? `${path}[${index}]` : `[${index}]`;
+    if (index >= actual.length) {
+      differences.push({ path: itemPath, expected: item, actual: undefined });
+    } else {
+      differences.push(...createDiff(item, actual[index], itemPath));
+    }
+  });
+  return differences;
+}
+
+/**
+ * Diff two objects by expected keys (partial match)
+ */
+function diffObjects(
+  expected: Record<string, unknown>,
+  actual: Record<string, unknown>,
+  path: string
+): StateDifference[] {
+  const differences: StateDifference[] = [];
+  for (const key of Object.keys(expected)) {
+    const keyPath = path ? `${path}.${key}` : key;
+    if (!(key in actual)) {
+      differences.push({ path: keyPath, expected: expected[key], actual: undefined });
+    } else {
+      differences.push(...createDiff(expected[key], actual[key], keyPath));
+    }
+  }
+  return differences;
+}
+
+/**
+ * Diff two Date instances by time value
+ */
+function diffDates(
+  expected: Date,
+  actual: Date,
+  path: string
+): StateDifference[] {
+  return expected.getTime() === actual.getTime()
+    ? []
+    : [{ path: path || 'root', expected, actual }];
+}
+
+/**
+ * Build a single-item mismatch diff
+ */
+function mismatch(expected: unknown, actual: unknown, path: string): StateDifference[] {
+  return expected === actual ? [] : [{ path: path || 'root', expected, actual }];
+}
+
+/**
  * Create a diff between expected and actual values
  */
 export function createDiff(
@@ -114,69 +174,29 @@ export function createDiff(
   actual: unknown,
   path: string = ''
 ): StateDifference[] {
-  const differences: StateDifference[] = [];
+  if (expected === actual) return [];
 
-  // Same reference or both primitive and equal
-  if (expected === actual) return differences;
-
-  // Handle null/undefined
-  if (expected == null || actual == null) {
-    if (expected !== actual) {
-      differences.push({ path: path || 'root', expected, actual });
-    }
-    return differences;
+  if (expected == null || actual == null || typeof expected !== typeof actual) {
+    return mismatch(expected, actual, path);
   }
 
-  // Handle different types
-  if (typeof expected !== typeof actual) {
-    differences.push({ path: path || 'root', expected, actual });
-    return differences;
-  }
-
-  // Handle arrays
   if (Array.isArray(expected) && Array.isArray(actual)) {
-    // Check each expected element
-    expected.forEach((item, index) => {
-      const itemPath = path ? `${path}[${index}]` : `[${index}]`;
-      if (index >= actual.length) {
-        differences.push({ path: itemPath, expected: item, actual: undefined });
-      } else {
-        differences.push(...createDiff(item, actual[index], itemPath));
-      }
-    });
-    return differences;
+    return diffArrays(expected, actual, path);
   }
 
-  // Handle dates
   if (expected instanceof Date && actual instanceof Date) {
-    if (expected.getTime() !== actual.getTime()) {
-      differences.push({ path: path || 'root', expected, actual });
-    }
-    return differences;
+    return diffDates(expected, actual, path);
   }
 
-  // Handle objects (partial match - only check expected keys)
   if (typeof expected === 'object' && typeof actual === 'object') {
-    const expectedObj = expected as Record<string, unknown>;
-    const actualObj = actual as Record<string, unknown>;
-
-    for (const key of Object.keys(expectedObj)) {
-      const keyPath = path ? `${path}.${key}` : key;
-      if (!(key in actualObj)) {
-        differences.push({ path: keyPath, expected: expectedObj[key], actual: undefined });
-      } else {
-        differences.push(...createDiff(expectedObj[key], actualObj[key], keyPath));
-      }
-    }
-    return differences;
+    return diffObjects(
+      expected as Record<string, unknown>,
+      actual as Record<string, unknown>,
+      path
+    );
   }
 
-  // Primitive mismatch
-  if (expected !== actual) {
-    differences.push({ path: path || 'root', expected, actual });
-  }
-
-  return differences;
+  return mismatch(expected, actual, path);
 }
 
 /**

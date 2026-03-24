@@ -98,27 +98,33 @@ function defaultEventFactory(fixtureEvent: FixtureEvent): DomainEvent {
 }
 
 /**
- * Default state extractor - tries common patterns
+ * Try extracting state via getState() method
  */
-function defaultStateExtractor<T extends AggregateRoot<DomainEvent>>(
-  aggregate: T
-): Record<string, unknown> {
-  // Try getState method
-  if ('getState' in aggregate && typeof aggregate.getState === 'function') {
-    return aggregate.getState() as Record<string, unknown>;
+function tryGetState(aggregate: object): Record<string, unknown> | null {
+  if ('getState' in aggregate && typeof (aggregate as Record<string, unknown>).getState === 'function') {
+    return (aggregate as { getState: () => unknown }).getState() as Record<string, unknown>;
   }
+  return null;
+}
 
-  // Try toJSON method
-  if ('toJSON' in aggregate && typeof aggregate.toJSON === 'function') {
-    return aggregate.toJSON() as Record<string, unknown>;
+/**
+ * Try extracting state via toJSON() method
+ */
+function tryToJSON(aggregate: object): Record<string, unknown> | null {
+  if ('toJSON' in aggregate && typeof (aggregate as Record<string, unknown>).toJSON === 'function') {
+    return (aggregate as { toJSON: () => unknown }).toJSON() as Record<string, unknown>;
   }
+  return null;
+}
 
-  // Fall back to extracting public properties
+/**
+ * Extract state from prototype getters and own properties
+ */
+function extractPublicProperties(aggregate: object): Record<string, unknown> {
   const state: Record<string, unknown> = {};
   const prototype = Object.getPrototypeOf(aggregate);
   const descriptors = Object.getOwnPropertyDescriptors(prototype);
 
-  // Get getter properties
   for (const [key, descriptor] of Object.entries(descriptors)) {
     if (descriptor.get && key !== 'id' && key !== 'version' && key !== 'aggregateId') {
       try {
@@ -129,7 +135,6 @@ function defaultStateExtractor<T extends AggregateRoot<DomainEvent>>(
     }
   }
 
-  // Get own properties (excluding private/internal)
   for (const key of Object.keys(aggregate)) {
     if (!key.startsWith('_') && key !== 'id' && key !== 'version') {
       state[key] = (aggregate as Record<string, unknown>)[key];
@@ -137,6 +142,15 @@ function defaultStateExtractor<T extends AggregateRoot<DomainEvent>>(
   }
 
   return state;
+}
+
+/**
+ * Default state extractor - tries common patterns in order
+ */
+function defaultStateExtractor<T extends AggregateRoot<DomainEvent>>(
+  aggregate: T
+): Record<string, unknown> {
+  return tryGetState(aggregate) ?? tryToJSON(aggregate) ?? extractPublicProperties(aggregate);
 }
 
 /**
