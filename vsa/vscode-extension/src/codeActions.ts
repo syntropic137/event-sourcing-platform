@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 
 export class VsaCodeActionProvider implements vscode.CodeActionProvider {
@@ -114,8 +115,8 @@ function registerCreateMissingFileCommand(context: vscode.ExtensionContext): voi
         vscode.commands.registerCommand(
             'vsa.createMissingFile',
             async (uri: vscode.Uri, filename: string) => {
-                const dirPath = uri.fsPath.substring(0, uri.fsPath.lastIndexOf('/'));
-                const newUri = vscode.Uri.file(`${dirPath}/${filename}`);
+                const dirPath = path.dirname(uri.fsPath);
+                const newUri = vscode.Uri.file(path.join(dirPath, filename));
 
                 try {
                     await vscode.workspace.fs.writeFile(newUri, Buffer.from(getFileTemplate(filename), 'utf-8'));
@@ -135,8 +136,8 @@ function registerRenameFileCommand(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand(
             'vsa.renameFile',
             async (uri: vscode.Uri, expectedName: string) => {
-                const dirPath = uri.fsPath.substring(0, uri.fsPath.lastIndexOf('/'));
-                const newUri = vscode.Uri.file(`${dirPath}/${expectedName}`);
+                const dirPath = path.dirname(uri.fsPath);
+                const newUri = vscode.Uri.file(path.join(dirPath, expectedName));
 
                 try {
                     await vscode.workspace.fs.rename(uri, newUri);
@@ -154,8 +155,8 @@ function registerGenerateTestCommand(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand(
             'vsa.generateTest',
             async (uri: vscode.Uri) => {
-                const filename = uri.fsPath.substring(uri.fsPath.lastIndexOf('/') + 1);
-                const dirPath = uri.fsPath.substring(0, uri.fsPath.lastIndexOf('/'));
+                const filename = path.basename(uri.fsPath);
+                const dirPath = path.dirname(uri.fsPath);
                 const match = filename.match(/^(.+?)(Command|Handler|Event)/);
                 if (!match) {
                     vscode.window.showErrorMessage('Could not determine operation name');
@@ -165,7 +166,7 @@ function registerGenerateTestCommand(context: vscode.ExtensionContext): void {
                 const operationName = match[1];
                 const extension = filename.substring(filename.lastIndexOf('.'));
                 const testFilename = `${operationName}.test${extension}`;
-                const testUri = vscode.Uri.file(`${dirPath}/${testFilename}`);
+                const testUri = vscode.Uri.file(path.join(dirPath, testFilename));
 
                 try {
                     await vscode.workspace.fs.writeFile(testUri, Buffer.from(getTestTemplate(operationName, extension), 'utf-8'));
