@@ -101,8 +101,8 @@ make qa-examples
 ```
 
 - `make qa` skips slow tests and coverage — use for pre-commit checks
-- `make qa-full` runs the complete suite including coverage
-- Event store QA auto-detects running dev infrastructure for faster execution
+- `make qa-full` runs the complete suite including integration tests and coverage
+- **Full end-to-end QA** requires dev infrastructure running (`make dev-init && make dev-start` first). Without it, event store tests fall back to testcontainers (slower, less realistic). Run `make qa-full` with dev infrastructure before releases and version bumps to exercise the real Postgres backend.
 
 ### Development Infrastructure
 
