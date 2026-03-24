@@ -3,53 +3,56 @@ import { AccountSummary } from "../../infrastructure/QueryBus";
 export class AccountSummaryProjection {
   private accountSummaries = new Map<string, AccountSummary>();
 
+  private onAccountOpened(accountId: string, event: any, timestamp: Date): void {
+    this.accountSummaries.set(accountId, {
+      accountId,
+      customerId: event.customerId,
+      accountType: event.accountType,
+      balance: event.initialBalance,
+      status: "Open",
+      transactionCount: 0,
+      lastActivity: timestamp,
+    });
+  }
+
+  private onMoneyDeposited(accountId: string, event: any, timestamp: Date): void {
+    const summary = this.accountSummaries.get(accountId);
+    if (summary) {
+      summary.balance += event.amount;
+      summary.transactionCount++;
+      summary.lastActivity = timestamp;
+    }
+  }
+
+  private onMoneyWithdrawn(accountId: string, event: any, timestamp: Date): void {
+    const summary = this.accountSummaries.get(accountId);
+    if (summary) {
+      summary.balance -= event.amount;
+      summary.transactionCount++;
+      summary.lastActivity = timestamp;
+    }
+  }
+
+  private onAccountClosed(accountId: string, _event: any, timestamp: Date): void {
+    const summary = this.accountSummaries.get(accountId);
+    if (summary) {
+      summary.status = "Closed";
+      summary.lastActivity = timestamp;
+    }
+  }
+
   processEvents(events: any[]): void {
+    const handlers: Record<string, (accountId: string, event: any, timestamp: Date) => void> = {
+      AccountOpened: (id, e, ts) => this.onAccountOpened(id, e, ts),
+      MoneyDeposited: (id, e, ts) => this.onMoneyDeposited(id, e, ts),
+      MoneyWithdrawn: (id, e, ts) => this.onMoneyWithdrawn(id, e, ts),
+      AccountClosed: (id, e, ts) => this.onAccountClosed(id, e, ts),
+    };
+
     for (const envelope of events) {
-      const event = envelope.event;
-      const metadata = envelope.metadata;
-      const accountId = metadata.aggregateId;
-
-      switch (event.eventType) {
-        case "AccountOpened":
-          this.accountSummaries.set(accountId, {
-            accountId,
-            customerId: event.customerId,
-            accountType: event.accountType,
-            balance: event.initialBalance,
-            status: "Open",
-            transactionCount: 0,
-            lastActivity: new Date(metadata.timestamp),
-          });
-          break;
-
-        case "MoneyDeposited": {
-          const summary = this.accountSummaries.get(accountId);
-          if (summary) {
-            summary.balance += event.amount;
-            summary.transactionCount++;
-            summary.lastActivity = new Date(metadata.timestamp);
-          }
-          break;
-        }
-
-        case "MoneyWithdrawn": {
-          const summary = this.accountSummaries.get(accountId);
-          if (summary) {
-            summary.balance -= event.amount;
-            summary.transactionCount++;
-            summary.lastActivity = new Date(metadata.timestamp);
-          }
-          break;
-        }
-
-        case "AccountClosed": {
-          const summary = this.accountSummaries.get(accountId);
-          if (summary) {
-            summary.status = "Closed";
-            summary.lastActivity = new Date(metadata.timestamp);
-          }
-          break;
-        }
+      const handler = handlers[envelope.event.eventType];
+      if (handler) {
+        handler(envelope.metadata.aggregateId, envelope.event, new Date(envelope.metadata.timestamp));
       }
     }
   }

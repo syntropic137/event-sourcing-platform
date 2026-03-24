@@ -54,8 +54,12 @@ function markdownToPlainText(markdown: string): string {
   // Remove frontmatter
   text = text.replace(/^---\n[\s\S]*?\n---\n/, '');
   
-  // Remove HTML comments
-  text = text.replace(/<!--[\s\S]*?-->/g, '');
+  // Remove HTML comments (loop to handle nested/malformed markers)
+  let prev = '';
+  while (prev !== text) {
+    prev = text;
+    text = text.replace(/<!--[\s\S]*?-->/g, '');
+  }
   
   // Convert headers to plain text with section markers
   text = text.replace(/^#{1,6}\s+(.+)$/gm, '\n=== $1 ===\n');

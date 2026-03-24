@@ -47,21 +47,15 @@ def _stringify_map(values: dict) -> dict:
     return {key: str(value) for key, value in values.items()}
 
 
-def render_aws(env: str, cfg: dict) -> list[str]:
+def _build_aws_terraform_payload(cfg: dict) -> dict:
+    """Build the Terraform tfvars payload for AWS."""
     provider_cfg = cfg["aws"]
     compute_cfg = cfg["compute"]
     metadata_cfg = cfg["metadata"]
     postgres_cfg = cfg["postgres"]
     event_cfg = cfg["event_store"]
-    ansible_cfg = cfg["ansible"]
 
-    terraform_env_dir = ROOT / "aws" / "provision" / "terraform" / "envs" / env
-    ansible_env_dir = ROOT / "aws" / "configure" / "ansible" / "envs" / env
-
-    backend_type = postgres_cfg.get("type", "postgres")
-    backend_url = postgres_cfg.get("database_url_secret_arn", "")
-
-    terraform_payload = {
+    return {
         "aws_region": provider_cfg["region"],
         "aws_profile": provider_cfg.get("profile", "default"),
         "aws_shared_credentials_file": provider_cfg.get("shared_credentials_file"),
@@ -77,8 +71,8 @@ def render_aws(env: str, cfg: dict) -> list[str]:
             "metrics_port": event_cfg["metrics_port"],
         },
         "backend": {
-            "type": backend_type,
-            "database_url": backend_url,
+            "type": postgres_cfg.get("type", "postgres"),
+            "database_url": postgres_cfg.get("database_url_secret_arn", ""),
             "extra_env": postgres_cfg.get("extra_env", {}),
         },
         "network": {
@@ -100,8 +94,16 @@ def render_aws(env: str, cfg: dict) -> list[str]:
         },
     }
 
-    write_json(terraform_env_dir / "terraform.tfvars.json", terraform_payload)
 
+def _build_aws_ansible_config(cfg: dict, ansible_env_dir: Path) -> None:
+    """Generate Ansible group_vars, inventory, and playbook for AWS."""
+    metadata_cfg = cfg["metadata"]
+    postgres_cfg = cfg["postgres"]
+    event_cfg = cfg["event_store"]
+    ansible_cfg = cfg["ansible"]
+
+    backend_type = postgres_cfg.get("type", "postgres")
+    backend_url = postgres_cfg.get("database_url_secret_arn", "")
     database_lookup = backend_url
     if backend_url.startswith("arn:"):
         database_lookup = "{{ lookup('aws_secretsmanager', '%s') }}" % backend_url
@@ -115,7 +117,7 @@ def render_aws(env: str, cfg: dict) -> list[str]:
         "ENVIRONMENT": metadata_cfg["environment"],
     }
 
-    environment_overrides = {}
+    environment_overrides: dict[str, str] = {}
     environment_overrides.update(_stringify_map(postgres_cfg.get("extra_env", {})))
     environment_overrides.update(_stringify_map(ansible_cfg.get("environment_overrides", {})))
 
@@ -130,7 +132,6 @@ def render_aws(env: str, cfg: dict) -> list[str]:
         "install_dir": ansible_cfg["service"].get("install_dir", "/opt/event-store"),
         "service_description": ansible_cfg["service"].get("description", "Event Store Service"),
     }
-
     write_yaml(ansible_env_dir / "group_vars" / "all.yml", group_vars_payload)
 
     inventory_line = (
@@ -139,12 +140,10 @@ def render_aws(env: str, cfg: dict) -> list[str]:
         f"ansible_user={ansible_cfg['ssh_user']} "
         f"ansible_ssh_private_key_file={ansible_cfg['ssh_private_key_path']}"
     )
-
-    inventory_content = (
-        f"[{ansible_cfg['inventory_host_group']}]\n" f"{inventory_line}\n"
+    write_text(
+        ansible_env_dir / "inventory.ini",
+        f"[{ansible_cfg['inventory_host_group']}]\n{inventory_line}\n",
     )
-
-    write_text(ansible_env_dir / "inventory.ini", inventory_content)
 
     playbook_path = ansible_env_dir / "playbook.yml"
     if not playbook_path.exists():
@@ -160,6 +159,14 @@ def render_aws(env: str, cfg: dict) -> list[str]:
         ).format(host_group=ansible_cfg["inventory_host_group"])
         write_text(playbook_path, playbook_content)
 
+
+def render_aws(env: str, cfg: dict) -> list[str]:
+    terraform_env_dir = ROOT / "aws" / "provision" / "terraform" / "envs" / env
+    ansible_env_dir = ROOT / "aws" / "configure" / "ansible" / "envs" / env
+
+    write_json(terraform_env_dir / "terraform.tfvars.json", _build_aws_terraform_payload(cfg))
+    _build_aws_ansible_config(cfg, ansible_env_dir)
+
     return [
         str(terraform_env_dir / "terraform.tfvars.json"),
         str(ansible_env_dir / "group_vars" / "all.yml"),
@@ -167,10 +174,8 @@ def render_aws(env: str, cfg: dict) -> list[str]:
     ]
 
 
-def render_proxmox(env: str, cfg: dict) -> list[str]:
-    proxmox_cfg = cfg["proxmox"]
-    metadata_cfg = cfg["metadata"]
-
+def _resolve_proxmox_token(proxmox_cfg: dict) -> str:
+    """Resolve the Proxmox API token secret from env or config."""
     token_secret_env = proxmox_cfg.get("token_secret_env")
     if token_secret_env:
         token_secret = os.environ.get(token_secret_env)
@@ -178,13 +183,16 @@ def render_proxmox(env: str, cfg: dict) -> list[str]:
             raise SystemExit(
                 f"Environment variable '{token_secret_env}' (referenced in config) is not set"
             )
-    else:
-        token_secret = proxmox_cfg.get("token_secret", "")
+        return token_secret
+    return proxmox_cfg.get("token_secret", "")
 
-    terraform_env_dir = ROOT / "proxmox" / "provision" / "terraform" / "envs" / env
-    ansible_env_dir = ROOT / "proxmox" / "configure" / "ansible" / "envs" / env
 
-    terraform_payload = {
+def _build_proxmox_terraform_payload(cfg: dict, token_secret: str) -> dict:
+    """Build the Terraform tfvars payload for Proxmox."""
+    proxmox_cfg = cfg["proxmox"]
+    metadata_cfg = cfg["metadata"]
+
+    return {
         "metadata": {
             "environment": metadata_cfg["environment"],
             "owner": metadata_cfg["owner"],
@@ -221,12 +229,11 @@ def render_proxmox(env: str, cfg: dict) -> list[str]:
         },
     }
 
-    write_json(terraform_env_dir / "terraform.tfvars.json", terraform_payload)
 
-    # Generate Ansible configuration files
+def _build_proxmox_ansible_config(cfg: dict, ansible_env_dir: Path) -> None:
+    """Generate Ansible inventory and group_vars for Proxmox."""
     ansible_cfg = cfg.get("ansible", {})
-    
-    # Generate inventory.ini
+
     inventory_content = f"""[{ansible_cfg.get('inventory_host_group', 'event_store')}]
 {ansible_cfg.get('host', '192.168.0.100')} ansible_user={ansible_cfg.get('ssh_user', 'ubuntu')} ansible_ssh_private_key_file={ansible_cfg.get('ssh_private_key_path', '~/.ssh/nuc-proxmox')}
 
@@ -234,12 +241,11 @@ def render_proxmox(env: str, cfg: dict) -> list[str]:
 ansible_python_interpreter=/usr/bin/python3
 """
     write_text(ansible_env_dir / "inventory.ini", inventory_content)
-    
-    # Generate group_vars/all.yml
+
     postgres_cfg = ansible_cfg.get("postgres", {})
     eventstore_cfg = ansible_cfg.get("eventstore", {})
     service_cfg = ansible_cfg.get("service", {})
-    
+
     ansible_vars = {
         "# PostgreSQL configuration": None,
         "postgres_container_name": postgres_cfg.get("container_name", "eventstore-postgres"),
@@ -248,19 +254,16 @@ ansible_python_interpreter=/usr/bin/python3
         "postgres_password": postgres_cfg.get("password", "changeme"),
         "postgres_port": postgres_cfg.get("port", 5432),
         "postgres_data_dir": postgres_cfg.get("data_dir", "/var/lib/eventstore/postgres"),
-        
         "# Event Store configuration": None,
         "eventstore_grpc_port": eventstore_cfg.get("grpc_port", 50051),
         "eventstore_backend": eventstore_cfg.get("backend", "postgres"),
         "binary_url": eventstore_cfg.get("binary_url", ""),
-        
         "# Service configuration": None,
         "service_user": service_cfg.get("user", "eventstore"),
         "service_group": service_cfg.get("group", "eventstore"),
         "service_name": service_cfg.get("name", "eventstore"),
         "install_dir": service_cfg.get("install_dir", "/opt/event-store"),
         "docker_compose_dir": ansible_cfg.get("docker_compose_dir", "/opt/eventstore/docker"),
-        
         "# Environment variables": None,
         "service_environment": {
             "BACKEND": eventstore_cfg.get("backend", "postgres"),
@@ -269,9 +272,21 @@ ansible_python_interpreter=/usr/bin/python3
             "RUST_LOG": eventstore_cfg.get("rust_log", "info"),
         },
     }
-    
     write_yaml(ansible_env_dir / "group_vars" / "all.yml", ansible_vars)
-    
+
+
+def render_proxmox(env: str, cfg: dict) -> list[str]:
+    token_secret = _resolve_proxmox_token(cfg["proxmox"])
+
+    terraform_env_dir = ROOT / "proxmox" / "provision" / "terraform" / "envs" / env
+    ansible_env_dir = ROOT / "proxmox" / "configure" / "ansible" / "envs" / env
+
+    write_json(
+        terraform_env_dir / "terraform.tfvars.json",
+        _build_proxmox_terraform_payload(cfg, token_secret),
+    )
+    _build_proxmox_ansible_config(cfg, ansible_env_dir)
+
     return [
         str(terraform_env_dir / "terraform.tfvars.json"),
         str(ansible_env_dir / "inventory.ini"),

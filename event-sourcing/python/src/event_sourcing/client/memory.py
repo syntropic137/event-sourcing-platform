@@ -171,6 +171,47 @@ class MemoryEventStoreClient:
         """Get the current version of a stream (for testing)."""
         return len(self._streams.get(stream_name, []))
 
+    def _filter_and_sort_events(
+        self,
+        from_global_nonce: int,
+        forward: bool,
+    ) -> list[EventEnvelope[DomainEvent]]:
+        """Collect all events, filter by nonce/direction, and sort."""
+        all_events: list[EventEnvelope[DomainEvent]] = []
+        for stream_events in self._streams.values():
+            all_events.extend(stream_events)
+
+        if forward:
+            filtered = [
+                e for e in all_events
+                if e.metadata.global_nonce is not None
+                and e.metadata.global_nonce >= from_global_nonce
+            ]
+            return sorted(filtered, key=lambda e: e.metadata.global_nonce or 0)
+
+        filtered = [
+            e for e in all_events
+            if e.metadata.global_nonce is not None
+            and e.metadata.global_nonce <= from_global_nonce
+        ]
+        return sorted(filtered, key=lambda e: e.metadata.global_nonce or 0, reverse=True)
+
+    @staticmethod
+    def _calculate_next_position(
+        page: list[EventEnvelope[DomainEvent]],
+        from_global_nonce: int,
+        forward: bool,
+    ) -> int:
+        """Calculate the next global nonce for pagination."""
+        if forward:
+            if page and page[-1].metadata.global_nonce is not None:
+                return page[-1].metadata.global_nonce + 1
+            return from_global_nonce
+
+        if page and page[0].metadata.global_nonce is not None:
+            return max(0, page[0].metadata.global_nonce - 1)
+        return 0
+
     async def read_all(
         self,
         from_global_nonce: int = 0,
@@ -188,53 +229,10 @@ class MemoryEventStoreClient:
         Returns:
             Tuple of (events, is_end, next_from_global_nonce)
         """
-        # Collect all events from all streams
-        all_events: list[EventEnvelope[DomainEvent]] = []
-        for stream_events in self._streams.values():
-            all_events.extend(stream_events)
-
-        # Filter events based on global nonce and direction
-        if forward:
-            filtered_events = [
-                event
-                for event in all_events
-                if event.metadata.global_nonce is not None
-                and event.metadata.global_nonce >= from_global_nonce
-            ]
-            # Sort ascending
-            sorted_events = sorted(filtered_events, key=lambda e: e.metadata.global_nonce or 0)
-        else:
-            filtered_events = [
-                event
-                for event in all_events
-                if event.metadata.global_nonce is not None
-                and event.metadata.global_nonce <= from_global_nonce
-            ]
-            # Sort descending
-            sorted_events = sorted(
-                filtered_events, key=lambda e: e.metadata.global_nonce or 0, reverse=True
-            )
-
-        # Apply limit
+        sorted_events = self._filter_and_sort_events(from_global_nonce, forward)
         page = sorted_events[:max_count]
-
-        # Determine if we've reached the end
         is_end = len(page) < max_count
-
-        # Calculate next position for pagination
-        if forward:
-            next_from = (
-                page[-1].metadata.global_nonce + 1
-                if page and page[-1].metadata.global_nonce is not None
-                else from_global_nonce
-            )
-        else:
-            next_from = (
-                max(0, page[0].metadata.global_nonce - 1)
-                if page and page[0].metadata.global_nonce is not None
-                else 0
-            )
-
+        next_from = self._calculate_next_position(page, from_global_nonce, forward)
         return page, is_end, next_from
 
     async def read_all_events_from(

@@ -118,6 +118,17 @@ export class ProjectionHealthChecker {
   }
 
   /**
+   * Determine overall status from counts.
+   */
+  private static determineOverallStatus(
+    counts: { unhealthy: number; degraded: number }
+  ): 'healthy' | 'degraded' | 'unhealthy' {
+    if (counts.unhealthy > 0) return 'unhealthy';
+    if (counts.degraded > 0) return 'degraded';
+    return 'healthy';
+  }
+
+  /**
    * Get summary of overall health
    */
   async getHealthSummary(): Promise<{
@@ -130,45 +141,16 @@ export class ProjectionHealthChecker {
   }> {
     const allHealth = await this.getAllHealth();
 
-    let healthy = 0;
-    let degraded = 0;
-    let unhealthy = 0;
-    let totalLag = 0;
-    let totalFailedEvents = 0;
-
+    const counts = { healthy: 0, degraded: 0, unhealthy: 0, totalLag: 0, totalFailedEvents: 0 };
     for (const health of allHealth) {
-      totalLag += health.lag;
-      totalFailedEvents += health.failedEventCount;
-
-      switch (health.status) {
-        case 'healthy':
-          healthy++;
-          break;
-        case 'degraded':
-          degraded++;
-          break;
-        case 'unhealthy':
-          unhealthy++;
-          break;
-      }
-    }
-
-    let overall: 'healthy' | 'degraded' | 'unhealthy';
-    if (unhealthy > 0) {
-      overall = 'unhealthy';
-    } else if (degraded > 0) {
-      overall = 'degraded';
-    } else {
-      overall = 'healthy';
+      counts.totalLag += health.lag;
+      counts.totalFailedEvents += health.failedEventCount;
+      counts[health.status]++;
     }
 
     return {
-      overall,
-      healthy,
-      degraded,
-      unhealthy,
-      totalLag,
-      totalFailedEvents,
+      overall: ProjectionHealthChecker.determineOverallStatus(counts),
+      ...counts,
     };
   }
 

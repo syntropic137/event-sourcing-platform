@@ -242,36 +242,30 @@ export class InMemoryMetricsRegistry implements MetricsRegistry {
   }
 
   /**
-   * Get all metrics in Prometheus text format.
+   * Export counter/gauge metrics as Prometheus text lines.
    */
-  async getMetrics(): Promise<string> {
+  private exportSimpleMetrics(
+    metrics: Map<string, { name: string; help: string; getValues(): Map<string, number> }>,
+    type: string
+  ): string[] {
     const lines: string[] = [];
-
-    // Export counters
-    for (const counter of this.counters.values()) {
-      lines.push(`# HELP ${counter.name} ${counter.help}`);
-      lines.push(`# TYPE ${counter.name} counter`);
-
-      for (const [labels, value] of counter.getValues()) {
+    for (const metric of metrics.values()) {
+      lines.push(`# HELP ${metric.name} ${metric.help}`);
+      lines.push(`# TYPE ${metric.name} ${type}`);
+      for (const [labels, value] of metric.getValues()) {
         const labelStr = labels ? `{${labels}}` : '';
-        lines.push(`${counter.name}${labelStr} ${value}`);
+        lines.push(`${metric.name}${labelStr} ${value}`);
       }
       lines.push('');
     }
+    return lines;
+  }
 
-    // Export gauges
-    for (const gauge of this.gauges.values()) {
-      lines.push(`# HELP ${gauge.name} ${gauge.help}`);
-      lines.push(`# TYPE ${gauge.name} gauge`);
-
-      for (const [labels, value] of gauge.getValues()) {
-        const labelStr = labels ? `{${labels}}` : '';
-        lines.push(`${gauge.name}${labelStr} ${value}`);
-      }
-      lines.push('');
-    }
-
-    // Export histograms
+  /**
+   * Export histogram metrics as Prometheus text lines.
+   */
+  private exportHistogramMetrics(): string[] {
+    const lines: string[] = [];
     for (const histogram of this.histograms.values()) {
       lines.push(`# HELP ${histogram.name} ${histogram.help}`);
       lines.push(`# TYPE ${histogram.name} histogram`);
@@ -282,24 +276,29 @@ export class InMemoryMetricsRegistry implements MetricsRegistry {
 
       for (const [labels, bucketMap] of buckets) {
         const baseLabels = labels ? `${labels},` : '';
-
-        // Export buckets
         for (const bucket of histogram.buckets) {
-          const bucketValue = bucketMap.get(bucket) ?? 0;
-          lines.push(`${histogram.name}_bucket{${baseLabels}le="${bucket}"} ${bucketValue}`);
+          lines.push(`${histogram.name}_bucket{${baseLabels}le="${bucket}"} ${bucketMap.get(bucket) ?? 0}`);
         }
-        // +Inf bucket
-        const infValue = counts.get(labels) ?? 0;
-        lines.push(`${histogram.name}_bucket{${baseLabels}le="+Inf"} ${infValue}`);
+        lines.push(`${histogram.name}_bucket{${baseLabels}le="+Inf"} ${counts.get(labels) ?? 0}`);
 
-        // Sum and count
         const sumLabels = labels ? `{${labels}}` : '';
         lines.push(`${histogram.name}_sum${sumLabels} ${sums.get(labels) ?? 0}`);
         lines.push(`${histogram.name}_count${sumLabels} ${counts.get(labels) ?? 0}`);
       }
       lines.push('');
     }
+    return lines;
+  }
 
+  /**
+   * Get all metrics in Prometheus text format.
+   */
+  async getMetrics(): Promise<string> {
+    const lines = [
+      ...this.exportSimpleMetrics(this.counters, 'counter'),
+      ...this.exportSimpleMetrics(this.gauges, 'gauge'),
+      ...this.exportHistogramMetrics(),
+    ];
     return lines.join('\n');
   }
 

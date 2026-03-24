@@ -80,50 +80,8 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
         });
 
         for (const e of resp.events) {
-          if (!e.meta) continue;
-          const meta = e.meta as ReadStreamMetadata;
-          const payloadJson = safeJsonParse(e.payload);
-
-          const recordedUnixMs = Number(
-            meta.recordedTimeUnixMs ?? meta.timestampUnixMs ?? Date.now()
-          );
-          const timestampUnixMs = Number(meta.timestampUnixMs ?? recordedUnixMs);
-          const recordedIso = new Date(recordedUnixMs).toISOString();
-          const timestampIso = new Date(timestampUnixMs).toISOString();
-
-          const metadataJson: JsonObject = {
-            eventId: meta.eventId,
-            timestamp: timestampIso,
-            recordedTimestamp: recordedIso,
-            aggregateNonce: Number(meta.aggregateNonce),
-            aggregateId: meta.aggregateId,
-            aggregateType: meta.aggregateType || aggregateType,
-            tenantId: meta.tenantId || '',
-            globalNonce: meta.globalNonce ?? null,
-            contentType: meta.contentType || 'application/json',
-            correlationId: meta.correlationId || '',
-            causationId: meta.causationId || '',
-            actorId: meta.actorId || '',
-            headers: meta.headers ?? {},
-            customMetadata: {},
-          };
-
-          if (meta.payloadSha256 && meta.payloadSha256.length > 0) {
-            metadataJson.payloadHash = bytesToHex(meta.payloadSha256);
-          }
-
-          const eventJson: JsonObject = {
-            eventType: meta.eventType,
-            schemaVersion: meta.eventVersion ?? 0,
-            data: payloadJson,
-          };
-
-          const envelopeJson: JsonObject = {
-            event: eventJson,
-            metadata: metadataJson,
-          };
-
-          all.push(EventSerializer.deserialize(envelopeJson));
+          const envelope = transformGrpcEvent(e, aggregateType);
+          if (envelope) all.push(envelope);
         }
 
         if (resp.isEnd) break;
@@ -233,50 +191,8 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
 
       const events: EventEnvelope[] = [];
       for (const e of resp.events) {
-        if (!e.meta) continue;
-        const meta = e.meta as ReadStreamMetadata;
-        const payloadJson = safeJsonParse(e.payload);
-
-        const recordedUnixMs = Number(
-          meta.recordedTimeUnixMs ?? meta.timestampUnixMs ?? Date.now()
-        );
-        const timestampUnixMs = Number(meta.timestampUnixMs ?? recordedUnixMs);
-        const recordedIso = new Date(recordedUnixMs).toISOString();
-        const timestampIso = new Date(timestampUnixMs).toISOString();
-
-        const metadataJson: JsonObject = {
-          eventId: meta.eventId,
-          timestamp: timestampIso,
-          recordedTimestamp: recordedIso,
-          aggregateNonce: Number(meta.aggregateNonce),
-          aggregateId: meta.aggregateId,
-          aggregateType: meta.aggregateType || '',
-          tenantId: meta.tenantId || '',
-          globalNonce: meta.globalNonce ?? null,
-          contentType: meta.contentType || 'application/json',
-          correlationId: meta.correlationId || '',
-          causationId: meta.causationId || '',
-          actorId: meta.actorId || '',
-          headers: meta.headers ?? {},
-          customMetadata: {},
-        };
-
-        if (meta.payloadSha256 && meta.payloadSha256.length > 0) {
-          metadataJson.payloadHash = bytesToHex(meta.payloadSha256);
-        }
-
-        const eventJson: JsonObject = {
-          eventType: meta.eventType,
-          schemaVersion: meta.eventVersion ?? 0,
-          data: payloadJson,
-        };
-
-        const envelopeJson: JsonObject = {
-          event: eventJson,
-          metadata: metadataJson,
-        };
-
-        events.push(EventSerializer.deserialize(envelopeJson));
+        const envelope = transformGrpcEvent(e, '');
+        if (envelope) events.push(envelope);
       }
 
       return {
@@ -288,6 +204,44 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
       throw new EventStoreError('readAll failed', err as Error);
     }
   }
+}
+
+function transformGrpcEvent(
+  e: { meta?: unknown; payload: Uint8Array },
+  fallbackAggregateType: string
+): EventEnvelope | null {
+  if (!e.meta) return null;
+  const meta = e.meta as ReadStreamMetadata;
+  const payloadJson = safeJsonParse(e.payload);
+
+  const recordedUnixMs = Number(meta.recordedTimeUnixMs ?? meta.timestampUnixMs ?? Date.now());
+  const timestampUnixMs = Number(meta.timestampUnixMs ?? recordedUnixMs);
+
+  const metadataJson: JsonObject = {
+    eventId: meta.eventId,
+    timestamp: new Date(timestampUnixMs).toISOString(),
+    recordedTimestamp: new Date(recordedUnixMs).toISOString(),
+    aggregateNonce: Number(meta.aggregateNonce),
+    aggregateId: meta.aggregateId,
+    aggregateType: meta.aggregateType || fallbackAggregateType,
+    tenantId: meta.tenantId || '',
+    globalNonce: meta.globalNonce ?? null,
+    contentType: meta.contentType || 'application/json',
+    correlationId: meta.correlationId || '',
+    causationId: meta.causationId || '',
+    actorId: meta.actorId || '',
+    headers: meta.headers ?? {},
+    customMetadata: {},
+  };
+
+  if (meta.payloadSha256 && meta.payloadSha256.length > 0) {
+    metadataJson.payloadHash = bytesToHex(meta.payloadSha256);
+  }
+
+  return EventSerializer.deserialize({
+    event: { eventType: meta.eventType, schemaVersion: meta.eventVersion ?? 0, data: payloadJson },
+    metadata: metadataJson,
+  });
 }
 
 function safeJsonParse(buf: Uint8Array): JsonValue {
