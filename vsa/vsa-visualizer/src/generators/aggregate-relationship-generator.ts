@@ -233,6 +233,9 @@ export class AggregateRelationshipGenerator {
     if (aggregate.event_handlers.length > 0) {
       height += 25; // Section header
       height += Math.min(aggregate.event_handlers.length, 3) * this.ENTITY_HEIGHT;
+      if (aggregate.event_handlers.length > 3) {
+        height += this.ENTITY_HEIGHT; // "... and N more" overflow line
+      }
     }
 
     return Math.max(height + this.AGGREGATE_PADDING, this.AGGREGATE_MIN_HEIGHT);

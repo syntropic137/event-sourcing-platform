@@ -24,13 +24,13 @@ describe('InMemoryMetricsRegistry', () => {
       expect(same).toBe(counter);
     });
 
-    it('should add arbitrary positive values', () => {
+    it('should add arbitrary positive values', async () => {
       const counter = registry.counter('bytes_total', 'Total bytes');
       counter.add(100);
       counter.add(50);
 
-      const output = registry.getMetrics();
-      expect(output).resolves.toContain('bytes_total 150');
+      const output = await registry.getMetrics();
+      expect(output).toContain('bytes_total 150');
     });
 
     it('should throw when adding negative value', () => {
