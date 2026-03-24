@@ -11,11 +11,7 @@ import { loadFixture, createFixture } from '../src/testing/fixtures/test-fixture
 // Temp directory setup / teardown
 // ---------------------------------------------------------------------------
 
-const tmpDir = path.join(os.tmpdir(), `test-fixture-tests-${Date.now()}`);
-
-beforeAll(() => {
-  fs.mkdirSync(tmpDir, { recursive: true });
-});
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-fixture-tests-'));
 
 afterAll(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
