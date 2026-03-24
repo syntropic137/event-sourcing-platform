@@ -1,155 +1,231 @@
-# 🔄 RIPER-5 MODE: STRICT OPERATIONAL PROTOCOL
-v2.0.5 - 20250810
+# AGENTS.md
+
+This is the canonical agent instruction file for the event sourcing platform. It is designed to work across multiple AI agent systems (Claude Code, Cursor, Windsurf, etc.).
+
+## Repository Overview
+
+A comprehensive event sourcing platform organized around Domain-Driven Design principles. Provides a low-level event store (Rust) and high-level event sourcing abstractions (multi-language SDKs), plus a Vertical Slice Architecture (VSA) manager tool for code organization.
+
+**Key Philosophy Documents:**
+- [Platform Philosophy](docs/PLATFORM-PHILOSOPHY.md) — What this platform IS and IS NOT
+- [Maintainability Doctrine](docs/MAINTAINABILITY-DOCTRINE.md) — Engineering principles for sustainability
+- [ADR Index](docs/adrs/ADR-INDEX.md) — Architectural decisions
+
+**Requires:** Rust stable, pnpm 10+, protoc 27+, Docker
+
+## Key Architecture Principles
+
+1. **Domain Focus**: Event Store and Event Sourcing define the rules of the event sourcing domain
+2. **Living Documentation**: Examples demonstrate real applications with actual databases (no mocks)
+3. **Progressive Learning**: Examples build from basic concepts to complete systems
+4. **Multi-Language**: Rust for performance-critical components, TypeScript as primary SDK, Python planned
+5. **Bounded Contexts**: VSA tool enforces vertical slice architecture with bounded contexts
+
+## Project Structure
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│             │     │             │     │             │     │             │     │             │
-│  RESEARCH   │────▶│  INNOVATE   │────▶│    PLAN     │────▶│   EXECUTE   │────▶│   REVIEW    │
-│             │     │             │     │             │     │             │     │             │
-└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
-       ▲                                       │                  │                    │
-       │                                       │                  │                    │
-       └───────────────────────────────────────┘                  │                    │
-                                                                  │                    │
-                                                                  ▼                    │
-                                                        ┌─────────────────┐            │
-                                                        │  QA CHECKPOINT  │            │
-                                                        │  - Lint/Format  │            │
-                                                        │  - Type Check   │            │
-                                                        │  - Run Tests    │            │
-                                                        │  - Review Files │            │
-                                                        │  - Commit Files │            │
-                                                        └─────────────────┘            │
-                                                                  │                    │
-                                                                  └────────────────────┘
+event-sourcing-platform/
+├── event-store/                 # Rust event store with gRPC API
+│   ├── eventstore-core/            # Traits, errors, protobuf types
+│   ├── eventstore-proto/           # Protobuf definitions
+│   ├── eventstore-backend-memory/  # In-memory backend
+│   ├── eventstore-backend-postgres/# Postgres backend
+│   ├── eventstore-bin/             # gRPC server binary
+│   └── sdks/                       # Client SDKs
+│       ├── sdk-ts/                    # TypeScript SDK
+│       ├── sdk-py/                    # Python SDK (stub)
+│       └── sdk-rs/                    # Rust SDK
+├── event-sourcing/              # Event sourcing SDKs and patterns
+│   ├── typescript/                 # Primary SDK with decorators
+│   ├── rust/                       # Alpha SDK
+│   └── python/                     # Python SDK (early stage)
+├── vsa/                         # Vertical Slice Architecture Manager
+│   ├── vsa-core/                   # Core validation logic (Rust)
+│   ├── vsa-cli/                    # CLI tool
+│   ├── vsa-wasm/                   # WASM bindings for Node.js
+│   ├── vsa-visualizer/             # Visualization tooling
+│   └── vscode-extension/           # VS Code integration
+├── examples/                    # TypeScript "living documentation"
+│   ├── 002-simple-aggregate-ts/    # Aggregate decorators
+│   ├── 004-cqrs-patterns-ts/      # CQRS patterns
+│   └── 007-ecommerce-complete-ts/  # Complete e-commerce example
+├── dev-tools/                   # Development infrastructure scripts
+├── docs/                        # Project documentation
+├── docs-site/                   # Docusaurus documentation site
+├── reference/                   # Reference materials
+└── infra-as-code/               # Infrastructure as Code
+    ├── aws/                        # AWS deployment
+    ├── proxmox/                    # Proxmox deployment
+    └── shared/                     # Shared provisioning
 ```
 
-## Mode Transition Signals
-Only transition modes when these exact signals are used:
+## Where to Look
 
+- **Event store changes** → `event-store/`, proto in `eventstore-proto/proto/`, regenerate stubs with `make gen-ts`/`gen-py`
+- **TypeScript SDK** → `event-sourcing/typescript/`
+- **Examples** → `examples/`, follow existing patterns and numbering
+- **VSA tool** → `vsa/`, Rust workspace with `cargo build --workspace`
+- **CI/CD** → `.github/workflows/`
+- **Dev infrastructure** → `dev-tools/dev` script, controlled via `make dev-*`
+- **Docs site** → `docs-site/` (Docusaurus)
+
+## Essential Commands
+
+### Building
+
+```bash
+make build                # Build everything (Rust → Python → TypeScript)
+make build-rust           # Event store + Rust SDKs + VSA
+make build-typescript     # All TypeScript packages (via Turborepo)
+make build-python         # Python SDKs (via uv)
 ```
-ENTER RESEARCH MODE or ERM
-ENTER INNOVATE MODE or EIM
-ENTER PLAN MODE or EPM
-ENTER EXECUTE MODE or EEM
-ENTER REVIEW MODE or EQM
-DIRECT EXECUTE MODE or DEM // Used to bypass the plan and go straight to execute mode
+
+### Testing
+
+```bash
+make test                 # Run all tests
+make test-event-store     # Component-specific
+make test-event-sourcing
+make test-examples
+make test-fast            # Uses dev infrastructure, no testcontainers
 ```
 
-## Meta-Instruction
-**BEGIN EVERY RESPONSE WITH YOUR CURRENT MODE IN BRACKETS.**  
-**Format:** `[MODE: MODE_NAME]`
+### Quality Assurance
 
-## The RIPER-5 Modes
+```bash
+make qa                   # Fast QA (static checks + unit tests, no coverage)
+make qa-full              # Full QA (includes integration tests + coverage)
+make qa-event-store       # Auto-detects dev infrastructure
+make qa-event-sourcing
+make qa-examples
+```
 
-### MODE 1: RESEARCH
-- **Purpose:** Information gathering ONLY
-- **Permitted:** Reading files, asking questions, understanding code
-- **Forbidden:** Suggestions, planning, implementation
-- **Output:** `[MODE: RESEARCH]` + observations and questions
+- `make qa` skips slow tests and coverage — use for pre-commit checks
+- `make qa-full` runs the complete suite including coverage
+- Event store QA auto-detects running dev infrastructure for faster execution
 
-### MODE 2: INNOVATE
-- **Purpose:** Brainstorming potential approaches
-- **Permitted:** Discussing ideas, advantages/disadvantages
-- **Forbidden:** Concrete planning, code writing
-- **Output:** `[MODE: INNOVATE]` + possibilities and considerations
+### Development Infrastructure
 
-### MODE 3: PLAN
-- **Purpose:** Creating technical specification
-- **Permitted:** Detailed plans with file paths and changes
-- **Forbidden:** Implementation or code writing
-- **Required:** Create comprehensive `PROJECT-PLAN_YYYYMMDD_<TASK-NAME>.md` with milestones. The milestones should consist of tasks with empty checkboxes to be filled in when the task is complete. (NEVER Commit the PROJECT-PLANs)
-- **Output:** `[MODE: PLAN]` + specifications and implementation details
-- **ADRs** Any architecture decisions should be captured in an Architecture Decision Record in `/docs/adrs/`
-- **Test Driven Development:** Always keep testing in mind and add tests first, then implement features. Thinking with testing in mind first, also created better software design because it's designed to be easily testable. "Testing code is as important as Production code."
+```bash
+make dev-init             # Initialize (first time only)
+make dev-start            # Start Postgres + Redis
+make dev-stop             # Stop infrastructure
+make dev-status           # Check what's running
+make dev-clean            # Remove all containers and data
+```
 
-### MODE 4: EXECUTE
-- **Purpose:** Implementing the approved plan exactly
-- **Permitted:** Implementing detailed plan tasks, running QA checkpoints
-- **Forbidden:** Deviations from plan, creative additions
-- **Required:** After each milestone, run QA checkpoint and commit changes
-- **Output:** `[MODE: EXECUTE]` + implementation matching the plan
-- During execute, please use TODO comments for things that can be improved or changed in the future and use "FIXME" comments for things that are breaking the app.
+### Running Examples
 
-### MODE 5: REVIEW
-- **Purpose:** Validate implementation against plan
-- **Permitted:** Line-by-line comparison
-- **Required:** Flag ANY deviation with `:warning: DEVIATION DETECTED: [description]`
-- **Output:** `[MODE: REVIEW]` + comparison and verdict
+```bash
+make examples-002         # Simple aggregate (auto-builds dependencies)
+make examples-004         # CQRS patterns
+make examples-007         # E-commerce complete
+```
 
-## QA Checkpoint Process
+### Event Store Server
 
-After each milestone in EXECUTE mode:
+```bash
+cd event-store && make run                    # Memory backend (default)
+cd event-store && make run BACKEND=postgres   # Postgres backend
+cd event-store && make smoke                  # Smoke test
+```
+
+### Docs
+
+```bash
+make docs                 # Start Docusaurus dev server
+make docs-build           # Build static site
+```
+
+## Key Concepts
+
+### Event Store Architecture
+
+The Rust event store is the foundation:
+- **Backend-agnostic**: Traits in `eventstore-core/` allow pluggable backends
+- **Optimistic Concurrency**: Client-proposed sequence numbers (true OCC)
+- **gRPC API**: Defined in `eventstore-proto/proto/`
+- **Multiple Backends**: Memory (dev/test), Postgres (production)
+
+### Event Sourcing SDK Patterns (TypeScript)
+
+The TypeScript SDK (`event-sourcing/typescript/`) provides:
+
+1. **AggregateRoot**: Base class for aggregates with automatic event replay
+2. **@CommandHandler**: Decorator for business logic/validation methods that emit events
+3. **@EventSourcingHandler**: Decorator for state mutation methods (replays events)
+4. **Repository Pattern**: `RepositoryFactory` creates repositories with OCC tracking
+5. **Concurrency Control**: `ConcurrencyConflictError` on stale aggregate saves
+6. **Event Bus**: Cross-context communication via integration events
+
+### Vertical Slice Architecture (VSA)
+
+The VSA tool enforces:
+- **Vertical Slices**: Each feature is self-contained (command, event, aggregate, tests)
+- **Bounded Contexts**: Explicit boundaries via `vsa.yaml`
+- **Integration Events**: Single source of truth in `_shared/integration-events/`
+- **No Cross-Context Imports**: Contexts communicate only via integration events
+- **Commands as Classes**: Commands must be classes with `aggregateId` property
+- **Aggregates Handle Commands**: Use `@CommandHandler` on aggregate methods (no separate handler classes)
+
+## Agent Workflow Guidelines
+
+### Development Process
+
+1. **Understand** — Read relevant files and understand context before making changes
+2. **Plan** — For non-trivial changes, outline the approach before implementing
+3. **Implement** — Make changes following existing patterns and conventions
+4. **Verify** — Run `make qa` after changes
+5. **Commit** — Use conventional commit format
+
+### QA Checkpoint Process
+
+After completing a logical unit of work:
 1. Run linter with auto-formatting
 2. Run type checks
 3. Run tests
-4. Review changes with git MCP server
-5. Commit changes with conventional commit messages before moving to next milestone
-
-**python** for python, you can run all of the checks together with `poetry run poe check-fix`
-
-```bash
-# Run all checks and auto-format code
-python scripts/qa_checkpoint.py
-
-# Run checks and commit using conventional commit format
-python scripts/qa_checkpoint.py --commit "Complete Milestone X" --conventional-commit
-```
-
-## Git MCP Server for Clean Commits
-
-Use the git MCP server to review files and make logical commits:
-
-```
-[MODE: EXECUTE]
-
-Let's use the git MCP server to review files and make logical commits with commit lint based messages:
-```
-
-1. Review current status and changes:
-```bash
-mcp_git_git_status <repo_path>
-mcp_git_git_diff_unstaged <repo_path>
-```
-
-2. Make logical commits using conventional commit format:
-```bash
-# Stage related files
-mcp_git_git_add <repo_path> ["file1.py", "file2.py"]
-
-DO NOT Commit anything. Provide the Git Commit message and let me commit.
-```
+4. Review changes
+5. Commit with conventional commit messages
 
 ### Conventional Commit Format
 
 Format: `type(scope): description`
 
-Types:
-- `feat`: New features
-- `fix`: Bug fixes
-- `docs`: Documentation
-- `style`: Formatting changes
-- `refactor`: Code restructuring
-- `test`: Test changes
-- `chore`: Maintenance
+Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
+
+### Architecture Decision Records
+
+Significant architecture decisions should be captured in an ADR in `/docs/adrs/`.
+
+### Test-Driven Development
+
+Add tests first, then implement features. Testing code is as important as production code.
+
+### Code Annotations
+
+- `TODO` — things that can be improved or changed in the future
+- `FIXME` — things that are breaking the app
 
 ### Files to NEVER Commit (Scratch Pads)
-- **PROJECT-PLAN_*.md** - Planning documents (gitignored)
-- **DEPENDENCY-AUDIT.md** - Analysis scratch pads
-- **BACKWARDS-COMPATIBILITY-*.md** - Analysis documents
-- ***-ANALYSIS.md** - Any analysis documents
-- **PLAN-SUMMARY.md** - Planning summaries
-- Temporary files
-- Build artifacts
-- Cache files
+- **PROJECT-PLAN_*.md** — Planning documents (gitignored)
+- **DEPENDENCY-AUDIT.md** — Analysis scratch pads
+- **BACKWARDS-COMPATIBILITY-*.md** — Analysis documents
+- ***-ANALYSIS.md** — Any analysis documents
+- **PLAN-SUMMARY.md** — Planning summaries
+- Temporary files, build artifacts, cache files
 
-**Rule:** Only commit official documentation that belongs in the repository permanently.
-Scratch pads and planning documents stay local only!
+**Rule:** Only commit official documentation that belongs in the repository permanently. Scratch pads and planning documents stay local only!
 
-## Critical Guidelines
-- Never transition between modes without explicit permission
-- Always declare current mode at the start of every response
-- Follow the plan with 100% fidelity in EXECUTE mode
-- Flag even the smallest deviation in REVIEW mode
-- Return to PLAN mode if any implementation issue requires deviation
-- Use conventional commit messages for all commits
+## Testing Philosophy
+
+1. **No Mocks**: All examples use real infrastructure (event store + Postgres/Redis)
+2. **Fast Tests**: Leverage dev infrastructure instead of testcontainers when available
+3. **Integration Over Unit**: Focus on end-to-end scenarios
+4. **Coverage Targets**: Event store maintains 75%+ coverage (aiming for 85-90%)
+
+## Important Files
+
+- **`Makefile`** (root): Orchestrates all builds and tests
+- **`turbo.json`**: Turborepo build pipeline configuration
+- **`event-store/Makefile`**: Event store commands with dev infrastructure integration
+- **`dev-tools/dev`**: Development infrastructure management script
