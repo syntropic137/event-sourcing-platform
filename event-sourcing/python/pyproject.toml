@@ -22,7 +22,7 @@ classifiers = [
 dependencies = [
     "pydantic>=2.5",
     "typing-extensions>=4.8",
-    "protobuf>=4.25.0",
+    "protobuf>=6.33.5",
 ]
 
 [project.optional-dependencies]
