@@ -14,7 +14,8 @@
       "description": "Configuration version",
       "default": 1,
       "enum": [
-        1
+        1,
+        2
       ]
     },
     "language": {
