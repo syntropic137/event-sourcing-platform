@@ -32,6 +32,10 @@ updates:
     commit-message:
       prefix: "chore(deps):"
 
-  # Python — event-sourcing/python uses uv.lock, which Dependabot does not
-  # yet support. Revisit when Dependabot adds a "uv" ecosystem.
-  # See: https://github.com/dependabot/dependabot-core/issues/10478
+  # Python — event-sourcing/python (uv)
+  - package-ecosystem: "uv"
+    directory: "/event-sourcing/python"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps):"

@@ -33,7 +33,7 @@ jobs:
         with:
           fetch-depth: 0 # Full history — scan all commits, not just HEAD
       # gitleaks CLI is free (the GitHub Action requires a paid license for orgs).
-      # Install via apt and run directly against the repo.
+      # Install from GitHub Releases and run directly against the repo.
       - name: Install gitleaks
         run: |
           set -euo pipefail
