@@ -37,20 +37,20 @@ jobs:
       - name: Install gitleaks
         run: |
           set -euo pipefail
-          GITLEAKS_VERSION="8.24.3"
+          GITLEAKS_VERSION="8.30.1"
           TARBALL="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          CHECKSUMS_URL="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/checksums.txt"
-          TARBALL_URL="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${TARBALL}"
+          CHECKSUMS="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          BASE_URL="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
 
-          curl -sSfL -o "${TARBALL}" "${TARBALL_URL}"
-          curl -sSfL -o checksums.txt "${CHECKSUMS_URL}"
+          curl -sSfL -o "${TARBALL}" "${BASE_URL}/${TARBALL}"
+          curl -sSfL -o "${CHECKSUMS}" "${BASE_URL}/${CHECKSUMS}"
 
           # Verify checksum before extracting — don't trust unsigned downloads.
-          grep "  ${TARBALL}$" checksums.txt > "${TARBALL}.sha256"
+          grep "  ${TARBALL}$" "${CHECKSUMS}" > "${TARBALL}.sha256"
           sha256sum -c "${TARBALL}.sha256"
 
           tar -xz -f "${TARBALL}" -C /usr/local/bin gitleaks
-          rm -f "${TARBALL}" checksums.txt "${TARBALL}.sha256"
+          rm -f "${TARBALL}" "${CHECKSUMS}" "${TARBALL}.sha256"
           gitleaks version
       - name: Run gitleaks
         run: gitleaks detect --source . --verbose --redact
