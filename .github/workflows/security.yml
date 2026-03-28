@@ -22,6 +22,7 @@ jobs:
         with:
           scan-args: |-
             --recursive
+            --config=.osv-scanner.toml
             .
 
   secret-scan:
