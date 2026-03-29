@@ -1,6 +1,6 @@
 [package]
 name = "event-sourcing-rust"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Event Sourcing Platform Team"]
 description = "Rust SDK for Event Sourcing patterns and abstractions"
