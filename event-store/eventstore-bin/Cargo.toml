@@ -16,7 +16,7 @@ tokio-stream = "0.1"
 eventstore-core = { path = "../eventstore-core" }
 eventstore-backend-memory = { path = "../eventstore-backend-memory" }
 eventstore-proto = { path = "../eventstore-proto" }
-tower-http = { version = "0.5", features = ["trace"] }
+tower-http = { version = "0.6", features = ["trace"] }
 eventstore-backend-postgres = { path = "../eventstore-backend-postgres" }
 
 [dev-dependencies]
