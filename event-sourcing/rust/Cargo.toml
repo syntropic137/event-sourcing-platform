@@ -16,7 +16,7 @@ async-trait = "0.1"
 
 # Error handling
 anyhow = "1.0"
-thiserror = "1.0"
+thiserror = "2.0"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
