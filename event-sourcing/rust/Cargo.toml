@@ -27,7 +27,7 @@ uuid = { version = "1.0", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # gRPC client for event store
-tonic = "0.12"
+tonic = "0.14"
 prost = "0.13"
 prost-types = "0.13"
 
