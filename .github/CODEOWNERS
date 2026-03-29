@@ -1,0 +1,11 @@
+# CI/CD workflows — arbitrary code execution risk. Any change here can exfiltrate
+# secrets or backdoor the pipeline. Require maintainer review.
+.github/                     @Syntropic137/maintainers
+
+# Infrastructure config — supply chain risk
+dev-tools/                   @Syntropic137/maintainers
+infra-as-code/               @Syntropic137/maintainers
+
+# Container definitions
+**/Dockerfile*               @Syntropic137/maintainers
+**/docker-compose*.yml       @Syntropic137/maintainers

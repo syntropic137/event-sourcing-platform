@@ -10,6 +10,10 @@ on:
         required: false
         default: "false"
 
+# Least-privilege default — jobs declare write access explicitly.
+permissions:
+  contents: read
+
 jobs:
   validate:
     name: Validate Release
@@ -20,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
       - name: Get version from tag
         id: version
@@ -50,12 +54,12 @@ jobs:
           echo "✅ Versions match!"
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 10.28.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: "24.x"
           cache: "pnpm"
@@ -108,15 +112,15 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 10.28.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: "20.x"
           registry-url: "https://npm.pkg.github.com"
@@ -175,13 +179,16 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate, publish]
     if: ${{ github.event.inputs.dry-run != 'true' }}
+    permissions:
+      contents: read
+      packages: read
 
     steps:
       - name: Wait for package to be available
         run: sleep 30
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: "20.x"
           registry-url: "https://npm.pkg.github.com"

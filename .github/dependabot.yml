@@ -1,0 +1,41 @@
+version: 2
+updates:
+  # GitHub Actions — keep action SHAs up to date
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps):"
+
+  # Rust — event-store workspace
+  - package-ecosystem: "cargo"
+    directory: "/event-store"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps):"
+
+  # Rust — event-sourcing/rust
+  - package-ecosystem: "cargo"
+    directory: "/event-sourcing/rust"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps):"
+
+  # Node.js — root workspace
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps):"
+
+  # Python — event-sourcing/python (uv)
+  - package-ecosystem: "uv"
+    directory: "/event-sourcing/python"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps):"

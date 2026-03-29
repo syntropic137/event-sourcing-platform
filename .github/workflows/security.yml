@@ -1,0 +1,56 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1' # Weekly on Monday at 06:00 UTC
+
+# Least-privilege default.
+permissions:
+  contents: read
+
+jobs:
+  osv-scan:
+    name: OSV Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      # OSV checks all lock files against the OSV database (PyPI, npm, crates.io).
+      - uses: google/osv-scanner-action/osv-scanner-action@c51854704019a247608d928f370c98740469d4b5 # v2.3.5
+        with:
+          scan-args: |-
+            --recursive
+            --config=.osv-scanner.toml
+            .
+
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0 # Full history — scan all commits, not just HEAD
+      # gitleaks CLI is free (the GitHub Action requires a paid license for orgs).
+      # Install from GitHub Releases and run directly against the repo.
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION="8.30.1"
+          TARBALL="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          CHECKSUMS="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          BASE_URL="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+
+          curl -sSfL -o "${TARBALL}" "${BASE_URL}/${TARBALL}"
+          curl -sSfL -o "${CHECKSUMS}" "${BASE_URL}/${CHECKSUMS}"
+
+          # Verify checksum before extracting — don't trust unsigned downloads.
+          grep "  ${TARBALL}$" "${CHECKSUMS}" > "${TARBALL}.sha256"
+          sha256sum -c "${TARBALL}.sha256"
+
+          tar -xz -f "${TARBALL}" -C /usr/local/bin gitleaks
+          rm -f "${TARBALL}" "${CHECKSUMS}" "${TARBALL}.sha256"
+          gitleaks version
+      - name: Run gitleaks
+        run: gitleaks detect --source . --verbose --redact
