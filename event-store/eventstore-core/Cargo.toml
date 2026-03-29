@@ -16,4 +16,4 @@ eventstore-proto = { path = "../eventstore-proto" }
 anyhow = "1"
 bytes = "1"
 prost = "0.13"
-prost-types = "0.13"
+prost-types = "0.14"

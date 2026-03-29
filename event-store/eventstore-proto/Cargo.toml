@@ -13,7 +13,7 @@ path = "src/lib.rs"
 [dependencies]
 # Tonic and Prost provide the generated types at runtime
 prost = "0.13"
-prost-types = "0.13"
+prost-types = "0.14"
 tonic = { version = "0.12", features = ["transport", "prost", "codegen"] }
 
 [build-dependencies]
