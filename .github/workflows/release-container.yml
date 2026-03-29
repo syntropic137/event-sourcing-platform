@@ -85,12 +85,15 @@ jobs:
           fi
           # Strip 'v' prefix for semver-only contexts
           SEMVER="${VERSION#v}"
-          # Extract major.minor for floating tag (e.g., v0.2)
-          MAJOR_MINOR="v$(echo "$SEMVER" | cut -d. -f1,2)"
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "semver=$SEMVER" >> "$GITHUB_OUTPUT"
-          echo "major_minor=$MAJOR_MINOR" >> "$GITHUB_OUTPUT"
+
+          # Only emit major_minor when version is valid semver (X.Y.Z)
+          if [[ "$SEMVER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            MAJOR_MINOR="v$(echo "$SEMVER" | cut -d. -f1,2)"
+            echo "major_minor=$MAJOR_MINOR" >> "$GITHUB_OUTPUT"
+          fi
 
           # Don't tag 'latest' for pre-releases or dev builds
           if [[ "$VERSION" == "dev" ]] || [[ "$VERSION" == *"-"* ]]; then
@@ -134,8 +137,8 @@ jobs:
           tags: |
             # Version tag: v0.2.2
             type=raw,value=${{ steps.version.outputs.version }}
-            # Major.minor tag: v0.2
-            type=raw,value=${{ steps.version.outputs.major_minor }}
+            # Major.minor tag: v0.2 (only for semver releases)
+            type=raw,value=${{ steps.version.outputs.major_minor }},enable=${{ steps.version.outputs.major_minor != '' }}
             # Latest tag (only for stable releases)
             type=raw,value=latest,enable=${{ steps.version.outputs.is_stable == 'true' }}
           labels: |
