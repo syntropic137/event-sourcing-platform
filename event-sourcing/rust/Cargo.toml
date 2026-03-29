@@ -38,7 +38,7 @@ tracing = "0.1"
 [dev-dependencies]
 tokio-test = "0.4"
 mockall = "0.12"
-rstest = "0.21"
+rstest = "0.26"
 
 # Event store integration
 eventstore-proto = { path = "../../event-store/eventstore-proto" }
