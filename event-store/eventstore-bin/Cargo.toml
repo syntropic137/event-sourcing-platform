@@ -22,7 +22,7 @@ eventstore-backend-postgres = { path = "../eventstore-backend-postgres" }
 [dev-dependencies]
 eventstore-backend-postgres = { path = "../eventstore-backend-postgres", features = ["test-utils"] }
 serial_test = "3"
-testcontainers = "0.17"
+testcontainers = "0.20"
 testcontainers-modules = { version = "0.5", features = ["postgres"] }
 uuid = { version = "1", features = ["v4"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio"] }
