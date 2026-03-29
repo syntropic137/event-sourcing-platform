@@ -29,7 +29,7 @@ chrono = { version = "0.4", features = ["serde"] }
 # gRPC client for event store
 tonic = "0.12"
 prost = "0.13"
-prost-types = "0.13"
+prost-types = "0.14"
 
 # Logging
 tracing = "0.1"
