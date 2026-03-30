@@ -2,8 +2,9 @@
 target/
 **/target/
 
-# Cargo lock for libraries
-**/Cargo.lock
+# Note: Cargo.lock files are NOT excluded — they are required for reproducible
+# Docker builds. The original exclusion was for library convention but the
+# event-store binary needs pinned dependency versions.
 
 # IDE files
 .vscode/

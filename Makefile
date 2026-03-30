@@ -545,19 +545,20 @@ dev: dev-start
 REGISTRY := ghcr.io/syntropic137
 IMAGE := event-store
 VERSION ?= dev
+GHCR_USER ?= $(shell gh api user --jq .login 2>/dev/null || echo syntropic137)
 
 release-build:
-	@echo "Building $(REGISTRY)/$(IMAGE):$(VERSION)..."
+	@echo "Building $(REGISTRY)/$(IMAGE):$(VERSION) (local only)..."
 	@docker buildx inspect multiarch >/dev/null 2>&1 || docker buildx create --name multiarch
 	@docker buildx use multiarch
 	docker buildx build --platform linux/amd64,linux/arm64 \
 		-f event-store/Dockerfile \
 		-t "$(REGISTRY)/$(IMAGE):$(VERSION)" \
-		.
+		--output type=image .
 
 release-push:
 	@echo "Building and pushing $(REGISTRY)/$(IMAGE):$(VERSION)..."
-	@gh auth token | docker login ghcr.io -u syntropic137 --password-stdin
+	@gh auth token | docker login ghcr.io -u "$(GHCR_USER)" --password-stdin
 	@docker buildx inspect multiarch >/dev/null 2>&1 || docker buildx create --name multiarch
 	@docker buildx use multiarch
 	docker buildx build --platform linux/amd64,linux/arm64 \
