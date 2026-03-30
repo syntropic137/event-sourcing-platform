@@ -7,6 +7,7 @@
 .PHONY: start-services stop-services smoke-test run-event-store
 .PHONY: docs docs-start docs-build docs-serve docs-generate-llm
 .PHONY: dev-init dev-start dev-stop dev-restart dev-clean test-fast dev-status dev-logs dev-shell
+.PHONY: release-build release-push release-local
 
 PROJECT_NAME := $(notdir $(CURDIR))
 DEV_ENV_FILE := $(CURDIR)/dev-tools/.env.dev
@@ -98,6 +99,11 @@ help:
 	@echo "  examples-007      - E-commerce complete"
 	@echo "  examples-008      - Banking complete"
 	@echo "  examples-009      - Inventory complete"
+	@echo ""
+	@echo "Container Release:"
+	@echo "  release-build VERSION=v0.2.3  - Build multi-arch image (no push)"
+	@echo "  release-push  VERSION=v0.2.3  - Build + push to GHCR"
+	@echo "  release-local VERSION=v0.2.3  - Full release (push + tag latest)"
 	@echo ""
 	@echo "Documentation:"
 	@echo "  docs             - Start docs dev server (Docusaurus)"
@@ -527,3 +533,46 @@ dev-shell:
 
 # Convenience aliases
 dev: dev-start
+
+# --- Container Release (local build + push to GHCR) --------------------------
+# Usage:
+#   make release-build VERSION=v0.2.3        # Build only (no push)
+#   make release-push VERSION=v0.2.3         # Build + push to GHCR
+#   make release-local VERSION=v0.2.3        # Full release: build, push, tag latest
+#
+# Requires: gh auth with write:packages scope, docker buildx
+
+REGISTRY := ghcr.io/syntropic137
+IMAGE := event-store
+VERSION ?= dev
+GHCR_USER ?= $(shell gh api user --jq .login 2>/dev/null || echo syntropic137)
+
+release-build:
+	@echo "Building $(REGISTRY)/$(IMAGE):$(VERSION) (local only)..."
+	@docker buildx inspect multiarch >/dev/null 2>&1 || docker buildx create --name multiarch
+	@docker buildx use multiarch
+	docker buildx build --platform linux/amd64,linux/arm64 \
+		-f event-store/Dockerfile \
+		-t "$(REGISTRY)/$(IMAGE):$(VERSION)" \
+		--output type=image .
+
+release-push:
+	@echo "Building and pushing $(REGISTRY)/$(IMAGE):$(VERSION)..."
+	@gh auth token | docker login ghcr.io -u "$(GHCR_USER)" --password-stdin
+	@docker buildx inspect multiarch >/dev/null 2>&1 || docker buildx create --name multiarch
+	@docker buildx use multiarch
+	docker buildx build --platform linux/amd64,linux/arm64 \
+		-f event-store/Dockerfile \
+		-t "$(REGISTRY)/$(IMAGE):$(VERSION)" \
+		--push .
+	@echo "Pushed $(REGISTRY)/$(IMAGE):$(VERSION)"
+
+release-local: release-push
+	@if [ "$(VERSION)" != "dev" ] && echo "$(VERSION)" | grep -qE '^v?[0-9]+\.[0-9]+\.[0-9]+$$'; then \
+		echo "Tagging $(VERSION) as latest..."; \
+		docker buildx imagetools create \
+			"$(REGISTRY)/$(IMAGE):$(VERSION)" \
+			--tag "$(REGISTRY)/$(IMAGE):latest"; \
+		echo "Tagged $(REGISTRY)/$(IMAGE):latest"; \
+	fi
+	@echo "Release complete: $(REGISTRY)/$(IMAGE):$(VERSION)"
