@@ -5,12 +5,12 @@
 # Trigger: GitHub release published (or manual dispatch for testing).
 #
 # Pipeline:
-#   1. Build multi-arch event-store image (linux/amd64 + linux/arm64)
-#   2. Push to ghcr.io/syntropic137/event-store with version tags
-#   3. Sign with cosign (keyless OIDC), SBOM via BuildKit
+#   1. Prepare — compute version tags and Docker metadata
+#   2. Build  — per-arch native builds (amd64 + arm64), push by digest
+#   3. Merge  — assemble multi-arch manifest, sign with cosign
 #
-# This allows syntropic137 to reference a pre-built image instead of
-# building the Rust binary from source on every release (~15-20 min saved).
+# Performance: Native runners per architecture (no QEMU emulation).
+# Dockerfile uses cargo-chef for dependency layer caching.
 #
 # Security:
 #   - All actions SHA-pinned (ISS-259)
@@ -48,33 +48,26 @@ env:
 
 jobs:
   # ===========================================================================
-  # BUILD + PUSH — Multi-arch event-store image
+  # PREPARE — Compute version metadata and Docker tags
   # ===========================================================================
 
-  build-push:
-    name: Build & Push Event Store
+  prepare:
+    name: Prepare Metadata
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 5
 
     permissions:
       contents: read
-      packages: write       # Push to GHCR
-      id-token: write       # cosign keyless signing (Sigstore OIDC)
 
     outputs:
-      digest: ${{ steps.push.outputs.digest }}
       version: ${{ steps.version.outputs.version }}
+      semver: ${{ steps.version.outputs.semver }}
+      major_minor: ${{ steps.version.outputs.major_minor }}
+      is_stable: ${{ steps.version.outputs.is_stable }}
+      tags: ${{ steps.meta.outputs.tags }}
+      labels: ${{ steps.meta.outputs.labels }}
 
     steps:
-      # -----------------------------------------------------------------------
-      # Checkout
-      # -----------------------------------------------------------------------
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-
-      # -----------------------------------------------------------------------
-      # Determine version
-      # -----------------------------------------------------------------------
       - name: Determine version
         id: version
         run: |
@@ -102,33 +95,6 @@ jobs:
             echo "is_stable=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # -----------------------------------------------------------------------
-      # Docker Buildx (multi-arch support)
-      # -----------------------------------------------------------------------
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
-
-      # -----------------------------------------------------------------------
-      # QEMU (cross-platform emulation for multi-arch builds)
-      # -----------------------------------------------------------------------
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
-        with:
-          platforms: linux/amd64,linux/arm64
-
-      # -----------------------------------------------------------------------
-      # GHCR login
-      # -----------------------------------------------------------------------
-      - name: Log in to GHCR
-        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # -----------------------------------------------------------------------
-      # Docker metadata (tags + labels)
-      # -----------------------------------------------------------------------
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6
@@ -147,69 +113,189 @@ jobs:
             org.opencontainers.image.vendor=Syntropic137
             org.opencontainers.image.source=https://github.com/syntropic137/event-sourcing-platform
 
-      # -----------------------------------------------------------------------
-      # Build + Push multi-arch image to GHCR
-      # -----------------------------------------------------------------------
-      - name: Build and push multi-arch image
+  # ===========================================================================
+  # BUILD — Per-arch native builds (no QEMU emulation)
+  # ===========================================================================
+
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-latest-arm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Compute platform slug
+        id: slug
+        run: echo "slug=$(echo '${{ matrix.platform }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
         id: push
         uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7
         with:
           context: .
           file: event-store/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: ${{ !inputs.dry_run }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: true  # SLSA provenance attestation
-          sbom: true        # Attach SBOM via BuildKit
+          labels: ${{ needs.prepare.outputs.labels }}
+          cache-from: type=gha,scope=build-${{ steps.slug.outputs.slug }}
+          cache-to: type=gha,mode=max,scope=build-${{ steps.slug.outputs.slug }}
+          provenance: true
+          sbom: true
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true
 
-      # -----------------------------------------------------------------------
-      # Sign with cosign (keyless, OIDC-based via Sigstore)
-      # -----------------------------------------------------------------------
-      - name: Install cosign
+      - name: Export digest
         if: ${{ !inputs.dry_run }}
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.push.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: digests-${{ steps.slug.outputs.slug }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Write dry-run summary
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "## Dry Run — ${{ matrix.platform }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> Image was built but not pushed." >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # MERGE — Assemble multi-arch manifest, sign, publish summary
+  # ===========================================================================
+
+  merge:
+    name: Merge & Sign
+    needs: [prepare, build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      packages: write
+      id-token: write  # cosign keyless signing (Sigstore OIDC)
+
+    outputs:
+      digest: ${{ steps.inspect.outputs.digest }}
+      version: ${{ needs.prepare.outputs.version }}
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+
+          # Build --tag flags from metadata
+          TAG_ARGS=""
+          while IFS= read -r tag; do
+            [[ -n "$tag" ]] && TAG_ARGS="$TAG_ARGS --tag $tag"
+          done <<< "${{ needs.prepare.outputs.tags }}"
+
+          # Build source list from digests
+          SOURCES=""
+          for digest_file in /tmp/digests/*; do
+            SOURCES="$SOURCES ${IMAGE}@sha256:$(basename "$digest_file")"
+          done
+
+          # shellcheck disable=SC2086
+          docker buildx imagetools create $TAG_ARGS $SOURCES
+
+      - name: Inspect manifest
+        id: inspect
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          VERSION="${{ needs.prepare.outputs.version }}"
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest}}' | jq -r '.digest')"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      # -------------------------------------------------------------------
+      # Sign with cosign (keyless, OIDC-based via Sigstore)
+      # -------------------------------------------------------------------
+      - name: Install cosign
         uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
 
       - name: Sign image with cosign
-        if: ${{ !inputs.dry_run }}
         env:
-          DIGEST: ${{ steps.push.outputs.digest }}
+          DIGEST: ${{ steps.inspect.outputs.digest }}
           COSIGN_YES: "true"
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           echo "Signing ${IMAGE}@${DIGEST}"
           cosign sign "${IMAGE}@${DIGEST}"
 
-      # -----------------------------------------------------------------------
+      # -------------------------------------------------------------------
       # Summary
-      # -----------------------------------------------------------------------
+      # -------------------------------------------------------------------
       - name: Write job summary
         run: |
-          echo "## Event Store Container: ${{ steps.version.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          VERSION="${{ needs.prepare.outputs.version }}"
+          DIGEST="${{ steps.inspect.outputs.digest }}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+
+          echo "## Event Store Container: ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
-            echo "> **Dry run** — image was built but not pushed or signed." >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-          fi
           echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
           echo "|-------|-------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Image** | \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| **Version** | \`${{ steps.version.outputs.version }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Image** | \`${IMAGE}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Version** | \`${VERSION}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| **Platforms** | \`linux/amd64\`, \`linux/arm64\` |" >> "$GITHUB_STEP_SUMMARY"
-          if [[ -n "${{ steps.push.outputs.digest }}" ]]; then
-            echo "| **Digest** | \`${{ steps.push.outputs.digest }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          echo "| **Digest** | \`${DIGEST}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Usage" >> "$GITHUB_STEP_SUMMARY"
           echo '```bash' >> "$GITHUB_STEP_SUMMARY"
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "docker pull ${IMAGE}:${VERSION}" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          if [[ -n "${{ steps.push.outputs.digest }}" ]]; then
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "### Verify Signature" >> "$GITHUB_STEP_SUMMARY"
-            echo '```bash' >> "$GITHUB_STEP_SUMMARY"
-            echo "cosign verify ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Verify Signature" >> "$GITHUB_STEP_SUMMARY"
+          echo '```bash' >> "$GITHUB_STEP_SUMMARY"
+          echo "cosign verify ${IMAGE}@${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
