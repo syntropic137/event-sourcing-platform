@@ -47,7 +47,15 @@ class GrpcEventStoreClient:
         self._credentials = credentials
 
     async def connect(self) -> None:
-        """Connect to the event store."""
+        """Connect to the event store.
+
+        Idempotent: if a channel is already open, this is a no-op.
+        Calling connect() repeatedly must NOT replace the channel because
+        an active Subscribe stream would be silently killed.
+        """
+        if self._channel is not None and self._stub is not None:
+            return
+
         logger.info(f"Connecting to event store at {self.address}")
 
         if self._credentials:
