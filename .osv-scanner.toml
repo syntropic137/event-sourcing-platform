@@ -7,6 +7,16 @@
 id = "RUSTSEC-2025-0134"
 reason = "rustls-pemfile is a dev-only transitive dep (testcontainers → bollard). No fix available. Not in production."
 
+# Rust: testcontainers → bollard → rustls → rustls-webpki (dev-only dep)
+# Fix requires rustls 0.23+ which bollard hasn't adopted yet.
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0049"
+reason = "rustls-webpki is a dev-only transitive dep (testcontainers → bollard → rustls). Awaiting bollard upgrade to rustls 0.23+."
+
+[[IgnoredVulns]]
+id = "GHSA-pwjx-qhcg-rvj4"
+reason = "Duplicate advisory for RUSTSEC-2026-0049 (rustls-webpki). Dev-only."
+
 # Rust: testcontainers → bollard → rsa (dev-only dep)
 # RUSTSEC-2023-0071 has no fix — the rsa crate has a known Marvin Attack weakness.
 # Only affects test infrastructure Docker communication, not production.
