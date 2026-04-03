@@ -7,16 +7,6 @@
 id = "RUSTSEC-2025-0134"
 reason = "rustls-pemfile is a dev-only transitive dep (testcontainers → bollard). No fix available. Not in production."
 
-# Rust: testcontainers → bollard → rustls → rustls-webpki (dev-only dep)
-# Fix requires rustls 0.23+ which bollard hasn't adopted yet.
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0049"
-reason = "rustls-webpki is a dev-only transitive dep (testcontainers → bollard → rustls). Awaiting bollard upgrade to rustls 0.23+."
-
-[[IgnoredVulns]]
-id = "GHSA-pwjx-qhcg-rvj4"
-reason = "Duplicate advisory for RUSTSEC-2026-0049 (rustls-webpki). Dev-only."
-
 # Rust: testcontainers → bollard → rsa (dev-only dep)
 # RUSTSEC-2023-0071 has no fix — the rsa crate has a known Marvin Attack weakness.
 # Only affects test infrastructure Docker communication, not production.
@@ -53,3 +43,13 @@ reason = "serialize-javascript pinned at 6.x by webpack plugins. Awaiting upstre
 [[IgnoredVulns]]
 id = "GHSA-776f-qx25-q3cc"
 reason = "xml2js pinned at 0.4.x by vsce (VS Code extension packager). Awaiting vsce update."
+
+# npm: Docusaurus 3.x → @docusaurus/utils → lodash 4.17.23
+# Lodash is pinned by Docusaurus internals. Docs-site-only dependency, not production.
+[[IgnoredVulns]]
+id = "GHSA-f23m-r3pf-42rh"
+reason = "lodash pinned at 4.17.x by Docusaurus 3.x. Docs-site-only, not in production."
+
+[[IgnoredVulns]]
+id = "GHSA-r5fr-rjxr-66jc"
+reason = "lodash pinned at 4.17.x by Docusaurus 3.x. Docs-site-only, not in production."
