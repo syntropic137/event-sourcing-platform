@@ -1,6 +1,7 @@
 {
     "compilerOptions": {
         "target": "ES2022",
+        "ignoreDeprecations": "6.0",
         "module": "commonjs",
         "moduleResolution": "node",
         "lib": [
@@ -8,7 +9,6 @@
         ],
         "outDir": "./dist",
         "rootDir": "./src",
-        "baseUrl": ".",
         "strict": true,
         "esModuleInterop": true,
         "isolatedModules": true,

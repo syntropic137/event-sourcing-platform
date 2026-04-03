@@ -77,12 +77,12 @@
         "@typescript-eslint/eslint-plugin": "^8.57.2",
         "@typescript-eslint/parser": "^8.57.2",
         "eslint": "^9.39.4",
-        "globals": "^16.5.0",
+        "globals": "^17.0.0",
         "jest": "^30.3.0",
         "prettier": "^3.8.1",
         "rimraf": "^6.1.3",
         "ts-jest": "^29.4.6",
-        "typescript": "^5.9.3"
+        "typescript": "^6.0.2"
     },
     "jest": {
         "preset": "ts-jest",
