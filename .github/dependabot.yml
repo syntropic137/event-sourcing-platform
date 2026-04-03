@@ -4,7 +4,7 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     commit-message:
       prefix: "chore(deps):"
     groups:
@@ -15,7 +15,7 @@ updates:
   - package-ecosystem: "cargo"
     directory: "/event-store"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     commit-message:
       prefix: "chore(deps):"
     groups:
@@ -30,7 +30,7 @@ updates:
   - package-ecosystem: "cargo"
     directory: "/event-sourcing/rust"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     commit-message:
       prefix: "chore(deps):"
     groups:
@@ -45,7 +45,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     commit-message:
       prefix: "chore(deps):"
     groups:
@@ -60,7 +60,7 @@ updates:
   - package-ecosystem: "uv"
     directory: "/event-sourcing/python"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     commit-message:
       prefix: "chore(deps):"
     groups:

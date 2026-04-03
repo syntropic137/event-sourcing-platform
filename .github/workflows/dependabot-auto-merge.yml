@@ -17,8 +17,34 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
+      - name: Check package age (7-day supply chain hold)
+        id: age-check
+        run: |
+          PUBLISHED="${{ steps.metadata.outputs.new-version }}"
+          UPDATED_AT="${{ steps.metadata.outputs.updated-at }}"
+
+          # If we have an updated-at timestamp, check it's at least 7 days old
+          if [ -n "$UPDATED_AT" ]; then
+            UPDATED_EPOCH=$(date -d "$UPDATED_AT" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%S" "$UPDATED_AT" +%s 2>/dev/null || echo "0")
+            NOW_EPOCH=$(date +%s)
+            AGE_DAYS=$(( (NOW_EPOCH - UPDATED_EPOCH) / 86400 ))
+            echo "Package updated $AGE_DAYS days ago"
+            if [ "$AGE_DAYS" -lt 7 ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "⏳ Skipping auto-merge — package is only $AGE_DAYS days old (minimum: 7)"
+            else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              echo "✅ Package is $AGE_DAYS days old — safe to auto-merge"
+            fi
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "⚠️ No updated-at timestamp available — allowing merge"
+          fi
+
       - name: Auto-merge patch and minor updates
-        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        if: |
+          steps.metadata.outputs.update-type != 'version-update:semver-major'
+          && steps.age-check.outputs.skip != 'true'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
