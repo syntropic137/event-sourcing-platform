@@ -1,3 +1,8 @@
+# Auto-merge non-major dependabot PRs after CI passes, with a 7-day
+# supply chain hold. The age check prevents auto-merging packages that
+# were published very recently — compromised releases (e.g. xz-utils)
+# are typically caught and yanked within the first few days.
+
 name: Dependabot Auto-Merge
 
 on: pull_request
@@ -17,6 +22,9 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
+      # Supply chain protection: only auto-merge packages that have been
+      # published for at least 7 days. This gives the community time to
+      # detect and report compromised releases before we pull them in.
       - name: Check package age (7-day supply chain hold)
         id: age-check
         run: |

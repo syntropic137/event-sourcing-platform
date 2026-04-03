@@ -1,3 +1,7 @@
+# Monthly schedule to reduce PR noise — we batch-upgrade deps manually
+# when needed rather than chasing every weekly bump. Security vulns are
+# caught by OSV scanner in CI, not by dependabot cadence.
+
 version: 2
 updates:
   # GitHub Actions — keep action SHAs up to date
