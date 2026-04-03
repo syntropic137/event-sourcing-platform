@@ -5,16 +5,23 @@
 
 name: Dependabot Auto-Merge
 
-on: pull_request
+on: pull_request_target
 
+# Least-privilege default; write scoped to the job that needs it.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   dependabot-auto-merge:
     runs-on: ubuntu-latest
     if: github.actor == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Fetch Dependabot metadata
         id: metadata
@@ -25,28 +32,34 @@ jobs:
       # Supply chain protection: only auto-merge packages that have been
       # published for at least 7 days. This gives the community time to
       # detect and report compromised releases before we pull them in.
+      # Fails closed — if we can't determine the age, we skip auto-merge.
       - name: Check package age (7-day supply chain hold)
         id: age-check
         run: |
-          PUBLISHED="${{ steps.metadata.outputs.new-version }}"
           UPDATED_AT="${{ steps.metadata.outputs.updated-at }}"
 
-          # If we have an updated-at timestamp, check it's at least 7 days old
-          if [ -n "$UPDATED_AT" ]; then
-            UPDATED_EPOCH=$(date -d "$UPDATED_AT" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%S" "$UPDATED_AT" +%s 2>/dev/null || echo "0")
-            NOW_EPOCH=$(date +%s)
-            AGE_DAYS=$(( (NOW_EPOCH - UPDATED_EPOCH) / 86400 ))
-            echo "Package updated $AGE_DAYS days ago"
-            if [ "$AGE_DAYS" -lt 7 ]; then
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              echo "⏳ Skipping auto-merge — package is only $AGE_DAYS days old (minimum: 7)"
-            else
-              echo "skip=false" >> "$GITHUB_OUTPUT"
-              echo "✅ Package is $AGE_DAYS days old — safe to auto-merge"
-            fi
+          if [ -z "$UPDATED_AT" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "⚠️ No updated-at timestamp available — skipping auto-merge (fail closed)"
+            exit 0
+          fi
+
+          UPDATED_EPOCH=$(date -d "$UPDATED_AT" +%s 2>/dev/null) || {
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "⚠️ Could not parse timestamp '$UPDATED_AT' — skipping auto-merge (fail closed)"
+            exit 0
+          }
+
+          NOW_EPOCH=$(date +%s)
+          AGE_DAYS=$(( (NOW_EPOCH - UPDATED_EPOCH) / 86400 ))
+          echo "Package updated $AGE_DAYS days ago"
+
+          if [ "$AGE_DAYS" -lt 7 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "⏳ Skipping auto-merge — package is only $AGE_DAYS days old (minimum: 7)"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "⚠️ No updated-at timestamp available — allowing merge"
+            echo "✅ Package is $AGE_DAYS days old — safe to auto-merge"
           fi
 
       - name: Auto-merge patch and minor updates
