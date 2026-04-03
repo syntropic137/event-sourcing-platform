@@ -1,40 +1,67 @@
-# Multi-stage build for Event Store
-# Stage 1: Build the Rust binary
-FROM rust:1.93-slim AS builder
+# =============================================================================
+# Multi-stage build for Event Store (with cargo-chef dependency caching)
+# =============================================================================
+#
+# Stages:
+#   1. planner  — generate cargo-chef recipe (dependency fingerprint)
+#   2. cook     — pre-compile dependencies (cached when Cargo.toml/lock unchanged)
+#   3. builder  — compile workspace crates only
+#   4. runtime  — minimal image with just the binary
+# =============================================================================
 
-# Install build dependencies
+# ---------------------------------------------------------------------------
+# Stage 1: Plan — extract dependency recipe
+# ---------------------------------------------------------------------------
+FROM rust:1.93-slim AS planner
+
+RUN cargo install cargo-chef --locked
+
+WORKDIR /app/event-store
+COPY event-store/ /app/event-store/
+
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ---------------------------------------------------------------------------
+# Stage 2: Cook — compile dependencies (layer cached when deps unchanged)
+# ---------------------------------------------------------------------------
+FROM rust:1.93-slim AS cook
+
+# Build dependencies (no libssl-dev — we use rustls, not OpenSSL)
 RUN apt-get update && apt-get install -y \
     pkg-config \
-    libssl-dev \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
-# Install nightly toolchain for edition2024 support
-RUN rustup toolchain install nightly && \
-    rustup default nightly
+RUN cargo install cargo-chef --locked
 
-# Create app directory
-WORKDIR /app
-
-# Copy event-sourcing SDK first (dependency)
-COPY event-sourcing/ ./event-sourcing/
-
-# Copy event-store
-COPY event-store/ ./event-store/
-
-# Build release binary
 WORKDIR /app/event-store
-RUN cargo build --release --bin eventstore-bin && \
-    ls -la /app/event-store/target/release/ && \
+COPY --from=planner /app/event-store/recipe.json recipe.json
+
+# Cook dependencies with BuildKit cache mounts for cargo registry
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json
+
+# ---------------------------------------------------------------------------
+# Stage 3: Build — compile workspace crates (deps already compiled)
+# ---------------------------------------------------------------------------
+FROM cook AS builder
+
+COPY event-store/ /app/event-store/
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    cargo build --release --bin eventstore-bin && \
     test -f /app/event-store/target/release/eventstore-bin
 
-# Stage 2: Runtime image
+# ---------------------------------------------------------------------------
+# Stage 4: Runtime — minimal image
+# ---------------------------------------------------------------------------
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
+# Runtime dependencies (no libssl3 — we use rustls, not OpenSSL)
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
