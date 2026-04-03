@@ -16,7 +16,7 @@ async-trait = "0.1"
 
 # Error handling
 anyhow = "1.0"
-thiserror = "1.0"
+thiserror = "2"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -27,9 +27,9 @@ uuid = { version = "1.0", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # gRPC client for event store
-tonic = "0.12"
-prost = "0.13"
-prost-types = "0.13"
+tonic = "0.14"
+prost = "0.14"
+prost-types = "0.14"
 
 # Logging
 tracing = "0.1"
@@ -37,8 +37,8 @@ tracing = "0.1"
 # Development dependencies
 [dev-dependencies]
 tokio-test = "0.4"
-mockall = "0.12"
-rstest = "0.21"
+mockall = "0.14"
+rstest = "0.26"
 
 # Event store integration
 eventstore-proto = { path = "../../event-store/eventstore-proto" }
