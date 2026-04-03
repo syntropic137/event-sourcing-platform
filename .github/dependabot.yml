@@ -7,6 +7,9 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "chore(deps):"
+    groups:
+      github-actions:
+        patterns: ["*"]
 
   # Rust — event-store workspace
   - package-ecosystem: "cargo"
@@ -15,6 +18,13 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "chore(deps):"
+    groups:
+      rust-event-store-minor:
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+      rust-event-store-major:
+        update-types: ["major"]
+        patterns: ["*"]
 
   # Rust — event-sourcing/rust
   - package-ecosystem: "cargo"
@@ -23,6 +33,13 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "chore(deps):"
+    groups:
+      rust-event-sourcing-minor:
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+      rust-event-sourcing-major:
+        update-types: ["major"]
+        patterns: ["*"]
 
   # Node.js — root workspace
   - package-ecosystem: "npm"
@@ -31,6 +48,13 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "chore(deps):"
+    groups:
+      npm-minor:
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+      npm-major:
+        update-types: ["major"]
+        patterns: ["*"]
 
   # Python — event-sourcing/python (uv)
   - package-ecosystem: "uv"
@@ -39,3 +63,10 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "chore(deps):"
+    groups:
+      python-minor:
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+      python-major:
+        update-types: ["major"]
+        patterns: ["*"]
