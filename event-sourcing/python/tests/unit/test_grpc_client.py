@@ -45,7 +45,6 @@ class TestConnectIdempotency:
             mock_channel.return_value = mock_ch
 
             await client.connect()
-            first_channel = client._channel
 
             await client.disconnect()
             assert client._channel is None

@@ -26,26 +26,22 @@ export class VsaDiagnosticProvider {
             return;
         }
 
-        try {
-            const report = await this.validationService.validate(workspacePath, configPath);
-            this.updateDiagnostics(report.errors.concat(report.warnings), workspacePath);
+        const report = await this.validationService.validate(workspacePath, configPath);
+        this.updateDiagnostics(report.errors.concat(report.warnings), workspacePath);
 
-            // Show summary
-            const totalIssues = report.errors.length + report.warnings.length;
-            if (totalIssues === 0) {
-                vscode.window.showInformationMessage(
-                    `VSA: ✅ All ${report.valid} features valid`
-                );
+        // Show summary
+        const totalIssues = report.errors.length + report.warnings.length;
+        if (totalIssues === 0) {
+            vscode.window.showInformationMessage(
+                `VSA: ✅ All ${report.valid} features valid`
+            );
+        } else {
+            const message = `VSA: ${report.errors.length} error(s), ${report.warnings.length} warning(s)`;
+            if (report.errors.length > 0) {
+                vscode.window.showErrorMessage(message);
             } else {
-                const message = `VSA: ${report.errors.length} error(s), ${report.warnings.length} warning(s)`;
-                if (report.errors.length > 0) {
-                    vscode.window.showErrorMessage(message);
-                } else {
-                    vscode.window.showWarningMessage(message);
-                }
+                vscode.window.showWarningMessage(message);
             }
-        } catch (error) {
-            throw error;
         }
     }
 

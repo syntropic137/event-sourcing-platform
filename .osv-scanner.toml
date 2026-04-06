@@ -53,3 +53,13 @@ reason = "serialize-javascript pinned at 6.x by webpack plugins. Awaiting upstre
 [[IgnoredVulns]]
 id = "GHSA-776f-qx25-q3cc"
 reason = "xml2js pinned at 0.4.x by vsce (VS Code extension packager). Awaiting vsce update."
+
+# npm: Docusaurus 3.x → @docusaurus/utils → lodash 4.17.23
+# Lodash is pinned by Docusaurus internals. Docs-site-only dependency, not production.
+[[IgnoredVulns]]
+id = "GHSA-f23m-r3pf-42rh"
+reason = "lodash pinned at 4.17.x by Docusaurus 3.x. Docs-site-only, not in production."
+
+[[IgnoredVulns]]
+id = "GHSA-r5fr-rjxr-66jc"
+reason = "lodash pinned at 4.17.x by Docusaurus 3.x. Docs-site-only, not in production."
