@@ -152,8 +152,7 @@ class TestRepositorySaveNew:
     @pytest.fixture
     def repository(self, memory_client):
         from event_sourcing.core.repository import EventStoreRepository
-
-        from tests.unit.test_aggregate import TestAggregate, TestEvent
+        from tests.unit.test_aggregate import TestAggregate
 
         return EventStoreRepository(
             event_store_client=memory_client,
@@ -175,7 +174,6 @@ class TestRepositorySaveNew:
     @pytest.mark.asyncio
     async def test_save_new_raises_on_duplicate(self, repository):
         from event_sourcing.core.errors import StreamAlreadyExistsError
-
         from tests.unit.test_aggregate import TestAggregate, TestEvent
 
         agg1 = TestAggregate()

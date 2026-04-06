@@ -212,7 +212,6 @@ class GrpcEventStoreClient:
         if the detail cannot be decoded.
         """
         try:
-            from google.protobuf.any_pb2 import Any as AnyProto
 
             # grpc-python exposes trailing_metadata on RpcError
             status = rpc_error  # type: ignore[union-attr]

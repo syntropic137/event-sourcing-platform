@@ -22,7 +22,6 @@ from event_sourcing.core.errors import (
     InvalidAggregateStateError,
     StreamAlreadyExistsError,
 )
-from event_sourcing.core.expected_version import ExpectedVersion
 from event_sourcing.core.event import (
     BaseDomainEvent,
     DomainEvent,
@@ -30,6 +29,7 @@ from event_sourcing.core.event import (
     EventMetadata,
     GenericDomainEvent,
 )
+from event_sourcing.core.expected_version import ExpectedVersion
 from event_sourcing.core.projection import (
     AutoDispatchProjection,
     CheckpointedProjection,
