@@ -160,6 +160,8 @@ fn spawn_pg_listener(
                                     error = %e,
                                     "PgListener recv error, reconnecting"
                                 );
+                                tokio::time::sleep(backoff).await;
+                                backoff = (backoff * 2).min(max_backoff);
                                 break;
                             }
                         }
@@ -178,7 +180,13 @@ fn spawn_pg_listener(
 pub struct PostgresStore {
     pool: PgPool,
     notify_tx: broadcast::Sender<NotifyPayload>,
-    _listener_handle: tokio::task::JoinHandle<()>,
+    listener_handle: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for PostgresStore {
+    fn drop(&mut self) {
+        self.listener_handle.abort();
+    }
 }
 
 impl PostgresStore {
@@ -188,7 +196,7 @@ impl PostgresStore {
         Arc::new(Self {
             pool,
             notify_tx,
-            _listener_handle: listener_handle,
+            listener_handle,
         })
     }
 
@@ -516,20 +524,26 @@ impl EventStoreTrait for PostgresStore {
             .map_err(map_db_error)?;
         }
 
-        // Notify subscribers of new events (delivered only after commit)
+        // Notify subscribers of new events (delivered only after commit).
+        // Best-effort: notification failure must not abort the append.
+        // The 5s fallback poll ensures delivery even if NOTIFY fails.
         let notify_payload = NotifyPayload::encode(&tenant_id, last_global_nonce as i64);
-        sqlx::query("SELECT pg_notify($1, $2)")
+        if let Err(e) = sqlx::query("SELECT pg_notify($1, $2)")
             .bind(NOTIFY_CHANNEL)
             .bind(&notify_payload)
             .execute(&mut *tx)
             .await
-            .map_err(map_db_error)?;
+        {
+            tracing::warn!(error = %e, "pg_notify failed (non-fatal, fallback poll will deliver)");
+        }
 
         tx.commit()
             .await
             .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
 
-        // Also broadcast in-process for subscribers on this instance
+        // Also broadcast in-process for zero-latency same-instance delivery.
+        // This intentionally duplicates the PgListener path — the subscriber's
+        // select! loop handles dedup naturally (DB query is source of truth).
         let _ = self.notify_tx.send(NotifyPayload {
             tenant_id: tenant_id.clone(),
             last_global_nonce: last_global_nonce as i64,
@@ -741,7 +755,14 @@ impl EventStoreTrait for PostgresStore {
         );
 
         Box::pin(stream::unfold(
-            (pool, tenant_id, prefix, from_global, None::<Phase>, notify_rx),
+            (
+                pool,
+                tenant_id,
+                prefix,
+                from_global,
+                None::<Phase>,
+                notify_rx,
+            ),
             |(pool, tenant, prefix, cursor, phase, mut notify_rx): State| async move {
                 let mut phase = phase;
                 if phase.is_none() {
@@ -970,8 +991,14 @@ impl EventStoreTrait for PostgresStore {
                                     }
                                 };
 
-                                let next_state =
-                                    (pool, tenant, prefix, yielded_cursor, Some(next_phase), notify_rx);
+                                let next_state = (
+                                    pool,
+                                    tenant,
+                                    prefix,
+                                    yielded_cursor,
+                                    Some(next_phase),
+                                    notify_rx,
+                                );
                                 Some((
                                     Ok(proto::SubscribeResponse {
                                         event: Some(first_event),

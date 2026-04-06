@@ -836,7 +836,9 @@ async fn postgres_subscribe_multiple_subscribers_all_receive() {
         while received < 3 && std::time::Instant::now() < deadline {
             let resp = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
                 .await
-                .unwrap_or_else(|_| panic!("subscriber {sub_idx} timed out after {received} events"))
+                .unwrap_or_else(|_| {
+                    panic!("subscriber {sub_idx} timed out after {received} events")
+                })
                 .expect("stream ended")
                 .expect("stream error");
 
