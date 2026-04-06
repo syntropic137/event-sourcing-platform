@@ -691,3 +691,162 @@ async fn postgres_subscribe_catches_event_at_from_position_when_created_after_su
         "Event nonce {event_nonce} should be >= target {target_position}"
     );
 }
+
+// ============================================================================
+// LISTEN/NOTIFY Tests - Verify hybrid notification + polling fallback
+// ============================================================================
+
+const TENANT_NOTIFY: &str = "tenant-notify";
+
+/// Test that events are delivered to subscribers within 100ms when using
+/// LISTEN/NOTIFY (vs ~200ms+ with the old polling approach).
+#[tokio::test]
+async fn postgres_subscribe_receives_events_within_100ms() {
+    let url = common::get_test_database_url().await;
+    let store = PostgresStore::connect_for_tests(&url)
+        .await
+        .expect("connect");
+
+    let tenant = format!("{TENANT_NOTIFY}-latency");
+
+    // Append a setup event so we know the starting position
+    let setup_resp = store
+        .append(proto::AppendRequest {
+            tenant_id: tenant.clone(),
+            aggregate_id: "Latency-Setup".into(),
+            aggregate_type: "SubscribeTest".into(),
+            expected_aggregate_nonce: 0,
+            events: vec![new_subscribe_event(&tenant, "Latency-Setup", 1, "Setup")],
+            ..Default::default()
+        })
+        .await
+        .expect("append setup");
+
+    let from_position = setup_resp.last_global_nonce + 1;
+
+    // Start subscription from after the setup event
+    let mut stream = store.subscribe(proto::SubscribeRequest {
+        tenant_id: tenant.clone(),
+        aggregate_id_prefix: "".into(),
+        from_global_nonce: from_position,
+    });
+
+    // Skip the initial empty response (replay-to-live transition)
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await;
+
+    // Now append an event and measure delivery time
+    let start = std::time::Instant::now();
+    store
+        .append(proto::AppendRequest {
+            tenant_id: tenant.clone(),
+            aggregate_id: "Latency-1".into(),
+            aggregate_type: "SubscribeTest".into(),
+            expected_aggregate_nonce: 0,
+            events: vec![new_subscribe_event(&tenant, "Latency-1", 1, "Ping")],
+            ..Default::default()
+        })
+        .await
+        .expect("append");
+
+    // Wait for the event to arrive
+    loop {
+        let resp = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+            .await
+            .expect("timeout waiting for event")
+            .expect("stream ended")
+            .expect("stream error");
+
+        if resp.event.is_some() {
+            let elapsed = start.elapsed();
+            assert!(
+                elapsed < std::time::Duration::from_millis(100),
+                "Event delivery took {elapsed:?}, expected < 100ms"
+            );
+            break;
+        }
+        // Skip keep-alive (empty) responses
+    }
+}
+
+/// Test that multiple concurrent subscribers all receive the same events.
+#[tokio::test]
+async fn postgres_subscribe_multiple_subscribers_all_receive() {
+    let url = common::get_test_database_url().await;
+    let store = PostgresStore::connect_for_tests(&url)
+        .await
+        .expect("connect");
+
+    let tenant = format!("{TENANT_NOTIFY}-multi");
+
+    // Append a setup event
+    let setup_resp = store
+        .append(proto::AppendRequest {
+            tenant_id: tenant.clone(),
+            aggregate_id: "Multi-Setup".into(),
+            aggregate_type: "SubscribeTest".into(),
+            expected_aggregate_nonce: 0,
+            events: vec![new_subscribe_event(&tenant, "Multi-Setup", 1, "Setup")],
+            ..Default::default()
+        })
+        .await
+        .expect("append setup");
+
+    let from_position = setup_resp.last_global_nonce + 1;
+
+    // Create 3 subscribers
+    let mut streams: Vec<_> = (0..3)
+        .map(|_| {
+            store.subscribe(proto::SubscribeRequest {
+                tenant_id: tenant.clone(),
+                aggregate_id_prefix: "".into(),
+                from_global_nonce: from_position,
+            })
+        })
+        .collect();
+
+    // Skip initial empty responses
+    for s in streams.iter_mut() {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), s.next()).await;
+    }
+
+    // Append 3 events
+    for i in 1..=3 {
+        store
+            .append(proto::AppendRequest {
+                tenant_id: tenant.clone(),
+                aggregate_id: format!("Multi-{i}"),
+                aggregate_type: "SubscribeTest".into(),
+                expected_aggregate_nonce: 0,
+                events: vec![new_subscribe_event(
+                    &tenant,
+                    &format!("Multi-{i}"),
+                    1,
+                    &format!("Event{i}"),
+                )],
+                ..Default::default()
+            })
+            .await
+            .expect("append");
+    }
+
+    // Each subscriber should receive all 3 events
+    for (sub_idx, stream) in streams.iter_mut().enumerate() {
+        let mut received = 0;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while received < 3 && std::time::Instant::now() < deadline {
+            let resp = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+                .await
+                .unwrap_or_else(|_| panic!("subscriber {sub_idx} timed out after {received} events"))
+                .expect("stream ended")
+                .expect("stream error");
+
+            if resp.event.is_some() {
+                received += 1;
+            }
+        }
+        assert_eq!(
+            received, 3,
+            "subscriber {sub_idx} received {received} events, expected 3"
+        );
+    }
+}
