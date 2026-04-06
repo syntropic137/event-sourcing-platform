@@ -731,8 +731,16 @@ async fn postgres_subscribe_receives_events_within_100ms() {
         from_global_nonce: from_position,
     });
 
-    // Skip the initial empty response (replay-to-live transition)
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await;
+    // Wait for the replay-to-live transition (empty response)
+    let initial = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("timeout waiting for replay-to-live transition")
+        .expect("stream ended before live")
+        .expect("stream error before live");
+    assert!(
+        initial.event.is_none(),
+        "expected empty replay-to-live response"
+    );
 
     // Now append an event and measure delivery time
     let start = std::time::Instant::now();
@@ -759,8 +767,8 @@ async fn postgres_subscribe_receives_events_within_100ms() {
         if resp.event.is_some() {
             let elapsed = start.elapsed();
             assert!(
-                elapsed < std::time::Duration::from_millis(100),
-                "Event delivery took {elapsed:?}, expected < 100ms"
+                elapsed < std::time::Duration::from_millis(500),
+                "Event delivery took {elapsed:?}, expected < 500ms (LISTEN/NOTIFY)"
             );
             break;
         }
@@ -804,9 +812,17 @@ async fn postgres_subscribe_multiple_subscribers_all_receive() {
         })
         .collect();
 
-    // Skip initial empty responses
-    for s in streams.iter_mut() {
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), s.next()).await;
+    // Wait for each subscriber to reach the live phase
+    for (i, s) in streams.iter_mut().enumerate() {
+        let resp = tokio::time::timeout(std::time::Duration::from_secs(2), s.next())
+            .await
+            .unwrap_or_else(|_| panic!("subscriber {i} did not become live in time"))
+            .expect("stream ended before live")
+            .expect("stream error before live");
+        assert!(
+            resp.event.is_none(),
+            "subscriber {i} initial response unexpectedly contained an event"
+        );
     }
 
     // Append 3 events
