@@ -1100,7 +1100,7 @@ mod tests {
                 .connect_lazy(url)
                 .expect("lazy connect should not attempt network"),
             notify_tx,
-            _listener_handle: tokio::spawn(async {}),
+            listener_handle: tokio::spawn(async {}),
         };
         let _stream = store.subscribe(proto::SubscribeRequest {
             tenant_id: "tenant".into(),
