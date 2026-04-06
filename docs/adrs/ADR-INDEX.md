@@ -77,6 +77,7 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 | [ADR-018](./ADR-018-renovate-bot-adoption.md) | Renovate Bot Adoption | 📋 Proposed | Migration from Dependabot to Renovate for dependency management |
 | [ADR-019](./ADR-019-vsa-standard-structure.md) | **VSA Standard Structure** | ✅ Accepted | **CANONICAL reference for all VSA applications - comprehensive structure standard** |
 || [ADR-020](./ADR-020-bounded-context-aggregate-convention.md) | **Bounded Context & Aggregate Convention** | ✅ Accepted | **Defines aggregate_<name>/ folder convention, entity/VO rules, BC requirements** |
+| [ADR-021](./ADR-021-expected-version-and-set-based-validation.md) | ExpectedVersion & Set-Based Validation | ✅ Accepted | NoStream semantics, stream-per-unique-value pattern, StreamAlreadyExistsError |
 
 ---
 

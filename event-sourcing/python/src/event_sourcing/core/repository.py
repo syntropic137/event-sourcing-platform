@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Any, Generic, Protocol, TypeVar
 
 from event_sourcing.core.aggregate import BaseAggregate
+from event_sourcing.core.expected_version import ExpectedVersion
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,44 @@ class EventStoreRepository(Generic[TAggregate]):
         logger.debug(
             f"Saved aggregate {self._aggregate_type}:{aggregate.id} "
             f"with {len(uncommitted_events)} event(s), new version: {aggregate.version}"
+        )
+
+    async def save_new(self, aggregate: TAggregate) -> None:
+        """Save a new aggregate, failing if the stream already exists.
+
+        Uses ``ExpectedVersion.NO_STREAM`` to guarantee uniqueness of the
+        aggregate ID.  For the stream-per-unique-value pattern, derive a
+        deterministic aggregate ID from the unique value so that the event
+        store enforces uniqueness at the storage level.
+
+        Raises:
+            StreamAlreadyExistsError: If the stream already exists.
+            InvalidAggregateStateError: If the aggregate has no ID.
+        """
+        if aggregate.id is None:
+            from event_sourcing.core.errors import InvalidAggregateStateError
+
+            raise InvalidAggregateStateError(
+                self._aggregate_type, "Cannot save aggregate without ID"
+            )
+
+        uncommitted_events = aggregate.get_uncommitted_events()
+        if not uncommitted_events:
+            return
+
+        stream_name = self._get_stream_name(aggregate.id)
+
+        await self._client.append_events(
+            stream_name=stream_name,
+            events=uncommitted_events,
+            expected_version=ExpectedVersion.NO_STREAM,
+        )
+
+        aggregate.mark_events_as_committed()
+
+        logger.debug(
+            f"Saved new aggregate {self._aggregate_type}:{aggregate.id} "
+            f"with {len(uncommitted_events)} event(s)"
         )
 
     async def exists(self, aggregate_id: str) -> bool:

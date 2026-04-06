@@ -6,7 +6,11 @@ from collections.abc import AsyncIterator
 
 import grpc
 
-from event_sourcing.core.errors import ConcurrencyConflictError, EventStoreError
+from event_sourcing.core.errors import (
+    ConcurrencyConflictError,
+    EventStoreError,
+    StreamAlreadyExistsError,
+)
 from event_sourcing.core.event import (
     DomainEvent,
     EventEnvelope,
@@ -178,11 +182,15 @@ class GrpcEventStoreClient:
             )
 
         except grpc.RpcError as e:
-            # Check if it's a concurrency conflict
-            if e.code() == grpc.StatusCode.FAILED_PRECONDITION:
-                logger.warning(f"Concurrency conflict on stream '{stream_name}'")
-                # Extract actual version from error details if possible, otherwise use -1
-                raise ConcurrencyConflictError(expected_ver, -1) from e
+            if e.code() == grpc.StatusCode.ABORTED:
+                actual_version = self._extract_actual_version(e)
+                logger.warning(
+                    f"Concurrency conflict on stream '{stream_name}' "
+                    f"(expected={expected_ver}, actual={actual_version})"
+                )
+                if expected_ver == 0:
+                    raise StreamAlreadyExistsError(stream_name, actual_version) from e
+                raise ConcurrencyConflictError(expected_ver, actual_version) from e
 
             logger.error(f"gRPC error appending events: {e}")
             raise EventStoreError(f"Failed to append events: {e}") from e
@@ -194,6 +202,36 @@ class GrpcEventStoreClient:
             return len(events) > 0
         except Exception:
             return False
+
+    @staticmethod
+    def _extract_actual_version(rpc_error: grpc.RpcError) -> int:
+        """Extract actual_last_aggregate_nonce from gRPC ConcurrencyErrorDetail.
+
+        The Rust event store encodes the detail as a ``google.protobuf.Any``
+        wrapper inside the gRPC status trailing metadata.  Falls back to ``-1``
+        if the detail cannot be decoded.
+        """
+        try:
+            from google.protobuf.any_pb2 import Any as AnyProto
+
+            # grpc-python exposes trailing_metadata on RpcError
+            status = rpc_error  # type: ignore[union-attr]
+            raw_details = status.trailing_metadata()
+            for key, value in raw_details:
+                if key == "grpc-status-details-bin":
+                    # The value is a serialized google.rpc.Status
+                    from google.rpc import status_pb2  # type: ignore[import-untyped]
+
+                    rpc_status = status_pb2.Status()
+                    rpc_status.ParseFromString(value)
+                    for detail in rpc_status.details:
+                        if detail.Is(eventstore_pb2.ConcurrencyErrorDetail.DESCRIPTOR):
+                            concurrency_detail = eventstore_pb2.ConcurrencyErrorDetail()
+                            detail.Unpack(concurrency_detail)
+                            return int(concurrency_detail.actual_last_aggregate_nonce)
+        except Exception:
+            logger.debug("Could not decode ConcurrencyErrorDetail from gRPC status", exc_info=True)
+        return -1
 
     def _envelope_to_proto(
         self, envelope: EventEnvelope[DomainEvent], aggregate_id: str, aggregate_type: str

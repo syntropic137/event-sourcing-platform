@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: timescale/timescaledb:latest-pg16
     environment:
       POSTGRES_USER: eventstore
       POSTGRES_PASSWORD: eventstore
