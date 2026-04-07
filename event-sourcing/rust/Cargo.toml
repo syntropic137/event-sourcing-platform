@@ -1,6 +1,6 @@
 [package]
 name = "event-sourcing-rust"
-version = "0.1.1"
+version = "0.11.1"
 edition = "2021"
 authors = ["Event Sourcing Platform Team"]
 description = "Rust SDK for Event Sourcing patterns and abstractions"
@@ -11,7 +11,7 @@ categories = ["database", "web-programming"]
 
 [dependencies]
 # Core async runtime
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.51", features = ["full"] }
 async-trait = "0.1"
 
 # Error handling

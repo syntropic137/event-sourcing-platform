@@ -39,16 +39,21 @@ jobs:
           echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
           echo "Release version: $VERSION (tag: $TAG_NAME)"
 
-      - name: Verify version matches package.json
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Verify version consistency
         run: |
-          PACKAGE_VERSION=$(node -p "require('./event-sourcing/typescript/package.json').version")
+          python3 scripts/bump_version.py --check
+          PLATFORM_VERSION=$(python3 scripts/bump_version.py --current)
           RELEASE_VERSION="${{ steps.version.outputs.version }}"
-          echo "Package version: $PACKAGE_VERSION"
+          echo "Platform version: $PLATFORM_VERSION"
           echo "Release version: $RELEASE_VERSION"
-          if [ "$PACKAGE_VERSION" != "$RELEASE_VERSION" ]; then
-            echo "❌ Version mismatch!"
-            echo "package.json: $PACKAGE_VERSION"
-            echo "Release tag: $RELEASE_VERSION"
+          if [ "$PLATFORM_VERSION" != "$RELEASE_VERSION" ]; then
+            echo "❌ Version mismatch! Platform is $PLATFORM_VERSION but release tag is $RELEASE_VERSION"
+            echo "Run: make bump-version VERSION=$RELEASE_VERSION"
             exit 1
           fi
           echo "✅ Versions match!"
@@ -181,7 +186,7 @@ jobs:
     if: ${{ github.event.inputs.dry-run != 'true' }}
     permissions:
       contents: read
-      packages: read
+      packages: write
 
     steps:
       - name: Wait for package to be available
@@ -206,3 +211,15 @@ jobs:
           echo "✅ Package successfully published and accessible"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure package is public
+        run: |
+          # GitHub Packages defaults to private for org repos.
+          # Set to public so Syntropic137 and other consumers can pull without auth.
+          gh api \
+            --method PUT \
+            "orgs/syntropic137/packages/npm/event-sourcing-platform%2Ftypescript/visibility" \
+            -f visibility=public \
+            2>/dev/null || echo "⚠️ Could not set visibility (may already be public or require admin)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

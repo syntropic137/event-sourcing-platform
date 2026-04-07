@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:15
+    image: timescale/timescaledb:latest-pg16
     container_name: "event-sourcing-platform_15695cf1_postgres"
     environment:
       POSTGRES_DB: dev

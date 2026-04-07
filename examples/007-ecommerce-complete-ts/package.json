@@ -1,6 +1,6 @@
 {
   "name": "007-ecommerce-complete-ts",
-  "version": "2.0.0",
+  "version": "0.11.1",
   "description": "Complete E-commerce Platform demonstrating Hexagonal Event-Sourced VSA Architecture (TypeScript)",
   "main": "dist/main.js",
   "scripts": {

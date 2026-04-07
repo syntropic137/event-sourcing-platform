@@ -1,6 +1,6 @@
 {
   "name": "event-sourcing-platform",
-  "version": "0.9.1-beta",
+  "version": "0.11.1",
   "private": true,
   "workspaces": [
     "event-store/sdks/sdk-ts",
