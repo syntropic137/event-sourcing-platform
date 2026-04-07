@@ -9,15 +9,16 @@ Handles:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
-from event_sourcing.core.event import DomainEvent, EventFactory
+from event_sourcing.core.event import DomainEvent, EventEnvelope, EventFactory
 from event_sourcing.testing.scenario.result_validator import ResultValidator
 
 if TYPE_CHECKING:
     from event_sourcing.core.aggregate import AggregateRoot
+    from event_sourcing.core.command import Command
 
-TAggregate = TypeVar("TAggregate", bound="AggregateRoot[Any]")
+TAggregate = TypeVar("TAggregate", bound="AggregateRoot[DomainEvent]")
 
 
 class TestExecutor(Generic[TAggregate]):
@@ -31,13 +32,13 @@ class TestExecutor(Generic[TAggregate]):
         self,
         aggregate_class: type[TAggregate],
         given_events: list[DomainEvent],
-        injectables: dict[str, Any],
+        injectables: dict[str, object],  # OBJRATCHET: DI container holds arbitrary service types
     ) -> None:
         self._aggregate_class = aggregate_class
         self._given_events = given_events
         self._injectables = injectables
 
-    def when(self, command: Any) -> ResultValidator[TAggregate]:
+    def when(self, command: Command) -> ResultValidator[TAggregate]:
         """
         Execute a command against the aggregate.
 
@@ -72,7 +73,7 @@ class TestExecutor(Generic[TAggregate]):
 
     def _create_envelope(
         self, event: DomainEvent, aggregate: TAggregate, nonce: int
-    ) -> Any:
+    ) -> EventEnvelope[DomainEvent]:
         """Create an event envelope with test metadata."""
         aggregate_id = self._extract_aggregate_id(event) or "test-aggregate"
         return EventFactory.create(
@@ -99,10 +100,11 @@ class TestExecutor(Generic[TAggregate]):
                     return value
         return None
 
-    def _execute_command(self, aggregate: TAggregate, command: Any) -> None:
+    def _execute_command(self, aggregate: TAggregate, command: Command) -> None:
         """Execute command using the aggregate's _handle_command method."""
-        if hasattr(aggregate, "_handle_command") and callable(aggregate._handle_command):
-            aggregate._handle_command(command)
+        handle_cmd = getattr(aggregate, "_handle_command", None)
+        if handle_cmd is not None and callable(handle_cmd):
+            handle_cmd(command)
         else:
             raise RuntimeError(
                 f"Aggregate {aggregate.get_aggregate_type()} does not have a "
@@ -116,10 +118,9 @@ class TestExecutor(Generic[TAggregate]):
             return
 
         # Check if aggregate has a set_dependencies method
-        if hasattr(aggregate, "set_dependencies") and callable(
-            aggregate.set_dependencies
-        ):
-            aggregate.set_dependencies(self._injectables)
+        set_deps = getattr(aggregate, "set_dependencies", None)
+        if set_deps is not None and callable(set_deps):
+            set_deps(self._injectables)
 
         # Also try to inject via property names matching injectable type names
         for type_name, resource in self._injectables.items():

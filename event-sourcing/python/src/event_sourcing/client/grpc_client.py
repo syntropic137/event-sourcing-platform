@@ -1,4 +1,12 @@
-"""gRPC event store client implementation."""
+# pyright: basic
+"""gRPC event store client implementation.
+
+The gRPC proto stubs (eventstore_pb2, eventstore_pb2_grpc) are auto-generated
+and lack type information. Pyright strict mode flags every access as "unknown".
+Rather than sprinkling hundreds of casts, we relax pyright to "basic" for this
+adapter file. The public API (return types) is still fully typed — the "unknown"
+types are confined to internal proto interactions.
+"""
 
 import json
 import logging

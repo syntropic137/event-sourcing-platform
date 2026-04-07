@@ -1,11 +1,13 @@
 """Event decorators for event sourcing patterns."""
 
+from __future__ import annotations
+
 import re
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import TypeVar
 
-F = TypeVar("F", bound=Callable[..., Any])
-T = TypeVar("T", bound=type[Any])
+F = TypeVar("F", bound=Callable[..., object])  # OBJRATCHET: decorator preserves any callable signature
+T = TypeVar("T", bound=type)
 
 # ============================================================================
 # EVENT HANDLER DECORATOR (for aggregate methods)
@@ -149,7 +151,7 @@ def event(event_type: str, version: str) -> Callable[[T], T]:
     return decorator
 
 
-def get_event_metadata(event_class: type[Any]) -> EventDecoratorMetadata | None:
+def get_event_metadata(event_class: type[object]) -> EventDecoratorMetadata | None:  # OBJRATCHET: accepts any class for metadata inspection
     """
     Get event metadata from an event class.
 

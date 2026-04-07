@@ -10,16 +10,17 @@ Provides fluent assertions for verifying:
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
-
-from event_sourcing.core.event import DomainEvent
-from event_sourcing.testing.scenario.errors import ScenarioAssertionError
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 if TYPE_CHECKING:
-    from event_sourcing.core.aggregate import AggregateRoot
+    from collections.abc import Callable
 
-TAggregate = TypeVar("TAggregate", bound="AggregateRoot[Any]")
+    from event_sourcing.core.aggregate import AggregateRoot
+    from event_sourcing.core.event import DomainEvent
+
+from event_sourcing.testing.scenario.errors import ScenarioAssertionError
+
+TAggregate = TypeVar("TAggregate", bound="AggregateRoot[DomainEvent]")
 
 
 class ResultValidator(Generic[TAggregate]):
@@ -222,9 +223,7 @@ class ResultValidator(Generic[TAggregate]):
     def _get_event_type(self, event: DomainEvent) -> str:
         """Get the event type from an event."""
         if hasattr(event, "event_type"):
-            event_type = event.event_type
-            if isinstance(event_type, str):
-                return event_type
+            return str(event.event_type)
         return type(event).__name__
 
     def _format_event(self, event: DomainEvent) -> str:

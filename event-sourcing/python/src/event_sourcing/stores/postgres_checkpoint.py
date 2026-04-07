@@ -7,8 +7,14 @@ Checkpoints are stored in a dedicated `projection_checkpoints` table.
 See ADR-014 for architectural rationale.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 from event_sourcing.core.checkpoint import (
     ProjectionCheckpoint,
@@ -16,6 +22,29 @@ from event_sourcing.core.checkpoint import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _Row(Protocol):
+    """Protocol for database row objects (asyncpg Record compatible)."""
+
+    def __getitem__(self, key: str) -> object: ...  # OBJRATCHET: DB row values are heterogeneous (str, int, datetime, etc.)
+
+
+@runtime_checkable
+class AsyncConnection(Protocol):
+    """Protocol for async database connections (asyncpg-compatible)."""
+
+    async def execute(self, query: str, *args: object) -> str: ...  # OBJRATCHET: SQL params are heterogeneous (str, int, datetime, etc.)
+    async def fetchrow(self, query: str, *args: object) -> _Row | None: ...  # OBJRATCHET: same as above
+    async def fetch(self, query: str, *args: object) -> list[_Row]: ...  # OBJRATCHET: same as above
+
+
+@runtime_checkable
+class AsyncConnectionPool(Protocol):
+    """Protocol for async connection pools (asyncpg-compatible)."""
+
+    @asynccontextmanager
+    def acquire(self) -> AsyncIterator[AsyncConnection]: ...
 
 
 class PostgresCheckpointStore:
@@ -90,7 +119,17 @@ class PostgresCheckpointStore:
         ORDER BY projection_name;
     """
 
-    def __init__(self, pool: Any) -> None:
+    @staticmethod
+    def _row_to_checkpoint(row: _Row) -> ProjectionCheckpoint:
+        """Convert a database row to a ProjectionCheckpoint."""
+        return ProjectionCheckpoint(
+            projection_name=str(row["projection_name"]),
+            global_position=int(row["global_position"]),  # type: ignore[arg-type]
+            updated_at=row["updated_at"],  # type: ignore[arg-type]
+            version=int(row["version"]),  # type: ignore[arg-type]
+        )
+
+    def __init__(self, pool: AsyncConnectionPool) -> None:
         """
         Initialize the PostgreSQL checkpoint store.
 
@@ -132,12 +171,7 @@ class PostgresCheckpointStore:
             )
             return None
 
-        checkpoint = ProjectionCheckpoint(
-            projection_name=row["projection_name"],
-            global_position=row["global_position"],
-            updated_at=row["updated_at"],
-            version=row["version"],
-        )
+        checkpoint = self._row_to_checkpoint(row)
 
         logger.debug(
             "Retrieved checkpoint",
@@ -162,7 +196,7 @@ class PostgresCheckpointStore:
 
     async def save_checkpoint_with_connection(
         self,
-        conn: Any,
+        conn: AsyncConnection,
         checkpoint: ProjectionCheckpoint,
     ) -> None:
         """
@@ -221,15 +255,7 @@ class PostgresCheckpointStore:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(self.GET_ALL_CHECKPOINTS_SQL)
 
-        checkpoints = [
-            ProjectionCheckpoint(
-                projection_name=row["projection_name"],
-                global_position=row["global_position"],
-                updated_at=row["updated_at"],
-                version=row["version"],
-            )
-            for row in rows
-        ]
+        checkpoints = [self._row_to_checkpoint(row) for row in rows]
 
         logger.debug(
             "Retrieved all checkpoints",

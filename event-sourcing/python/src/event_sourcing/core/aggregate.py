@@ -1,9 +1,15 @@
 """Aggregate abstractions and base implementations for event sourcing."""
 
+from __future__ import annotations
+
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from event_sourcing.core.command import Command
 
 from event_sourcing.core.errors import InvalidAggregateStateError
 from event_sourcing.core.event import DomainEvent, EventEnvelope, EventFactory
@@ -231,7 +237,7 @@ class AggregateRoot(BaseAggregate[TEvent]):
         self._raise_event(event)
 
     @classmethod
-    def _get_event_handlers(cls) -> dict[str, Callable[..., Any]]:
+    def _get_event_handlers(cls) -> dict[str, Callable[..., object]]:  # OBJRATCHET: handlers mutate state, return type is unused
         """
         Get event handler map from decorated methods.
 
@@ -241,7 +247,7 @@ class AggregateRoot(BaseAggregate[TEvent]):
         Returns:
             Dictionary mapping event types to handler methods
         """
-        handlers: dict[str, Callable[..., Any]] = {}
+        handlers: dict[str, Callable[..., object]] = {}  # OBJRATCHET: same as above
 
         # Scan all attributes of the class
         for name in dir(cls):
@@ -280,7 +286,7 @@ class AggregateRoot(BaseAggregate[TEvent]):
 
         return handlers
 
-    def _handle_command(self, command: Any) -> None:
+    def _handle_command(self, command: Command) -> None:
         """
         Handle a command by dispatching to the appropriate @command_handler method.
 
@@ -324,9 +330,7 @@ class AggregateRoot(BaseAggregate[TEvent]):
         """
         # Try to get event_type from the event object
         if hasattr(event, "event_type"):
-            event_type_attr = event.event_type
-            if isinstance(event_type_attr, str):
-                return event_type_attr
+            return str(event.event_type)
 
         # Fallback to class name
         return type(event).__name__

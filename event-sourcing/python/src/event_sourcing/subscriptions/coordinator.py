@@ -10,11 +10,12 @@ This module provides the SubscriptionCoordinator which:
 See ADR-014 for architectural rationale.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Protocol, TypedDict
 
 from event_sourcing.core.checkpoint import (
     CheckpointedProjection,
@@ -22,7 +23,28 @@ from event_sourcing.core.checkpoint import (
     ProjectionCheckpointStore,
     ProjectionResult,
 )
-from event_sourcing.core.event import EventEnvelope
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from event_sourcing.core.event import DomainEvent, EventEnvelope
+
+
+class CheckpointStatus(TypedDict):
+    """Typed checkpoint status for projection health reporting."""
+
+    position: int | None
+    updated_at: str | None
+    version: int | None
+
+
+class ProjectionStatus(TypedDict):
+    """Typed projection status returned by SubscriptionCoordinator."""
+
+    name: str
+    version: int
+    subscribed_types: list[str] | None
+    checkpoint: CheckpointStatus
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +52,7 @@ logger = logging.getLogger(__name__)
 class EventStoreSubscriber(Protocol):
     """Protocol for event store subscription interface."""
 
-    async def subscribe(self, from_global_nonce: int) -> AsyncIterator[EventEnvelope[Any]]:
+    def subscribe(self, from_global_nonce: int) -> AsyncIterator[EventEnvelope[DomainEvent]]:
         """
         Subscribe to events starting from a given global nonce.
 
@@ -80,7 +102,7 @@ class SubscriptionCoordinator:
 
     def __init__(
         self,
-        event_store: Any,  # EventStoreClient or compatible
+        event_store: EventStoreSubscriber,
         checkpoint_store: ProjectionCheckpointStore,
         projections: list[CheckpointedProjection],
     ) -> None:
@@ -243,7 +265,7 @@ class SubscriptionCoordinator:
         # Start from next position after minimum
         return (min_pos or 0) + 1
 
-    async def _dispatch_event(self, envelope: EventEnvelope[Any]) -> None:
+    async def _dispatch_event(self, envelope: EventEnvelope[DomainEvent]) -> None:
         """
         Dispatch an event to all relevant projections.
 
@@ -272,7 +294,7 @@ class SubscriptionCoordinator:
     async def _dispatch_to_projection(
         self,
         projection: CheckpointedProjection,
-        envelope: EventEnvelope[Any],
+        envelope: EventEnvelope[DomainEvent],
     ) -> None:
         """
         Dispatch an event to a single projection with error handling.
@@ -425,7 +447,7 @@ class SubscriptionCoordinator:
     async def get_projection_status(
         self,
         name: str,
-    ) -> dict[str, Any] | None:
+    ) -> ProjectionStatus | None:
         """
         Get status information for a projection.
 
@@ -433,7 +455,7 @@ class SubscriptionCoordinator:
             name: Projection name
 
         Returns:
-            Status dictionary or None if not found
+            Typed projection status or None if not found
         """
         projection = self._projections.get(name)
         if not projection:
@@ -441,13 +463,14 @@ class SubscriptionCoordinator:
 
         checkpoint = await self._checkpoint_store.get_checkpoint(name)
 
-        return {
-            "name": name,
-            "version": projection.get_version(),
-            "subscribed_types": projection.get_subscribed_event_types(),
-            "checkpoint": {
-                "position": checkpoint.global_position if checkpoint else None,
-                "updated_at": checkpoint.updated_at.isoformat() if checkpoint else None,
-                "version": checkpoint.version if checkpoint else None,
-            },
-        }
+        subscribed = projection.get_subscribed_event_types()
+        return ProjectionStatus(
+            name=name,
+            version=projection.get_version(),
+            subscribed_types=sorted(subscribed) if subscribed is not None else None,
+            checkpoint=CheckpointStatus(
+                position=checkpoint.global_position if checkpoint else None,
+                updated_at=checkpoint.updated_at.isoformat() if checkpoint else None,
+                version=checkpoint.version if checkpoint else None,
+            ),
+        )
