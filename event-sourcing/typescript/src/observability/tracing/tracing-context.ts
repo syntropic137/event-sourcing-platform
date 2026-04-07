@@ -390,7 +390,7 @@ class TracingContextStorage {
     // Try to use AsyncLocalStorage if available
     try {
       // Dynamic import to avoid issues in environments without it
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
       const asyncHooks = require('async_hooks');
       if (asyncHooks && asyncHooks.AsyncLocalStorage) {
         this.storage = new asyncHooks.AsyncLocalStorage();
