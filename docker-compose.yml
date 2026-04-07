@@ -23,7 +23,7 @@ services:
 
   # Optional PostgreSQL - only runs with --profile local
   postgres:
-    image: postgres:16-alpine
+    image: timescale/timescaledb:latest-pg16
     container_name: eventstore-postgres
     profiles: ["local"]
     environment:

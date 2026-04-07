@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-from event_sourcing.core.errors import ConcurrencyConflictError, EventStoreError
+from event_sourcing.core.errors import (
+    ConcurrencyConflictError,
+    EventStoreError,
+    StreamAlreadyExistsError,
+)
 from event_sourcing.core.event import DomainEvent, EventEnvelope
 
 logger = logging.getLogger(__name__)
@@ -129,6 +133,11 @@ class MemoryEventStoreClient:
         # Check expected version if provided
         if expected_version is not None:
             if current_version != expected_version:
+                if expected_version == 0 and current_version > 0:
+                    raise StreamAlreadyExistsError(
+                        stream_name=stream_name,
+                        actual_version=current_version,
+                    )
                 raise ConcurrencyConflictError(
                     expected_version=expected_version,
                     actual_version=current_version,
