@@ -9,7 +9,7 @@ Start here to install the TypeScript SDK, choose a client, and run the examples.
 ## Install
 
 ```bash
-pnpm install @event-sourcing-platform/typescript
+pnpm install @syntropic137/event-sourcing-typescript
 ```
 
 ## Run the examples

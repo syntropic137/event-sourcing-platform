@@ -102,7 +102,7 @@ root: src/contexts
 framework:
   name: event-sourcing-platform
   aggregate_class: AggregateRoot
-  aggregate_import: "@event-sourcing-platform/typescript"
+  aggregate_import: "@syntropic137/event-sourcing-typescript"
 
 # Bounded contexts
 bounded_contexts:
@@ -152,7 +152,7 @@ Now create the aggregate with `@CommandHandler` and `@EventSourcingHandler`:
 
 ```typescript
 // place-order/OrderAggregate.ts
-import { AggregateRoot, Aggregate, CommandHandler, EventSourcingHandler } from '@event-sourcing-platform/typescript';
+import { AggregateRoot, Aggregate, CommandHandler, EventSourcingHandler } from '@syntropic137/event-sourcing-typescript';
 import { PlaceOrderCommand } from './PlaceOrderCommand';
 import { OrderPlacedEvent } from './OrderPlacedEvent';
 

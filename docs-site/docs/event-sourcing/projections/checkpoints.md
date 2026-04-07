@@ -19,7 +19,7 @@ With checkpoints:
 ### In-Memory (Testing)
 
 ```typescript
-import { MemoryCheckpointStore } from '@event-sourcing-platform/typescript/projections';
+import { MemoryCheckpointStore } from '@syntropic137/event-sourcing-typescript/projections';
 
 const checkpointStore = new MemoryCheckpointStore();
 ```
@@ -35,7 +35,7 @@ Good for:
 
 ```typescript
 import { Pool } from 'pg';
-import { PostgresCheckpointStore } from '@event-sourcing-platform/typescript/projections';
+import { PostgresCheckpointStore } from '@syntropic137/event-sourcing-typescript/projections';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 

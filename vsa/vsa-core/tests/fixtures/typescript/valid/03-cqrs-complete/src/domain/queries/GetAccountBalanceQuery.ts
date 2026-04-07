@@ -1,4 +1,4 @@
-import { Query } from '@event-sourcing-platform/core';
+import { Query } from '@syntropic137/core';
 
 @Query('GetAccountBalance', 'Get current account balance')
 export class GetAccountBalanceQuery {

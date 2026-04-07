@@ -1,4 +1,4 @@
-import { Event } from '@event-sourcing-platform/core';
+import { Event } from '@syntropic137/core';
 
 export interface ProductCreatedEventData {
   productId: string;

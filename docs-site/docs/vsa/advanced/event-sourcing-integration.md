@@ -41,7 +41,7 @@ root: src/contexts
 framework:
   name: event-sourcing-platform
   aggregate_class: AggregateRoot
-  aggregate_import: "@event-sourcing-platform/typescript"
+  aggregate_import: "@syntropic137/event-sourcing-typescript"
 
 bounded_contexts:
   - name: orders
@@ -54,7 +54,7 @@ bounded_contexts:
 
 ```typescript
 // src/infrastructure/EventStoreAdapter.ts
-import { EventStoreClient } from '@event-sourcing-platform/sdk-ts';
+import { EventStoreClient } from '@syntropic137/sdk-ts';
 
 export class EventStoreAdapter {
   private client: EventStoreClient;
@@ -96,7 +96,7 @@ import {
   CommandHandler, 
   EventSourcingHandler,
   BaseDomainEvent 
-} from '@event-sourcing-platform/typescript';
+} from '@syntropic137/event-sourcing-typescript';
 
 class OrderPlacedEvent extends BaseDomainEvent {
   readonly eventType = 'OrderPlaced' as const;
@@ -153,7 +153,7 @@ export class OrderAggregate extends AggregateRoot<OrderPlacedEvent> {
 
 ```typescript
 // src/infrastructure/CommandBus.ts
-import { RepositoryFactory, EventStoreClient } from '@event-sourcing-platform/typescript';
+import { RepositoryFactory, EventStoreClient } from '@syntropic137/event-sourcing-typescript';
 import { OrderAggregate } from '../contexts/orders/place-order/OrderAggregate';
 import { PlaceOrderCommand } from '../contexts/orders/place-order/PlaceOrderCommand';
 
@@ -230,7 +230,7 @@ describe('PlaceOrder', () => {
 Test the full flow with real event store:
 
 ```typescript
-import { MemoryEventStoreClient, RepositoryFactory } from '@event-sourcing-platform/typescript';
+import { MemoryEventStoreClient, RepositoryFactory } from '@syntropic137/event-sourcing-typescript';
 import { OrderAggregate } from './OrderAggregate';
 import { PlaceOrderCommand } from './PlaceOrderCommand';
 

@@ -18,7 +18,7 @@ import {
   // Logging
   StructuredLogger,
   info,
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 ```
 
 ## Core Concepts
@@ -57,7 +57,7 @@ The observability module provides utilities to:
 ### 1. Extract Context from Requests
 
 ```typescript
-import { TracingContext, runWithContext } from '@event-sourcing-platform/typescript/observability';
+import { TracingContext, runWithContext } from '@syntropic137/event-sourcing-typescript/observability';
 
 // In your HTTP middleware
 app.use((req, res, next) => {
@@ -72,7 +72,7 @@ app.use((req, res, next) => {
 ### 2. Instrument Key Operations
 
 ```typescript
-import { Traced, esInstrumentation } from '@event-sourcing-platform/typescript/observability';
+import { Traced, esInstrumentation } from '@syntropic137/event-sourcing-typescript/observability';
 
 class OrderService {
   @Traced('OrderService.placeOrder')
@@ -94,7 +94,7 @@ class OrderService {
 ### 3. Use Structured Logging
 
 ```typescript
-import { info, error, forComponent } from '@event-sourcing-platform/typescript/observability';
+import { info, error, forComponent } from '@syntropic137/event-sourcing-typescript/observability';
 
 const logger = forComponent('OrderService');
 
@@ -105,7 +105,7 @@ logger.info('Order placed', { orderId: '123', total: 150.00 });
 ### 4. Expose Metrics Endpoint
 
 ```typescript
-import { getMetrics } from '@event-sourcing-platform/typescript/observability';
+import { getMetrics } from '@syntropic137/event-sourcing-typescript/observability';
 
 app.get('/metrics', async (req, res) => {
   const metrics = await getMetrics();
@@ -122,7 +122,7 @@ import { trace } from '@opentelemetry/api';
 import { 
   createOTelTracer, 
   setGlobalTracer 
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 
 // At application startup
 const otelTracer = trace.getTracer('my-service', '1.0.0');

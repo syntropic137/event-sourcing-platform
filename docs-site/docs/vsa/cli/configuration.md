@@ -37,7 +37,7 @@ root: src/contexts
 framework:
   name: event-sourcing-platform
   aggregate_class: AggregateRoot
-  aggregate_import: "@event-sourcing-platform/typescript"
+  aggregate_import: "@syntropic137/event-sourcing-typescript"
 
 bounded_contexts:
   - name: orders
@@ -129,7 +129,7 @@ Enables integration with event sourcing frameworks.
 framework:
   name: event-sourcing-platform
   aggregate_class: AggregateRoot
-  aggregate_import: "@event-sourcing-platform/typescript"
+  aggregate_import: "@syntropic137/event-sourcing-typescript"
 ```
 
 #### Fields

@@ -123,7 +123,7 @@ contexts/cart/
 **Example:**
 ```typescript
 // domain/CartAggregate.ts
-import { Aggregate, AggregateRoot, CommandHandler, EventSourcingHandler } from '@event-sourcing-platform/typescript';
+import { Aggregate, AggregateRoot, CommandHandler, EventSourcingHandler } from '@syntropic137/event-sourcing-typescript';
 import { AddItemCommand } from './commands/AddItemCommand';
 import { ItemAddedEvent } from './events/ItemAddedEvent';
 
@@ -277,7 +277,7 @@ export class ListCartsQuery {
 **Example:**
 ```typescript
 // domain/events/ItemAddedEvent.ts
-import { DomainEvent, Event } from '@event-sourcing-platform/typescript';
+import { DomainEvent, Event } from '@syntropic137/event-sourcing-typescript';
 
 @Event('ItemAdded', 'v2')
 export class ItemAddedEvent extends DomainEvent {

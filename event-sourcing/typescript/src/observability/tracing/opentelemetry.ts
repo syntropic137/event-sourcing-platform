@@ -258,7 +258,7 @@ class OTelTracerAdapter implements Tracer {
  * @example
  * ```typescript
  * import { trace } from '@opentelemetry/api';
- * import { createOTelTracer, setGlobalTracer } from '@event-sourcing-platform/typescript/observability';
+ * import { createOTelTracer, setGlobalTracer } from '@syntropic137/event-sourcing-typescript/observability';
  *
  * const otelTracer = trace.getTracer('my-service', '1.0.0');
  * const tracer = createOTelTracer({
@@ -279,7 +279,7 @@ export function createOTelTracer(config: OTelTracerConfig): Tracer {
  * @example
  * ```typescript
  * import { trace } from '@opentelemetry/api';
- * import { fromOTelTracer } from '@event-sourcing-platform/typescript/observability';
+ * import { fromOTelTracer } from '@syntropic137/event-sourcing-typescript/observability';
  *
  * const tracer = fromOTelTracer(trace.getTracer('my-service'));
  * ```

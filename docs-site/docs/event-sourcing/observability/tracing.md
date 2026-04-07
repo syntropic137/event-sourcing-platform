@@ -9,7 +9,7 @@ Distributed tracing enables end-to-end visibility into request flows through you
 `TracingContext` carries correlation and causation IDs through the system:
 
 ```typescript
-import { TracingContext } from '@event-sourcing-platform/typescript/observability';
+import { TracingContext } from '@syntropic137/event-sourcing-typescript/observability';
 
 // Create from HTTP request
 const ctx = TracingContext.fromRequest(req);
@@ -35,7 +35,7 @@ import {
   TracingContext, 
   runWithContext, 
   getCurrentContext 
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 
 app.use(async (req, res, next) => {
   const ctx = TracingContext.fromRequest(req);
@@ -55,7 +55,7 @@ app.use(async (req, res, next) => {
 Automatically create spans around methods:
 
 ```typescript
-import { Traced } from '@event-sourcing-platform/typescript/observability';
+import { Traced } from '@syntropic137/event-sourcing-typescript/observability';
 
 class OrderService {
   @Traced('OrderService.placeOrder')
@@ -94,7 +94,7 @@ import {
   startSpan, 
   withSpan, 
   withSpanAsync 
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 
 // Manual span management
 const span = startSpan('processOrder', {
@@ -130,7 +130,7 @@ import { NodeSDK } from '@opentelemetry/sdk-node';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { trace } from '@opentelemetry/api';
-import { createOTelTracer, setGlobalTracer } from '@event-sourcing-platform/typescript/observability';
+import { createOTelTracer, setGlobalTracer } from '@syntropic137/event-sourcing-typescript/observability';
 
 // Initialize OpenTelemetry
 const sdk = new NodeSDK({
@@ -234,7 +234,7 @@ For interoperability with other systems:
 import { 
   parseTraceparent, 
   generateTraceparent 
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 
 // Parse incoming header
 const parsed = parseTraceparent('00-abc123...-def456...-01');
@@ -253,7 +253,7 @@ Use no-op implementations in tests:
 import { 
   resetGlobalTracer, 
   NoOpTracer 
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 
 beforeEach(() => {
   resetGlobalTracer(); // Uses NoOpTracer
@@ -263,7 +263,7 @@ beforeEach(() => {
 Or capture spans for assertions:
 
 ```typescript
-import { setGlobalTracer, Span } from '@event-sourcing-platform/typescript/observability';
+import { setGlobalTracer, Span } from '@syntropic137/event-sourcing-typescript/observability';
 
 const capturedSpans: Span[] = [];
 

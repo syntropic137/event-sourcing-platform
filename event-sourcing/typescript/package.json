@@ -1,5 +1,5 @@
 {
-    "name": "@neuralempowerment/event-sourcing-typescript",
+    "name": "@syntropic137/event-sourcing-typescript",
     "version": "0.11.1",
     "description": "TypeScript SDK for Event Sourcing patterns and abstractions",
     "main": "dist/index.js",

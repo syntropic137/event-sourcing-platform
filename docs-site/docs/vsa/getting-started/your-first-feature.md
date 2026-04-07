@@ -29,7 +29,7 @@ cd product-catalog
 vsa init --language typescript
 
 # Install event store SDK
-npm install @event-sourcing-platform/sdk-ts
+npm install @syntropic137/sdk-ts
 npm install --save-dev jest @types/jest ts-jest
 ```
 
@@ -43,7 +43,7 @@ root: src/contexts
 framework:
   name: event-sourcing-platform
   aggregate_class: AggregateRoot
-  aggregate_import: "@event-sourcing-platform/typescript"
+  aggregate_import: "@syntropic137/event-sourcing-typescript"
 
 bounded_contexts:
   - name: catalog
@@ -418,7 +418,7 @@ npm test -- --watch
 Test with a real event store:
 
 ```typescript title="src/contexts/catalog/add-product/AddProduct.integration.test.ts"
-import { EventStoreClient } from '@event-sourcing-platform/sdk-ts';
+import { EventStoreClient } from '@syntropic137/sdk-ts';
 import { AddProductHandler } from './AddProductHandler';
 
 describe('AddProduct Integration', () => {

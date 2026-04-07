@@ -1,4 +1,4 @@
-import { Command } from '@event-sourcing-platform/core';
+import { Command } from '@syntropic137/core';
 
 @Command('CreateProduct', 'Create a new product')
 export class CreateProductCommand {

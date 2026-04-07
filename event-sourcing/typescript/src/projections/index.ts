@@ -17,7 +17,7 @@
  *   MemoryFailedEventStore,
  *   RetryPolicy,
  *   ProjectionHealthChecker,
- * } from '@event-sourcing-platform/typescript/projections';
+ * } from '@syntropic137/event-sourcing-typescript/projections';
  *
  * // Create a projection
  * class OrderSummaryProjection extends CheckpointedProjection {

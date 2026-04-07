@@ -85,7 +85,7 @@ let globalTracer: Tracer = new NoOpTracer();
  * @example
  * ```typescript
  * import { trace } from '@opentelemetry/api';
- * import { setGlobalTracer, createOTelTracer } from '@event-sourcing-platform/typescript/observability';
+ * import { setGlobalTracer, createOTelTracer } from '@syntropic137/event-sourcing-typescript/observability';
  *
  * const tracer = createOTelTracer(trace.getTracer('my-service'));
  * setGlobalTracer(tracer);

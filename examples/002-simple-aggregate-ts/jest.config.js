@@ -9,7 +9,7 @@ module.exports = {
   coverageDirectory: 'coverage',
   verbose: true,
   moduleNameMapper: {
-    '^@neuralempowerment/event-sourcing-typescript/testing$': '<rootDir>/../../event-sourcing/typescript/dist/testing/index.js',
-    '^@neuralempowerment/event-sourcing-typescript$': '<rootDir>/../../event-sourcing/typescript/dist/index.js',
+    '^@syntropic137/event-sourcing-typescript/testing$': '<rootDir>/../../event-sourcing/typescript/dist/testing/index.js',
+    '^@syntropic137/event-sourcing-typescript$': '<rootDir>/../../event-sourcing/typescript/dist/index.js',
   },
 };

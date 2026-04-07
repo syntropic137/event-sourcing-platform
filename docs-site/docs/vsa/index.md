@@ -121,7 +121,7 @@ export class PlaceOrderCommand {
 }
 
 // OrderAggregate.ts
-import { Aggregate, AggregateRoot, CommandHandler, EventSourcingHandler } from '@event-sourcing-platform/typescript';
+import { Aggregate, AggregateRoot, CommandHandler, EventSourcingHandler } from '@syntropic137/event-sourcing-typescript';
 
 @Aggregate('Order')
 export class OrderAggregate extends AggregateRoot {

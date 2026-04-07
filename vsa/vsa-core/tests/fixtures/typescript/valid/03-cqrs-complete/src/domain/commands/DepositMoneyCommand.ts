@@ -1,4 +1,4 @@
-import { Command } from '@event-sourcing-platform/core';
+import { Command } from '@syntropic137/core';
 
 @Command('DepositMoney', 'Deposit money into an account')
 export class DepositMoneyCommand {

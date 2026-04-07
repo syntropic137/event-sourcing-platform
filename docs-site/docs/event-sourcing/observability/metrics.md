@@ -11,7 +11,7 @@ import {
   histogram,
   getMetrics,
   esInstrumentation,
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 
 // Create custom metrics
 const ordersCreated = counter(
@@ -93,7 +93,7 @@ import {
   startAppendTimer,
   startAggregateLoadTimer,
   startCommandTimer,
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 
 // Record events appended
 recordEventsAppended('Order', ['OrderPlaced', 'OrderItemAdded'], 'tenant-123');
@@ -123,7 +123,7 @@ import {
   recordProjectionError,
   startProjectionProcessTimer,
   setDlqSize,
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 
 // Record event processed
 recordProjectionEventProcessed('OrderSummary', 'OrderPlaced');
@@ -148,7 +148,7 @@ setDlqSize('OrderSummary', failedEvents.length);
 Convenience class for common patterns:
 
 ```typescript
-import { esInstrumentation } from '@event-sourcing-platform/typescript/observability';
+import { esInstrumentation } from '@syntropic137/event-sourcing-typescript/observability';
 
 // Instrument save operation
 await esInstrumentation.instrumentSave(
@@ -202,7 +202,7 @@ await esInstrumentation.instrumentProjection(
 
 ```typescript
 import express from 'express';
-import { getMetrics } from '@event-sourcing-platform/typescript/observability';
+import { getMetrics } from '@syntropic137/event-sourcing-typescript/observability';
 
 const app = express();
 
@@ -247,7 +247,7 @@ For advanced use cases (e.g., external metrics library):
 import { 
   MetricsRegistry, 
   setGlobalRegistry 
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 
 class PrometheusClientRegistry implements MetricsRegistry {
   // Wrap prom-client or similar
@@ -295,7 +295,7 @@ es_dlq_size > 0
 Reset metrics between tests:
 
 ```typescript
-import { resetMetrics, resetGlobalRegistry } from '@event-sourcing-platform/typescript/observability';
+import { resetMetrics, resetGlobalRegistry } from '@syntropic137/event-sourcing-typescript/observability';
 
 beforeEach(() => {
   resetMetrics(); // Reset values, keep definitions

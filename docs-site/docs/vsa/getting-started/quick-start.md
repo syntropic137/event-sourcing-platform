@@ -126,7 +126,7 @@ export interface OrderPlacedEvent {
 First, install the event-sourcing platform SDK:
 
 ```bash
-npm install @event-sourcing-platform/typescript
+npm install @syntropic137/event-sourcing-typescript
 ```
 
 Create the aggregate `src/contexts/orders/place-order/OrderAggregate.ts`:
@@ -138,7 +138,7 @@ import {
   CommandHandler,
   EventSourcingHandler,
   BaseDomainEvent 
-} from '@event-sourcing-platform/typescript';
+} from '@syntropic137/event-sourcing-typescript';
 import { PlaceOrderCommand } from './PlaceOrderCommand';
 import { OrderPlacedEvent } from './OrderPlacedEvent';
 
@@ -454,7 +454,7 @@ vsa validate
 Integrate with the event store:
 
 ```bash
-npm install @event-sourcing-platform/sdk-ts
+npm install @syntropic137/sdk-ts
 ```
 
 See [Event Sourcing Integration](../advanced/event-sourcing-integration) for details.
