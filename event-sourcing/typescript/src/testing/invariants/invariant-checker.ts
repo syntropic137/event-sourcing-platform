@@ -268,7 +268,7 @@ export class InvariantChecker<TAggregate extends AggregateRoot<DomainEvent>> {
    */
   async verifyAfterEachEvent(
     events: FixtureEvent[],
-    aggregateId?: string
+    _aggregateId?: string
   ): Promise<InvariantVerificationResult> {
     const violations: InvariantViolation[] = [];
     const snapshots: InvariantSnapshot[] = [];

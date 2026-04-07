@@ -186,7 +186,7 @@ export function setDlqSize(projectionName: string, size: number): void {
 /**
  * Record a retry attempt.
  */
-export function recordRetry(projectionName: string, attempt: number): void {
+export function recordRetry(projectionName: string, _attempt: number): void {
   const retries = counter(
     ES_METRICS.RETRIES_TOTAL,
     'Total retry attempts',
