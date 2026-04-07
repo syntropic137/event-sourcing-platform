@@ -16,9 +16,9 @@ help:
 	@echo "  qa            - Run full QA (lint, type-check, test)"
 	@echo "  qa-fast       - Quick QA (lint, type-check, unit tests)"
 	@echo "  lint          - Run ruff linter"
-	@echo "  format        - Format code with black"
+	@echo "  format        - Format code with ruff format"
 	@echo "  type-check    - Run pyright type checker (strict mode)"
-	@echo "  type-ratchet  - Enforce object-type ratchet (see ADR-021)"
+	@echo "  type-ratchet  - Enforce object-type ratchet (see ADR-022)"
 	@echo ""
 	@echo "Build:"
 	@echo "  build         - Build distribution package"
@@ -54,10 +54,10 @@ type-check:
 
 # Object-type ratchet: every `object` type annotation must have a OBJRATCHET justification comment.
 # New `object` usages without justification will fail CI. To reduce the count, remove the comment
-# when you replace `object` with a concrete type. See ADR-021 for rationale.
+# when you replace `object` with a concrete type. See ADR-022 for rationale.
 OBJECT_RATCHET_MAX := 15
 type-ratchet:
-	@unjustified=$$(grep -rn --include='*.py' -E ':\s*object\b|-> object\b|\[object\]' src/ \
+	@unjustified=$$(grep -rn --include='*.py' -E ':\s*object\b|-> object\b|\bobject\]|\bobject\)|\bobject,|,\s*object\b' src/ \
 		| grep -v '/proto/' \
 		| grep -v '# OBJRATCHET:' \
 		| grep -v '# the event object' \
@@ -67,7 +67,7 @@ type-ratchet:
 		echo "$$unjustified"; \
 		echo ""; \
 		echo "Add '# OBJRATCHET: <reason>' to justify, or replace with a concrete type."; \
-		echo "See ADR-021: docs/adrs/ADR-022-strict-python-typing.md"; \
+		echo "See ADR-022: docs/adrs/ADR-022-strict-python-typing.md"; \
 		exit 1; \
 	fi; \
 	count=$$(grep -rn --include='*.py' '# OBJRATCHET:' src/ | grep -v '__pycache__' | wc -l | tr -d ' '); \

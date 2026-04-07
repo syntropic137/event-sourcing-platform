@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import ClassVar, Generic, TypeVar
+from typing import ClassVar, Generic, Literal, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -36,16 +36,28 @@ class DomainEvent(BaseModel):
         indent: int | None = None,
         include: set[str] | None = None,
         exclude: set[str] | None = None,
+        by_alias: bool | None = None,
+        exclude_unset: bool = False,
+        exclude_defaults: bool = False,
         exclude_none: bool = True,
+        exclude_computed_fields: bool = False,
         round_trip: bool = False,
+        warnings: bool | Literal["none", "warn", "error"] = True,
+        serialize_as_any: bool = False,
     ) -> str:
         """Serialize event to JSON, excluding None fields by default."""
         return super().model_dump_json(
             indent=indent,
             include=include,
             exclude=exclude,
+            by_alias=by_alias,
+            exclude_unset=exclude_unset,
+            exclude_defaults=exclude_defaults,
             exclude_none=exclude_none,
+            exclude_computed_fields=exclude_computed_fields,
             round_trip=round_trip,
+            warnings=warnings,
+            serialize_as_any=serialize_as_any,
         )
 
 
