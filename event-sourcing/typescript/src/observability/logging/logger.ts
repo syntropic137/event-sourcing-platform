@@ -74,13 +74,19 @@ export class ConsolePrettyOutput implements LogOutput {
     // Build context string
     const contextKeys = Object.keys(entry).filter(
       (k) =>
-        !['timestamp', 'level', 'message', 'component', 'correlationId', 'causationId', 'actorId'].includes(k)
+        ![
+          'timestamp',
+          'level',
+          'message',
+          'component',
+          'correlationId',
+          'causationId',
+          'actorId',
+        ].includes(k)
     );
     const contextStr =
       contextKeys.length > 0
-        ? ` ${JSON.stringify(
-          Object.fromEntries(contextKeys.map((k) => [k, entry[k]]))
-        )}`
+        ? ` ${JSON.stringify(Object.fromEntries(contextKeys.map((k) => [k, entry[k]])))}`
         : '';
 
     const output = `${color}${time} ${level}${this.reset} ${component}${entry.message}${correlation}${contextStr}`;
@@ -428,21 +434,13 @@ export const ESLogMessages = {
     level: 'debug' as LogLevel,
   }),
 
-  projectionEventRetrying: (
-    projectionName: string,
-    eventType: string,
-    attempt: number
-  ) => ({
+  projectionEventRetrying: (projectionName: string, eventType: string, attempt: number) => ({
     message: `Projection retrying: ${projectionName}`,
     context: { projectionName, eventType, attempt },
     level: 'warn' as LogLevel,
   }),
 
-  projectionEventFailed: (
-    projectionName: string,
-    eventType: string,
-    error: Error
-  ) => ({
+  projectionEventFailed: (projectionName: string, eventType: string, error: Error) => ({
     message: `Projection failed (sent to DLQ): ${projectionName}`,
     context: {
       projectionName,

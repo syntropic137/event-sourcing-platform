@@ -63,10 +63,7 @@ export type {
 // CHECKPOINTED PROJECTION
 // ============================================================================
 
-export {
-  CheckpointedProjection,
-  InMemoryProjection,
-} from './checkpointed-projection';
+export { CheckpointedProjection, InMemoryProjection } from './checkpointed-projection';
 
 // ============================================================================
 // CHECKPOINT STORES

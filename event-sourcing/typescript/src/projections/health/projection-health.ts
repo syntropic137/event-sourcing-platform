@@ -120,9 +120,10 @@ export class ProjectionHealthChecker {
   /**
    * Determine overall status from counts.
    */
-  private static determineOverallStatus(
-    counts: { unhealthy: number; degraded: number }
-  ): 'healthy' | 'degraded' | 'unhealthy' {
+  private static determineOverallStatus(counts: {
+    unhealthy: number;
+    degraded: number;
+  }): 'healthy' | 'degraded' | 'unhealthy' {
     if (counts.unhealthy > 0) return 'unhealthy';
     if (counts.degraded > 0) return 'degraded';
     return 'healthy';
@@ -189,15 +190,14 @@ export class ProjectionHealthChecker {
 /**
  * Create a simple health check endpoint response
  */
-export async function createHealthCheckResponse(
-  checker: ProjectionHealthChecker
-): Promise<{
+export async function createHealthCheckResponse(checker: ProjectionHealthChecker): Promise<{
   status: 'pass' | 'warn' | 'fail';
   checks: Record<string, { status: string; observedValue: number; observedUnit: string }>;
 }> {
   const summary = await checker.getHealthSummary();
 
-  const status = summary.overall === 'healthy' ? 'pass' : summary.overall === 'degraded' ? 'warn' : 'fail';
+  const status =
+    summary.overall === 'healthy' ? 'pass' : summary.overall === 'degraded' ? 'warn' : 'fail';
 
   return {
     status,

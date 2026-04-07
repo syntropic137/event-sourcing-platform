@@ -73,11 +73,7 @@ export class MemoryEventStoreClient implements EventStoreClient {
     return !!arr && arr.length > 0;
   }
 
-  async readAll(
-    fromGlobalNonce = 0,
-    maxCount = 100,
-    forward = true
-  ): Promise<ReadAllResult> {
+  async readAll(fromGlobalNonce = 0, maxCount = 100, forward = true): Promise<ReadAllResult> {
     // Collect all events from all streams
     const allEvents: EventEnvelope[] = [];
     for (const streamEvents of this.streams.values()) {

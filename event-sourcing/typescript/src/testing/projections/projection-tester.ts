@@ -120,10 +120,7 @@ export class ProjectionTester<TState = unknown> {
   private readonly projection: TestableProjection<TState>;
   private readonly options: Required<ProjectionTesterOptions>;
 
-  constructor(
-    projection: TestableProjection<TState>,
-    options: ProjectionTesterOptions = {}
-  ) {
+  constructor(projection: TestableProjection<TState>, options: ProjectionTesterOptions = {}) {
     this.projection = projection;
     this.options = {
       eventFactory: options.eventFactory ?? defaultEventFactory,
@@ -133,10 +130,7 @@ export class ProjectionTester<TState = unknown> {
   /**
    * Process events through the projection
    */
-  async processEvents(
-    events: FixtureEvent[],
-    aggregateId?: string
-  ): Promise<ProjectionTestResult> {
+  async processEvents(events: FixtureEvent[], aggregateId?: string): Promise<ProjectionTestResult> {
     const errors: ProjectionTestError[] = [];
     let eventsProcessed = 0;
 

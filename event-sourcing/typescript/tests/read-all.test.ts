@@ -119,7 +119,9 @@ describe('MemoryEventStoreClient environment guard', () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const mod = require('../src/client/event-store-memory');
 
-      expect(() => new mod.MemoryEventStoreClient()).toThrow(/can only be used in test environment/);
+      expect(() => new mod.MemoryEventStoreClient()).toThrow(
+        /can only be used in test environment/
+      );
     } finally {
       process.env.NODE_ENV = originalEnv;
       jest.resetModules();

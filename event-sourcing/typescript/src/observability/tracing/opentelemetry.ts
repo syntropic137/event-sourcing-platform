@@ -4,14 +4,7 @@
  * Adapter for using OpenTelemetry as the tracing backend.
  */
 
-import {
-  Span,
-  Tracer,
-  SpanAttributes,
-  SpanKind,
-  SpanStatus,
-  StartSpanOptions,
-} from '../types';
+import { Span, Tracer, SpanAttributes, SpanKind, SpanStatus, StartSpanOptions } from '../types';
 
 // ============================================================================
 // TYPE DEFINITIONS FOR OTEL API
@@ -106,10 +99,7 @@ class OTelSpanAdapter implements Span {
   }
 
   addEvent(name: string, attributes?: SpanAttributes): void {
-    this.otelSpan.addEvent(
-      name,
-      attributes as Record<string, unknown> | undefined
-    );
+    this.otelSpan.addEvent(name, attributes as Record<string, unknown> | undefined);
   }
 
   end(): void {

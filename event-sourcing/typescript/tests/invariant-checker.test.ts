@@ -93,11 +93,7 @@ describe('InvariantChecker', () => {
       includeSnapshots: true,
     });
 
-    const events: FixtureEvent[] = [
-      balanceEvent(100),
-      balanceEvent(-30),
-      balanceEvent(50),
-    ];
+    const events: FixtureEvent[] = [balanceEvent(100), balanceEvent(-30), balanceEvent(50)];
 
     const result = await checker.verifyAfterEachEvent(events);
 
@@ -134,8 +130,8 @@ describe('InvariantChecker', () => {
     });
 
     const events: FixtureEvent[] = [
-      balanceEvent(-10),  // violation
-      balanceEvent(-20),  // would also violate, but should not be checked
+      balanceEvent(-10), // violation
+      balanceEvent(-20), // would also violate, but should not be checked
     ];
 
     const result = await checker.verifyAfterEachEvent(events);
@@ -195,7 +191,7 @@ describe('InvariantChecker', () => {
     expect(result.passed).toBe(false);
     expect(result.invariantCount).toBe(2); // 1 decorated + 1 additional
     const violation = result.violations.find(
-      (v) => v.invariantDescription === 'Balance must be under 1000',
+      (v) => v.invariantDescription === 'Balance must be under 1000'
     );
     expect(violation).toBeDefined();
     expect(violation!.eventIndex).toBe(1);
@@ -209,7 +205,7 @@ describe('InvariantChecker', () => {
     checker.addInvariant(
       'Balance must be even',
       (agg) => (agg as TestAccountAggregate).balance % 2 === 0,
-      'warning',
+      'warning'
     );
 
     const events: FixtureEvent[] = [balanceEvent(3)]; // balance = 3 (odd) → warning

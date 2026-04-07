@@ -51,11 +51,7 @@ export interface EventStoreClient {
    * @param forward - Direction (true = ascending order)
    * @returns Events, isEnd flag, and next position
    */
-  readAll(
-    fromGlobalNonce?: number,
-    maxCount?: number,
-    forward?: boolean
-  ): Promise<ReadAllResult>;
+  readAll(fromGlobalNonce?: number, maxCount?: number, forward?: boolean): Promise<ReadAllResult>;
 
   /** Connect to the event store */
   connect(): Promise<void>;
@@ -92,11 +88,7 @@ export class EventStoreClientFactory {
       async streamExists(streamName: string) {
         return adapter.streamExists(streamName);
       },
-      async readAll(
-        fromGlobalNonce?: number,
-        maxCount?: number,
-        forward?: boolean
-      ) {
+      async readAll(fromGlobalNonce?: number, maxCount?: number, forward?: boolean) {
         return adapter.readAll(fromGlobalNonce, maxCount, forward);
       },
       async connect() {

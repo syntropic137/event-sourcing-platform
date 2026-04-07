@@ -3,17 +3,12 @@
  * Verifies validateFixture and FixtureValidationError
  */
 
-import {
-  validateFixture,
-  FixtureValidationError,
-} from '../src/testing/fixtures/fixture-types';
+import { validateFixture, FixtureValidationError } from '../src/testing/fixtures/fixture-types';
 
 const validFixture = {
   description: 'Test order placement',
   aggregateType: 'Order',
-  events: [
-    { type: 'OrderPlaced', version: 'v1', data: { orderId: '123' } },
-  ],
+  events: [{ type: 'OrderPlaced', version: 'v1', data: { orderId: '123' } }],
 };
 
 describe('validateFixture', () => {

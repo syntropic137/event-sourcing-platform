@@ -160,44 +160,34 @@ describe('Scenario Testing (Given-When-Then)', () => {
   describe('Happy Path - Events Emitted', () => {
     it('should verify command produces expected events', () => {
       scenario(CartAggregate)
-        .given([
-          new CartCreatedEvent('cart-1'),
-        ])
+        .given([new CartCreatedEvent('cart-1')])
         .when(new AddItemCommand('cart-1', 'item-1', 29.99))
-        .expectEvents([
-          new ItemAddedEvent('cart-1', 'item-1', 29.99),
-        ]);
+        .expectEvents([new ItemAddedEvent('cart-1', 'item-1', 29.99)]);
     });
 
     it('should verify multiple events in sequence', () => {
       scenario(CartAggregate)
         .given([
           new CartCreatedEvent('cart-1'),
-          new ItemAddedEvent('cart-1', 'item-1', 10.00),
-          new ItemAddedEvent('cart-1', 'item-2', 20.00),
+          new ItemAddedEvent('cart-1', 'item-1', 10.0),
+          new ItemAddedEvent('cart-1', 'item-2', 20.0),
         ])
         .when(new SubmitCartCommand('cart-1'))
-        .expectEvents([
-          new CartSubmittedEvent('cart-1', 30.00),
-        ]);
+        .expectEvents([new CartSubmittedEvent('cart-1', 30.0)]);
     });
 
     it('should verify command with givenNoPriorActivity()', () => {
       scenario(CartAggregate)
         .givenNoPriorActivity()
         .when(new CreateCartCommand('cart-new'))
-        .expectEvents([
-          new CartCreatedEvent('cart-new'),
-        ]);
+        .expectEvents([new CartCreatedEvent('cart-new')]);
     });
   });
 
   describe('Error Path - Exceptions', () => {
     it('should verify business rule violation exception', () => {
       scenario(CartAggregate)
-        .given([
-          new CartCreatedEvent('cart-1'),
-        ])
+        .given([new CartCreatedEvent('cart-1')])
         .when(new SubmitCartCommand('cart-1'))
         .expectException(BusinessRuleViolationError)
         .expectExceptionMessage('Cannot submit empty cart');
@@ -213,10 +203,7 @@ describe('Scenario Testing (Given-When-Then)', () => {
 
     it('should verify exception with regex pattern', () => {
       scenario(CartAggregate)
-        .given([
-          new CartCreatedEvent('cart-1'),
-          new CartSubmittedEvent('cart-1', 0),
-        ])
+        .given([new CartCreatedEvent('cart-1'), new CartSubmittedEvent('cart-1', 0)])
         .when(new SubmitCartCommand('cart-1'))
         .expectException(BusinessRuleViolationError)
         .expectExceptionMessage(/already submitted/i);
@@ -224,9 +211,7 @@ describe('Scenario Testing (Given-When-Then)', () => {
 
     it('should verify exception type only', () => {
       scenario(CartAggregate)
-        .given([
-          new CartCreatedEvent('cart-1'),
-        ])
+        .given([new CartCreatedEvent('cart-1')])
         .when(new AddItemCommand('cart-1', 'item-1', -10))
         .expectException(BusinessRuleViolationError);
     });
@@ -246,9 +231,7 @@ describe('Scenario Testing (Given-When-Then)', () => {
   describe('State Verification', () => {
     it('should verify aggregate state via callback', () => {
       scenario(CartAggregate)
-        .given([
-          new CartCreatedEvent('cart-1'),
-        ])
+        .given([new CartCreatedEvent('cart-1')])
         .when(new AddItemCommand('cart-1', 'item-1', 29.99))
         .expectState((aggregate) => {
           expect(aggregate.getItemCount()).toBe(1);
@@ -261,13 +244,13 @@ describe('Scenario Testing (Given-When-Then)', () => {
       scenario(CartAggregate)
         .given([
           new CartCreatedEvent('cart-1'),
-          new ItemAddedEvent('cart-1', 'item-1', 10.00),
-          new ItemAddedEvent('cart-1', 'item-2', 20.00),
+          new ItemAddedEvent('cart-1', 'item-1', 10.0),
+          new ItemAddedEvent('cart-1', 'item-2', 20.0),
         ])
         .when(new SubmitCartCommand('cart-1'))
         .expectState((aggregate) => {
           expect(aggregate.isSubmitted()).toBe(true);
-          expect(aggregate.getTotal()).toBe(30.00);
+          expect(aggregate.getTotal()).toBe(30.0);
         });
     });
   });
@@ -277,13 +260,11 @@ describe('Scenario Testing (Given-When-Then)', () => {
       scenario(CartAggregate)
         .givenCommands([
           new CreateCartCommand('cart-1'),
-          new AddItemCommand('cart-1', 'item-1', 15.00),
-          new AddItemCommand('cart-1', 'item-2', 25.00),
+          new AddItemCommand('cart-1', 'item-1', 15.0),
+          new AddItemCommand('cart-1', 'item-2', 25.0),
         ])
         .when(new SubmitCartCommand('cart-1'))
-        .expectEvents([
-          new CartSubmittedEvent('cart-1', 40.00),
-        ]);
+        .expectEvents([new CartSubmittedEvent('cart-1', 40.0)]);
     });
   });
 
@@ -291,9 +272,7 @@ describe('Scenario Testing (Given-When-Then)', () => {
     it('should fail when expected events do not match actual events', () => {
       expect(() => {
         scenario(CartAggregate)
-          .given([
-            new CartCreatedEvent('cart-1'),
-          ])
+          .given([new CartCreatedEvent('cart-1')])
           .when(new AddItemCommand('cart-1', 'item-1', 29.99))
           .expectEvents([
             new ItemAddedEvent('cart-1', 'item-1', 99.99), // Wrong price
@@ -308,7 +287,7 @@ describe('Scenario Testing (Given-When-Then)', () => {
           .when(new CreateCartCommand('cart-1'))
           .expectEvents([
             new CartCreatedEvent('cart-1'),
-            new ItemAddedEvent('cart-1', 'item-1', 10.00), // Extra event expected
+            new ItemAddedEvent('cart-1', 'item-1', 10.0), // Extra event expected
           ]);
       }).toThrow(ScenarioAssertionError);
     });
@@ -326,9 +305,7 @@ describe('Scenario Testing (Given-When-Then)', () => {
       // This passes because BusinessRuleViolationError is an instance of Error
       // No expect().toThrow() wrapper needed - the scenario itself validates
       scenario(CartAggregate)
-        .given([
-          new CartCreatedEvent('cart-1'),
-        ])
+        .given([new CartCreatedEvent('cart-1')])
         .when(new SubmitCartCommand('cart-1'))
         .expectException(Error); // Generic Error matches because BusinessRuleViolationError extends Error
     });
@@ -336,9 +313,7 @@ describe('Scenario Testing (Given-When-Then)', () => {
     it('should fail when exception message does not match', () => {
       expect(() => {
         scenario(CartAggregate)
-          .given([
-            new CartCreatedEvent('cart-1'),
-          ])
+          .given([new CartCreatedEvent('cart-1')])
           .when(new SubmitCartCommand('cart-1'))
           .expectException(BusinessRuleViolationError)
           .expectExceptionMessage('wrong message');
@@ -367,13 +342,9 @@ describe('Scenario Testing (Given-When-Then)', () => {
   describe('Chaining', () => {
     it('should allow chaining expectEvents and expectState', () => {
       scenario(CartAggregate)
-        .given([
-          new CartCreatedEvent('cart-1'),
-        ])
+        .given([new CartCreatedEvent('cart-1')])
         .when(new AddItemCommand('cart-1', 'item-1', 29.99))
-        .expectEvents([
-          new ItemAddedEvent('cart-1', 'item-1', 29.99),
-        ])
+        .expectEvents([new ItemAddedEvent('cart-1', 'item-1', 29.99)])
         .expectState((aggregate) => {
           expect(aggregate.getItemCount()).toBe(1);
         });
@@ -381,9 +352,7 @@ describe('Scenario Testing (Given-When-Then)', () => {
 
     it('should allow chaining expectException and expectExceptionMessage', () => {
       scenario(CartAggregate)
-        .given([
-          new CartCreatedEvent('cart-1'),
-        ])
+        .given([new CartCreatedEvent('cart-1')])
         .when(new SubmitCartCommand('cart-1'))
         .expectException(BusinessRuleViolationError)
         .expectExceptionMessage('Cannot submit empty cart');
@@ -395,18 +364,14 @@ describe('Scenario Testing (Given-When-Then)', () => {
       scenario(CartAggregate)
         .given([])
         .when(new CreateCartCommand('cart-1'))
-        .expectEvents([
-          new CartCreatedEvent('cart-1'),
-        ]);
+        .expectEvents([new CartCreatedEvent('cart-1')]);
     });
 
     it('should handle aggregate without prior state creating new aggregate', () => {
       scenario(CartAggregate)
         .givenNoPriorActivity()
         .when(new CreateCartCommand('brand-new-cart'))
-        .expectEvents([
-          new CartCreatedEvent('brand-new-cart'),
-        ])
+        .expectEvents([new CartCreatedEvent('brand-new-cart')])
         .expectState((aggregate) => {
           expect(aggregate.id).toBe('brand-new-cart');
         });
