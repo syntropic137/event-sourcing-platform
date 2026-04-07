@@ -8,9 +8,38 @@ use futures::stream;
 use prost::Message;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, types::Json, PgPool, Row};
+use tokio::sync::broadcast;
 use tokio::time::{interval, Duration, Interval};
 
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
+
+// --- LISTEN/NOTIFY constants ---
+const NOTIFY_CHANNEL: &str = "eventstore_events";
+const NOTIFY_BROADCAST_CAPACITY: usize = 256;
+const FALLBACK_POLL_SECS: u64 = 5;
+
+/// Payload sent via PostgreSQL NOTIFY and the in-process broadcast channel.
+/// Format: `"{tenant_id}:{last_global_nonce}"`.
+#[derive(Debug, Clone)]
+struct NotifyPayload {
+    tenant_id: String,
+    last_global_nonce: i64,
+}
+
+impl NotifyPayload {
+    fn encode(tenant_id: &str, last_global_nonce: i64) -> String {
+        format!("{tenant_id}:{last_global_nonce}")
+    }
+
+    fn parse(payload: &str) -> Option<Self> {
+        let (tenant, nonce_str) = payload.rsplit_once(':')?;
+        let last_global_nonce = nonce_str.parse::<i64>().ok()?;
+        Some(Self {
+            tenant_id: tenant.to_owned(),
+            last_global_nonce,
+        })
+    }
+}
 
 fn now_unix_ms() -> u64 {
     SystemTime::now()
@@ -95,14 +124,80 @@ fn normalize_event(
     Ok(event)
 }
 
-#[derive(Clone)]
+/// Spawns a background task that maintains a dedicated PostgreSQL connection
+/// for LISTEN/NOTIFY. Notifications are forwarded to the broadcast channel
+/// so that subscription streams wake immediately on new events.
+fn spawn_pg_listener(
+    database_url: String,
+    notify_tx: broadcast::Sender<NotifyPayload>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut backoff = Duration::from_secs(1);
+        let max_backoff = Duration::from_secs(30);
+
+        loop {
+            match sqlx::postgres::PgListener::connect(&database_url).await {
+                Ok(mut listener) => {
+                    if let Err(e) = listener.listen(NOTIFY_CHANNEL).await {
+                        tracing::warn!(error = %e, "LISTEN on '{}' failed, retrying", NOTIFY_CHANNEL);
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(max_backoff);
+                        continue;
+                    }
+                    tracing::info!("PgListener connected to channel '{}'", NOTIFY_CHANNEL);
+                    backoff = Duration::from_secs(1);
+
+                    loop {
+                        match listener.recv().await {
+                            Ok(notification) => {
+                                if let Some(payload) = NotifyPayload::parse(notification.payload())
+                                {
+                                    let _ = notify_tx.send(payload);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "PgListener recv error, reconnecting"
+                                );
+                                tokio::time::sleep(backoff).await;
+                                backoff = (backoff * 2).min(max_backoff);
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "PgListener connect failed, retrying");
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(max_backoff);
+                }
+            }
+        }
+    })
+}
+
 pub struct PostgresStore {
     pool: PgPool,
+    notify_tx: broadcast::Sender<NotifyPayload>,
+    listener_handle: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for PostgresStore {
+    fn drop(&mut self) {
+        self.listener_handle.abort();
+    }
 }
 
 impl PostgresStore {
-    pub fn new(pool: PgPool) -> Arc<Self> {
-        Arc::new(Self { pool })
+    pub fn new(pool: PgPool, database_url: String) -> Arc<Self> {
+        let (notify_tx, _) = broadcast::channel(NOTIFY_BROADCAST_CAPACITY);
+        let listener_handle = spawn_pg_listener(database_url, notify_tx.clone());
+        Arc::new(Self {
+            pool,
+            notify_tx,
+            listener_handle,
+        })
     }
 
     pub async fn connect(database_url: &str) -> anyhow::Result<Arc<Self>> {
@@ -113,7 +208,7 @@ impl PostgresStore {
             .connect(database_url)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
-        Ok(Self::new(pool))
+        Ok(Self::new(pool, database_url.to_owned()))
     }
 
     /// Connect with test-friendly configuration
@@ -133,7 +228,7 @@ impl PostgresStore {
         // Simple connection for test reliability
         let pool = PgPool::connect(database_url).await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
-        Ok(Self::new(pool))
+        Ok(Self::new(pool, database_url.to_owned()))
     }
 
     pub fn pool(&self) -> &PgPool {
@@ -429,9 +524,30 @@ impl EventStoreTrait for PostgresStore {
             .map_err(map_db_error)?;
         }
 
+        // Notify subscribers of new events (delivered only after commit).
+        // Best-effort: notification failure must not abort the append.
+        // The 5s fallback poll ensures delivery even if NOTIFY fails.
+        let notify_payload = NotifyPayload::encode(&tenant_id, last_global_nonce as i64);
+        if let Err(e) = sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(NOTIFY_CHANNEL)
+            .bind(&notify_payload)
+            .execute(&mut *tx)
+            .await
+        {
+            tracing::warn!(error = %e, "pg_notify failed (non-fatal, fallback poll will deliver)");
+        }
+
         tx.commit()
             .await
             .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
+
+        // Also broadcast in-process for zero-latency same-instance delivery.
+        // This intentionally duplicates the PgListener path — the subscriber's
+        // select! loop handles dedup naturally (DB query is source of truth).
+        let _ = self.notify_tx.send(NotifyPayload {
+            tenant_id: tenant_id.clone(),
+            last_global_nonce: last_global_nonce as i64,
+        });
 
         Ok(proto::AppendResponse {
             last_global_nonce,
@@ -611,6 +727,7 @@ impl EventStoreTrait for PostgresStore {
         let tenant_id = req.tenant_id.clone();
         let prefix = req.aggregate_id_prefix.clone();
         let from_global = req.from_global_nonce as i64;
+        let notify_rx = self.notify_tx.subscribe();
 
         #[derive(Debug)]
         enum Phase {
@@ -625,9 +742,28 @@ impl EventStoreTrait for PostgresStore {
             },
         }
 
+        // State includes the broadcast receiver for LISTEN/NOTIFY wake-ups.
+        // notify_rx is moved through the unfold (not Clone), which is correct
+        // since broadcast::Receiver is !Clone.
+        type State = (
+            PgPool,
+            String,
+            String,
+            i64,
+            Option<Phase>,
+            broadcast::Receiver<NotifyPayload>,
+        );
+
         Box::pin(stream::unfold(
-            (pool, tenant_id, prefix, from_global, None::<Phase>),
-            |(pool, tenant, prefix, cursor, phase)| async move {
+            (
+                pool,
+                tenant_id,
+                prefix,
+                from_global,
+                None::<Phase>,
+                notify_rx,
+            ),
+            |(pool, tenant, prefix, cursor, phase, mut notify_rx): State| async move {
                 let mut phase = phase;
                 if phase.is_none() {
                     let rows = if prefix.is_empty() {
@@ -721,6 +857,7 @@ impl EventStoreTrait for PostgresStore {
                                     idx,
                                     cursor: yielded_cursor,
                                 }),
+                                notify_rx,
                             );
                             Some((
                                 Ok(proto::SubscribeResponse { event: Some(event) }),
@@ -745,8 +882,9 @@ impl EventStoreTrait for PostgresStore {
                                 live_cursor,
                                 Some(Phase::Live {
                                     cursor: live_cursor,
-                                    interval: interval(Duration::from_millis(200)),
+                                    interval: interval(Duration::from_secs(FALLBACK_POLL_SECS)),
                                 }),
+                                notify_rx,
                             );
                             Some((Ok(proto::SubscribeResponse { event: None }), next_state))
                         }
@@ -755,6 +893,27 @@ impl EventStoreTrait for PostgresStore {
                         cursor,
                         mut interval,
                     }) => {
+                        // Wait for either a LISTEN/NOTIFY wake-up or the fallback poll timer.
+                        // The broadcast is a hint — the DB query below is the source of truth.
+                        loop {
+                            tokio::select! {
+                                result = notify_rx.recv() => {
+                                    match result {
+                                        Ok(payload) if payload.tenant_id == tenant
+                                            && payload.last_global_nonce > cursor => break,
+                                        Ok(_) => continue, // different tenant or already past cursor
+                                        Err(broadcast::error::RecvError::Lagged(_)) => break, // missed some, poll DB
+                                        Err(broadcast::error::RecvError::Closed) => {
+                                            // Listener shut down — fall back to pure polling
+                                            interval.tick().await;
+                                            break;
+                                        }
+                                    }
+                                }
+                                _ = interval.tick() => break, // safety-net fallback
+                            }
+                        }
+
                         let rows = if prefix.is_empty() {
                             sqlx::query(
                                 r#"
@@ -832,8 +991,14 @@ impl EventStoreTrait for PostgresStore {
                                     }
                                 };
 
-                                let next_state =
-                                    (pool, tenant, prefix, yielded_cursor, Some(next_phase));
+                                let next_state = (
+                                    pool,
+                                    tenant,
+                                    prefix,
+                                    yielded_cursor,
+                                    Some(next_phase),
+                                    notify_rx,
+                                );
                                 Some((
                                     Ok(proto::SubscribeResponse {
                                         event: Some(first_event),
@@ -851,17 +1016,19 @@ impl EventStoreTrait for PostgresStore {
                                         cursor: max_read_cursor,
                                         interval,
                                     }),
+                                    notify_rx,
                                 );
                                 Some((Ok(proto::SubscribeResponse { event: None }), next_state))
                             }
                         } else {
-                            interval.tick().await;
+                            // No new events — loop back to wait for next notification/poll
                             let next_state = (
                                 pool,
                                 tenant,
                                 prefix,
                                 cursor,
                                 Some(Phase::Live { cursor, interval }),
+                                notify_rx,
                             );
                             Some((Ok(proto::SubscribeResponse { event: None }), next_state))
                         }
@@ -927,10 +1094,13 @@ mod tests {
         // This test just verifies that subscribe returns a stream
         // We don't actually call .next() because that would require a real database connection
         let url = "postgres://test:test@localhost:5432/test";
+        let (notify_tx, _) = broadcast::channel(NOTIFY_BROADCAST_CAPACITY);
         let store = PostgresStore {
             pool: PgPoolOptions::new()
                 .connect_lazy(url)
                 .expect("lazy connect should not attempt network"),
+            notify_tx,
+            listener_handle: tokio::spawn(async {}),
         };
         let _stream = store.subscribe(proto::SubscribeRequest {
             tenant_id: "tenant".into(),
@@ -938,5 +1108,49 @@ mod tests {
             from_global_nonce: 0,
         });
         // Test passes if we can create the stream without panicking
+    }
+
+    #[test]
+    fn notify_payload_roundtrip() {
+        let encoded = NotifyPayload::encode("tenant-abc", 1042);
+        assert_eq!(encoded, "tenant-abc:1042");
+
+        let parsed = NotifyPayload::parse(&encoded).unwrap();
+        assert_eq!(parsed.tenant_id, "tenant-abc");
+        assert_eq!(parsed.last_global_nonce, 1042);
+    }
+
+    #[test]
+    fn notify_payload_roundtrip_zero_nonce() {
+        let encoded = NotifyPayload::encode("t", 0);
+        let parsed = NotifyPayload::parse(&encoded).unwrap();
+        assert_eq!(parsed.tenant_id, "t");
+        assert_eq!(parsed.last_global_nonce, 0);
+    }
+
+    #[test]
+    fn notify_payload_roundtrip_large_nonce() {
+        let encoded = NotifyPayload::encode("tenant", i64::MAX);
+        let parsed = NotifyPayload::parse(&encoded).unwrap();
+        assert_eq!(parsed.last_global_nonce, i64::MAX);
+    }
+
+    #[test]
+    fn notify_payload_with_colon_in_tenant() {
+        // rsplit_once splits on the LAST colon, so tenant can contain colons
+        let encoded = NotifyPayload::encode("org:team:tenant", 42);
+        assert_eq!(encoded, "org:team:tenant:42");
+
+        let parsed = NotifyPayload::parse(&encoded).unwrap();
+        assert_eq!(parsed.tenant_id, "org:team:tenant");
+        assert_eq!(parsed.last_global_nonce, 42);
+    }
+
+    #[test]
+    fn notify_payload_parse_rejects_invalid() {
+        assert!(NotifyPayload::parse("").is_none());
+        assert!(NotifyPayload::parse("no-colon").is_none());
+        assert!(NotifyPayload::parse("tenant:not_a_number").is_none());
+        assert!(NotifyPayload::parse(":").is_none());
     }
 }
