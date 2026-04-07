@@ -47,7 +47,7 @@ class TestAggregate(AggregateRoot[TestEvent | AnotherEvent]):
 class TestBaseAggregate:
     """Tests for BaseAggregate."""
 
-    def test_initialization(self):
+    def test_initialization(self) -> None:
         """Should initialize with default values."""
         agg = TestAggregate()
 
@@ -55,7 +55,7 @@ class TestBaseAggregate:
         assert agg.version == 0
         assert not agg.has_uncommitted_events()
 
-    def test_initialize_aggregate(self):
+    def test_initialize_aggregate(self) -> None:
         """Should set aggregate ID."""
         agg = TestAggregate()
         agg._initialize("test-123")
@@ -63,7 +63,7 @@ class TestBaseAggregate:
         assert agg.id == "test-123"
         assert agg.version == 0
 
-    def test_cannot_change_aggregate_id(self):
+    def test_cannot_change_aggregate_id(self) -> None:
         """Should not allow changing aggregate ID."""
         agg = TestAggregate()
         agg._initialize("test-123")
@@ -73,7 +73,7 @@ class TestBaseAggregate:
 
         assert "Cannot change aggregate ID" in str(exc.value)
 
-    def test_raise_event_without_id_fails(self):
+    def test_raise_event_without_id_fails(self) -> None:
         """Should fail to raise event without aggregate ID."""
         agg = TestAggregate()
 
@@ -82,7 +82,7 @@ class TestBaseAggregate:
 
         assert "without an ID" in str(exc.value)
 
-    def test_raise_event(self):
+    def test_raise_event(self) -> None:
         """Should raise and apply event."""
         agg = TestAggregate()
         agg._initialize("test-123")
@@ -94,7 +94,7 @@ class TestBaseAggregate:
         assert agg.has_uncommitted_events()
         assert len(agg.get_uncommitted_events()) == 1
 
-    def test_multiple_events(self):
+    def test_multiple_events(self) -> None:
         """Should handle multiple events."""
         agg = TestAggregate()
         agg._initialize("test-123")
@@ -108,7 +108,7 @@ class TestBaseAggregate:
         assert agg.version == 3
         assert len(agg.get_uncommitted_events()) == 3
 
-    def test_mark_events_as_committed(self):
+    def test_mark_events_as_committed(self) -> None:
         """Should clear uncommitted events."""
         agg = TestAggregate()
         agg._initialize("test-123")
@@ -122,7 +122,7 @@ class TestBaseAggregate:
         assert len(agg.get_uncommitted_events()) == 0
         assert agg.version == 1  # Version should remain
 
-    def test_rehydrate_from_events(self):
+    def test_rehydrate_from_events(self) -> None:
         """Should rehydrate aggregate from event history."""
         # Create aggregate and generate events
         agg1 = TestAggregate()
@@ -143,7 +143,7 @@ class TestBaseAggregate:
         assert agg2.count == 10
         assert not agg2.has_uncommitted_events()
 
-    def test_rehydrate_resets_state(self):
+    def test_rehydrate_resets_state(self) -> None:
         """Rehydration should reset aggregate state."""
         agg = TestAggregate()
         agg._initialize("test-123")
@@ -163,7 +163,7 @@ class TestBaseAggregate:
 class TestAggregateRoot:
     """Tests for AggregateRoot automatic dispatching."""
 
-    def test_aggregate_id_property(self):
+    def test_aggregate_id_property(self) -> None:
         """Should provide aggregate_id property."""
         agg = TestAggregate()
         agg._initialize("test-123")
@@ -171,7 +171,7 @@ class TestAggregateRoot:
         assert agg.aggregate_id == "test-123"
         assert agg.aggregate_id == agg.id
 
-    def test_event_handler_dispatch(self):
+    def test_event_handler_dispatch(self) -> None:
         """Should automatically dispatch to decorated handlers."""
         agg = TestAggregate()
         agg._initialize("test-123")
@@ -181,7 +181,7 @@ class TestAggregateRoot:
 
         assert agg.value == "dispatched"
 
-    def test_apply_convenience_method(self):
+    def test_apply_convenience_method(self) -> None:
         """Should provide _apply() convenience method."""
         agg = TestAggregate()
         agg._initialize("test-123")
@@ -191,7 +191,7 @@ class TestAggregateRoot:
         assert agg.value == "applied"
         assert agg.version == 1
 
-    def test_get_event_handlers(self):
+    def test_get_event_handlers(self) -> None:
         """Should discover decorated event handlers."""
         handlers = TestAggregate._get_event_handlers()
 
@@ -199,7 +199,7 @@ class TestAggregateRoot:
         assert "AnotherEvent" in handlers
         assert len(handlers) == 2
 
-    def test_handle_unknown_event(self, caplog):
+    def test_handle_unknown_event(self, caplog: pytest.LogCaptureFixture) -> None:
         """Should log warning for unknown events."""
 
         class UnknownEvent(DomainEvent):
@@ -219,7 +219,7 @@ class TestAggregateRoot:
 class TestEventHandlerDecorator:
     """Tests for @event_sourcing_handler decorator."""
 
-    def test_decorator_attaches_metadata(self):
+    def test_decorator_attaches_metadata(self) -> None:
         """Decorator should attach event type metadata."""
 
         class DecoratedAggregate(AggregateRoot[TestEvent]):
@@ -234,7 +234,7 @@ class TestEventHandlerDecorator:
         assert hasattr(DecoratedAggregate.my_handler, "_event_type")
         assert DecoratedAggregate.my_handler._event_type == "MyEvent"  # type: ignore
 
-    def test_multiple_handlers_per_aggregate(self):
+    def test_multiple_handlers_per_aggregate(self) -> None:
         """Should support multiple event handlers."""
 
         class MultiHandlerAggregate(AggregateRoot[TestEvent | AnotherEvent]):

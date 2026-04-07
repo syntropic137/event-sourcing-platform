@@ -1,9 +1,14 @@
 """In-memory event store client for testing."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 from event_sourcing.core.errors import ConcurrencyConflictError, EventStoreError
 from event_sourcing.core.event import DomainEvent, EventEnvelope
@@ -135,16 +140,13 @@ class MemoryEventStoreClient:
 
         # Assign global nonce to events if not already set
         # Create new envelopes since EventEnvelope is frozen
-        updated_events = []
+        updated_events: list[EventEnvelope[DomainEvent]] = []
         for event in events:
             if event.metadata.global_nonce is None:
                 # Create new metadata with global_nonce
                 new_metadata = event.metadata.model_copy(
                     update={"global_nonce": self._global_nonce_counter}
                 )
-                # Create new envelope with updated metadata
-                from event_sourcing.core.event import EventEnvelope
-
                 new_envelope = EventEnvelope(event=event.event, metadata=new_metadata)
                 updated_events.append(new_envelope)
                 self._global_nonce_counter += 1

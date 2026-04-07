@@ -18,15 +18,16 @@ Example:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
-
-from event_sourcing.core.event import DomainEvent
-from event_sourcing.testing.scenario.test_executor import TestExecutor
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 if TYPE_CHECKING:
     from event_sourcing.core.aggregate import AggregateRoot
+    from event_sourcing.core.command import Command
+    from event_sourcing.core.event import DomainEvent
 
-TAggregate = TypeVar("TAggregate", bound="AggregateRoot[Any]")
+from event_sourcing.testing.scenario.test_executor import TestExecutor
+
+TAggregate = TypeVar("TAggregate", bound="AggregateRoot[DomainEvent]")
 
 
 class AggregateScenario(Generic[TAggregate]):
@@ -39,9 +40,9 @@ class AggregateScenario(Generic[TAggregate]):
 
     def __init__(self, aggregate_class: type[TAggregate]) -> None:
         self._aggregate_class = aggregate_class
-        self._injectables: dict[str, Any] = {}
+        self._injectables: dict[str, object] = {}  # OBJRATCHET: DI container holds arbitrary service types
 
-    def register_injectable_resource(self, resource: Any) -> AggregateScenario[TAggregate]:
+    def register_injectable_resource(self, resource: object) -> AggregateScenario[TAggregate]:  # OBJRATCHET: DI accepts any service type
         """
         Register a resource that can be injected into command handlers.
 
@@ -98,7 +99,7 @@ class AggregateScenario(Generic[TAggregate]):
         """
         return TestExecutor(self._aggregate_class, events, self._injectables)
 
-    def given_commands(self, commands: list[Any]) -> TestExecutor[TAggregate]:
+    def given_commands(self, commands: list[Command]) -> TestExecutor[TAggregate]:
         """
         Start given phase with commands (events will be generated).
 
@@ -136,7 +137,9 @@ class AggregateScenario(Generic[TAggregate]):
 
         # Execute each command to generate events
         for command in commands:
-            aggregate._handle_command(command)
+            handle_cmd = getattr(aggregate, "_handle_command", None)
+            if handle_cmd is not None and callable(handle_cmd):
+                handle_cmd(command)
 
         # Extract generated events
         events = [e.event for e in aggregate.get_uncommitted_events()]

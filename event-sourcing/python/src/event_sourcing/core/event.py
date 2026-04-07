@@ -1,7 +1,9 @@
 """Event definitions and metadata handling for the event sourcing SDK."""
 
+from __future__ import annotations
+
 from datetime import UTC, datetime
-from typing import Any, ClassVar, Generic, TypeVar
+from typing import ClassVar, Generic, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -28,9 +30,23 @@ class DomainEvent(BaseModel):
 
     model_config = {"frozen": True, "extra": "forbid"}
 
-    def model_dump_json(self, **kwargs: Any) -> str:
-        """Serialize event to JSON."""
-        return super().model_dump_json(exclude_none=True, **kwargs)
+    def model_dump_json(  # type: ignore[override]
+        self,
+        *,
+        indent: int | None = None,
+        include: set[str] | None = None,
+        exclude: set[str] | None = None,
+        exclude_none: bool = True,
+        round_trip: bool = False,
+    ) -> str:
+        """Serialize event to JSON, excluding None fields by default."""
+        return super().model_dump_json(
+            indent=indent,
+            include=include,
+            exclude=exclude,
+            exclude_none=exclude_none,
+            round_trip=round_trip,
+        )
 
 
 class BaseDomainEvent(DomainEvent):
@@ -44,8 +60,8 @@ class BaseDomainEvent(DomainEvent):
     @classmethod
     def get_event_type(cls) -> str:
         """Get the event type (defaults to class name)."""
-        if hasattr(cls, "event_type") and isinstance(cls.event_type, str):
-            return cls.event_type
+        if hasattr(cls, "event_type"):
+            return str(cls.event_type)
         return cls.__name__
 
 
@@ -81,7 +97,7 @@ class EventMetadata(BaseModel):
     actor_id: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     payload_hash: str | None = None
-    custom_metadata: dict[str, Any] = Field(default_factory=dict)
+    custom_metadata: dict[str, str] = Field(default_factory=dict)
 
     model_config = {"frozen": True}
 
@@ -117,7 +133,7 @@ class EventFactory:
         causation_id: str | None = None,
         actor_id: str | None = None,
         headers: dict[str, str] | None = None,
-        custom_metadata: dict[str, Any] | None = None,
+        custom_metadata: dict[str, str] | None = None,
     ) -> EventEnvelope[TEvent]:
         """
         Create an event envelope with generated metadata.

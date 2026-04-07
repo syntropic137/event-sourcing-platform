@@ -1,12 +1,16 @@
 """Error types for the event sourcing SDK."""
 
-from typing import Any
+from __future__ import annotations
+
+# Covers all actual error detail values in the codebase.
+# Each error subclass stores str, int, or list[str] — never arbitrary objects.
+ErrorDetails = dict[str, str | int | list[str]]
 
 
 class EventSourcingError(Exception):
     """Base class for all event sourcing errors."""
 
-    def __init__(self, message: str, details: dict[str, Any] | None = None) -> None:
+    def __init__(self, message: str, details: ErrorDetails | None = None) -> None:
         super().__init__(message)
         self.message = message
         self.details = details or {}
@@ -53,9 +57,10 @@ class CommandValidationError(EventSourcingError):
     """Raised when a command fails validation."""
 
     def __init__(self, command_type: str, validation_errors: list[str]) -> None:
+        details: ErrorDetails = {"command_type": command_type, "validation_errors": validation_errors}
         super().__init__(
             f"Command validation failed for {command_type}: {', '.join(validation_errors)}",
-            {"command_type": command_type, "validation_errors": validation_errors},
+            details,
         )
         self.command_type = command_type
         self.validation_errors = validation_errors
@@ -65,7 +70,7 @@ class EventStoreError(EventSourcingError):
     """Raised when an event store operation fails."""
 
     def __init__(self, message: str, original_error: Exception | None = None) -> None:
-        details = {}
+        details: ErrorDetails = {}
         if original_error:
             details["original_error"] = str(original_error)
             details["original_type"] = type(original_error).__name__
@@ -79,7 +84,7 @@ class SerializationError(EventSourcingError):
     def __init__(
         self, operation: str, data_type: str, original_error: Exception | None = None
     ) -> None:
-        details = {"operation": operation, "data_type": data_type}
+        details: ErrorDetails = {"operation": operation, "data_type": data_type}
         if original_error:
             details["original_error"] = str(original_error)
         super().__init__(f"Failed to {operation} {data_type}", details)

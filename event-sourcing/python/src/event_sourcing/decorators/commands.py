@@ -1,10 +1,12 @@
 """Command decorators for event sourcing patterns."""
 
-from collections.abc import Callable
-from typing import Any, TypeVar
+from __future__ import annotations
 
-F = TypeVar("F", bound=Callable[..., Any])
-T = TypeVar("T", bound=type[Any])
+from collections.abc import Callable
+from typing import TypeVar
+
+F = TypeVar("F", bound=Callable[..., object])  # OBJRATCHET: decorator preserves any callable signature
+T = TypeVar("T", bound=type)
 
 # ============================================================================
 # COMMAND HANDLER DECORATOR (for aggregate methods)
@@ -128,7 +130,7 @@ def command(command_type: str, description: str | None = None) -> Callable[[T], 
     return decorator
 
 
-def get_command_metadata(command_class: type[Any]) -> CommandDecoratorMetadata | None:
+def get_command_metadata(command_class: type[object]) -> CommandDecoratorMetadata | None:  # OBJRATCHET: accepts any class for metadata inspection
     """
     Get command metadata from a command class.
 

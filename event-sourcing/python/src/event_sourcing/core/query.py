@@ -1,7 +1,9 @@
 """Query handling and read model patterns for CQRS."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Any, Generic, Protocol, TypeVar
+from typing import Generic, Protocol, TypeVar
 
 TResult = TypeVar("TResult", covariant=True)
 
@@ -32,7 +34,7 @@ class QueryBus(ABC):
     """Abstract base class for query buses."""
 
     @abstractmethod
-    async def send(self, query: Query) -> Any:
+    async def send(self, query: Query) -> object:  # OBJRATCHET: return type varies per query, consumers downcast
         """
         Send a query to its handler.
 
@@ -45,7 +47,7 @@ class QueryBus(ABC):
         ...
 
     @abstractmethod
-    def register_handler(self, query_type: type[Query], handler: QueryHandler[Any]) -> None:
+    def register_handler(self, query_type: type[Query], handler: QueryHandler[object]) -> None:  # OBJRATCHET: handler result type erased at bus level
         """
         Register a query handler.
 

@@ -1,4 +1,4 @@
-.PHONY: help setup test test-unit test-integration qa qa-fast lint format type-check clean build gen-proto
+.PHONY: help setup test test-unit test-integration qa qa-fast lint format type-check type-ratchet clean build gen-proto
 
 help:
 	@echo "Python Event Sourcing SDK - Available commands:"
@@ -17,7 +17,8 @@ help:
 	@echo "  qa-fast       - Quick QA (lint, type-check, unit tests)"
 	@echo "  lint          - Run ruff linter"
 	@echo "  format        - Format code with black"
-	@echo "  type-check    - Run mypy type checker"
+	@echo "  type-check    - Run pyright type checker (strict mode)"
+	@echo "  type-ratchet  - Enforce object-type ratchet (see ADR-021)"
 	@echo ""
 	@echo "Build:"
 	@echo "  build         - Build distribution package"
@@ -35,25 +36,52 @@ test-unit:
 test-integration:
 	uv run pytest -m integration
 
-qa: setup lint type-check test
+qa: setup lint type-check type-ratchet test
 	@echo "✅ Full QA passed"
 
-qa-fast: setup lint type-check test-unit
+qa-fast: setup lint type-check type-ratchet test-unit
 	@echo "✅ Fast QA passed"
 
 lint:
 	uv run ruff check src tests
 
 format: setup
-	uv run black src tests
 	uv run ruff check --fix src tests
+	uv run ruff format src tests
 
 type-check:
-	uv run mypy src
+	uv run pyright src
+
+# Object-type ratchet: every `object` type annotation must have a OBJRATCHET justification comment.
+# New `object` usages without justification will fail CI. To reduce the count, remove the comment
+# when you replace `object` with a concrete type. See ADR-021 for rationale.
+OBJECT_RATCHET_MAX := 15
+type-ratchet:
+	@unjustified=$$(grep -rn --include='*.py' -E ':\s*object\b|-> object\b|\[object\]' src/ \
+		| grep -v '/proto/' \
+		| grep -v '# OBJRATCHET:' \
+		| grep -v '# the event object' \
+		| grep -v '__pycache__'); \
+	if [ -n "$$unjustified" ]; then \
+		echo "❌ object type annotations without OBJRATCHET justification:"; \
+		echo "$$unjustified"; \
+		echo ""; \
+		echo "Add '# OBJRATCHET: <reason>' to justify, or replace with a concrete type."; \
+		echo "See ADR-021: docs/adrs/ADR-021-strict-python-typing.md"; \
+		exit 1; \
+	fi; \
+	count=$$(grep -rn --include='*.py' '# OBJRATCHET:' src/ | grep -v '__pycache__' | wc -l | tr -d ' '); \
+	if [ "$$count" -gt "$(OBJECT_RATCHET_MAX)" ]; then \
+		echo "❌ Object ratchet exceeded: $$count > $(OBJECT_RATCHET_MAX)"; \
+		echo "New object annotations are not allowed. Use a Protocol, TypedDict, or concrete type."; \
+		echo "See ADR-021: docs/adrs/ADR-021-strict-python-typing.md"; \
+		exit 1; \
+	fi; \
+	echo "✅ Object ratchet OK: $$count / $(OBJECT_RATCHET_MAX) (only goes down)"
 
 clean:
 	rm -rf build/ dist/ *.egg-info
-	rm -rf .pytest_cache .mypy_cache .ruff_cache
+	rm -rf .pytest_cache .ruff_cache
 	rm -rf htmlcov/ .coverage
 	find . -type d -name __pycache__ -exec rm -rf {} +
 	find . -type f -name "*.pyc" -delete
