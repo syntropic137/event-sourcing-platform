@@ -6,7 +6,6 @@
 import {
   validateFixture,
   FixtureValidationError,
-  TestFixture,
 } from '../src/testing/fixtures/fixture-types';
 
 const validFixture = {
@@ -50,7 +49,7 @@ describe('validateFixture', () => {
     const fixture = { aggregateType: 'Order', events: [] };
     try {
       validateFixture(fixture, 'test.json');
-      fail('Expected FixtureValidationError');
+      throw new Error('Expected FixtureValidationError');
     } catch (e) {
       expect(e).toBeInstanceOf(FixtureValidationError);
       expect((e as FixtureValidationError).issues).toContain('description must be a string');
@@ -61,7 +60,7 @@ describe('validateFixture', () => {
     const fixture = { description: 'Test', events: [] };
     try {
       validateFixture(fixture, 'test.json');
-      fail('Expected FixtureValidationError');
+      throw new Error('Expected FixtureValidationError');
     } catch (e) {
       expect(e).toBeInstanceOf(FixtureValidationError);
       expect((e as FixtureValidationError).issues).toContain('aggregateType must be a string');
@@ -72,7 +71,7 @@ describe('validateFixture', () => {
     const fixture = { description: 'Test', aggregateType: 'Order', events: 'not-array' };
     try {
       validateFixture(fixture, 'test.json');
-      fail('Expected FixtureValidationError');
+      throw new Error('Expected FixtureValidationError');
     } catch (e) {
       expect(e).toBeInstanceOf(FixtureValidationError);
       expect((e as FixtureValidationError).issues).toContain('events must be an array');
@@ -87,7 +86,7 @@ describe('validateFixture', () => {
     };
     try {
       validateFixture(fixture, 'test.json');
-      fail('Expected FixtureValidationError');
+      throw new Error('Expected FixtureValidationError');
     } catch (e) {
       expect(e).toBeInstanceOf(FixtureValidationError);
       expect((e as FixtureValidationError).issues).toContain('events[0].type must be a string');
@@ -102,7 +101,7 @@ describe('validateFixture', () => {
     };
     try {
       validateFixture(fixture, 'test.json');
-      fail('Expected FixtureValidationError');
+      throw new Error('Expected FixtureValidationError');
     } catch (e) {
       expect(e).toBeInstanceOf(FixtureValidationError);
       expect((e as FixtureValidationError).issues).toContain('events[0].version must be a string');
@@ -117,7 +116,7 @@ describe('validateFixture', () => {
     };
     try {
       validateFixture(fixture, 'test.json');
-      fail('Expected FixtureValidationError');
+      throw new Error('Expected FixtureValidationError');
     } catch (e) {
       expect(e).toBeInstanceOf(FixtureValidationError);
       expect((e as FixtureValidationError).issues).toContain('events[0].data must be an object');
@@ -128,7 +127,7 @@ describe('validateFixture', () => {
     const fixture = { events: 'not-array' };
     try {
       validateFixture(fixture, 'bad.json');
-      fail('Expected FixtureValidationError');
+      throw new Error('Expected FixtureValidationError');
     } catch (e) {
       expect(e).toBeInstanceOf(FixtureValidationError);
       const err = e as FixtureValidationError;
@@ -142,7 +141,7 @@ describe('validateFixture', () => {
   it('should include filePath in error', () => {
     try {
       validateFixture(null, 'fixtures/broken.json');
-      fail('Expected FixtureValidationError');
+      throw new Error('Expected FixtureValidationError');
     } catch (e) {
       expect(e).toBeInstanceOf(FixtureValidationError);
       const err = e as FixtureValidationError;
