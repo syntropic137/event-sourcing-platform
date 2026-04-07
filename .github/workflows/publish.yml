@@ -186,7 +186,7 @@ jobs:
     if: ${{ github.event.inputs.dry-run != 'true' }}
     permissions:
       contents: read
-      packages: read
+      packages: write
 
     steps:
       - name: Wait for package to be available
@@ -211,3 +211,15 @@ jobs:
           echo "✅ Package successfully published and accessible"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure package is public
+        run: |
+          # GitHub Packages defaults to private for org repos.
+          # Set to public so Syntropic137 and other consumers can pull without auth.
+          gh api \
+            --method PUT \
+            "orgs/syntropic137/packages/npm/event-sourcing-platform%2Ftypescript/visibility" \
+            -f visibility=public \
+            2>/dev/null || echo "⚠️ Could not set visibility (may already be public or require admin)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
