@@ -1,9 +1,14 @@
 """Tests for ExpectedVersion semantics."""
 
+from __future__ import annotations
+
 import pytest
 
+from event_sourcing.client.memory import MemoryEventStoreClient
+from event_sourcing.core.errors import ConcurrencyConflictError, StreamAlreadyExistsError
 from event_sourcing.core.event import DomainEvent, EventEnvelope, EventMetadata
 from event_sourcing.core.expected_version import ExpectedVersion
+from event_sourcing.core.repository import EventStoreRepository
 
 
 class _TestEvent(DomainEvent):
@@ -33,22 +38,22 @@ def _make_envelope(
 class TestExpectedVersion:
     """ExpectedVersion constants and factory."""
 
-    def test_no_stream_is_zero(self):
+    def test_no_stream_is_zero(self) -> None:
         assert ExpectedVersion.NO_STREAM == 0
 
-    def test_any_is_none(self):
+    def test_any_is_none(self) -> None:
         assert ExpectedVersion.ANY is None
 
-    def test_exact_returns_version(self):
+    def test_exact_returns_version(self) -> None:
         assert ExpectedVersion.exact(1) == 1
         assert ExpectedVersion.exact(5) == 5
         assert ExpectedVersion.exact(100) == 100
 
-    def test_exact_rejects_zero(self):
+    def test_exact_rejects_zero(self) -> None:
         with pytest.raises(ValueError, match="must be >= 1"):
             ExpectedVersion.exact(0)
 
-    def test_exact_rejects_negative(self):
+    def test_exact_rejects_negative(self) -> None:
         with pytest.raises(ValueError, match="must be >= 1"):
             ExpectedVersion.exact(-1)
 
@@ -56,12 +61,7 @@ class TestExpectedVersion:
 class TestStreamAlreadyExistsError:
     """StreamAlreadyExistsError is a ConcurrencyConflictError subclass."""
 
-    def test_inherits_from_concurrency_conflict(self):
-        from event_sourcing.core.errors import (
-            ConcurrencyConflictError,
-            StreamAlreadyExistsError,
-        )
-
+    def test_inherits_from_concurrency_conflict(self) -> None:
         err = StreamAlreadyExistsError("Test-abc", actual_version=3)
         assert isinstance(err, ConcurrencyConflictError)
         assert err.expected_version == 0
@@ -69,12 +69,7 @@ class TestStreamAlreadyExistsError:
         assert err.stream_name == "Test-abc"
         assert "already exists" in err.message
 
-    def test_catchable_as_concurrency_conflict(self):
-        from event_sourcing.core.errors import (
-            ConcurrencyConflictError,
-            StreamAlreadyExistsError,
-        )
-
+    def test_catchable_as_concurrency_conflict(self) -> None:
         with pytest.raises(ConcurrencyConflictError):
             raise StreamAlreadyExistsError("Test-abc", actual_version=1)
 
@@ -83,17 +78,17 @@ class TestMemoryClientNoStream:
     """MemoryEventStoreClient raises StreamAlreadyExistsError for NoStream violations."""
 
     @pytest.fixture(autouse=True)
-    def _set_test_env(self, monkeypatch: pytest.MonkeyPatch):
+    def _set_test_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("APP_ENVIRONMENT", "test")
 
     @pytest.fixture
-    def client(self):
-        from event_sourcing.client.memory import MemoryEventStoreClient
-
+    def client(self) -> MemoryEventStoreClient:
         return MemoryEventStoreClient()
 
     @pytest.mark.asyncio
-    async def test_no_stream_succeeds_on_new_stream(self, client):
+    async def test_no_stream_succeeds_on_new_stream(
+        self, client: MemoryEventStoreClient
+    ) -> None:
         """expected_version=0 should succeed when the stream doesn't exist."""
         envelope = _make_envelope()
         await client.append_events(
@@ -102,10 +97,10 @@ class TestMemoryClientNoStream:
         assert client.get_stream_version("Test-abc") == 1
 
     @pytest.mark.asyncio
-    async def test_no_stream_raises_stream_already_exists(self, client):
+    async def test_no_stream_raises_stream_already_exists(
+        self, client: MemoryEventStoreClient
+    ) -> None:
         """expected_version=0 should raise StreamAlreadyExistsError on existing stream."""
-        from event_sourcing.core.errors import StreamAlreadyExistsError
-
         envelope = _make_envelope()
         await client.append_events(
             "Test-abc", [envelope], expected_version=ExpectedVersion.NO_STREAM
@@ -119,13 +114,10 @@ class TestMemoryClientNoStream:
         assert exc_info.value.actual_version == 1
 
     @pytest.mark.asyncio
-    async def test_version_mismatch_raises_concurrency_conflict(self, client):
+    async def test_version_mismatch_raises_concurrency_conflict(
+        self, client: MemoryEventStoreClient
+    ) -> None:
         """Non-zero expected_version mismatch raises ConcurrencyConflictError (not StreamAlreadyExistsError)."""
-        from event_sourcing.core.errors import (
-            ConcurrencyConflictError,
-            StreamAlreadyExistsError,
-        )
-
         envelope = _make_envelope()
         await client.append_events("Test-abc", [envelope], expected_version=0)
 
@@ -139,19 +131,17 @@ class TestRepositorySaveNew:
     """EventStoreRepository.save_new() uses NoStream semantics."""
 
     @pytest.fixture(autouse=True)
-    def _set_test_env(self, monkeypatch: pytest.MonkeyPatch):
+    def _set_test_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("APP_ENVIRONMENT", "test")
 
     @pytest.fixture
-    def memory_client(self):
-        from event_sourcing.client.memory import MemoryEventStoreClient
-
-        client = MemoryEventStoreClient()
-        return client
+    def memory_client(self) -> MemoryEventStoreClient:
+        return MemoryEventStoreClient()
 
     @pytest.fixture
-    def repository(self, memory_client):
-        from event_sourcing.core.repository import EventStoreRepository
+    def repository(
+        self, memory_client: MemoryEventStoreClient
+    ) -> EventStoreRepository[object]:
         from tests.unit.test_aggregate import TestAggregate
 
         return EventStoreRepository(
@@ -161,7 +151,9 @@ class TestRepositorySaveNew:
         )
 
     @pytest.mark.asyncio
-    async def test_save_new_succeeds_for_new_aggregate(self, repository):
+    async def test_save_new_succeeds_for_new_aggregate(
+        self, repository: EventStoreRepository[object]
+    ) -> None:
         from tests.unit.test_aggregate import TestAggregate, TestEvent
 
         agg = TestAggregate()
@@ -172,8 +164,9 @@ class TestRepositorySaveNew:
         assert not agg.has_uncommitted_events()
 
     @pytest.mark.asyncio
-    async def test_save_new_raises_on_duplicate(self, repository):
-        from event_sourcing.core.errors import StreamAlreadyExistsError
+    async def test_save_new_raises_on_duplicate(
+        self, repository: EventStoreRepository[object]
+    ) -> None:
         from tests.unit.test_aggregate import TestAggregate, TestEvent
 
         agg1 = TestAggregate()
