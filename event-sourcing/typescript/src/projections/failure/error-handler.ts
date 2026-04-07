@@ -169,7 +169,10 @@ export class ProjectionErrorHandler {
     attemptCount: number
   ): Promise<{ shouldContinue: boolean; failureResult?: ErrorHandleResult }> {
     const { shouldRetry, delayMs } = await this.handleError(
-      envelope, projectionName, error, attemptCount
+      envelope,
+      projectionName,
+      error,
+      attemptCount
     );
     if (!shouldRetry) {
       return {
@@ -205,7 +208,12 @@ export class ProjectionErrorHandler {
         if (result === ProjectionResult.FAILURE) {
           const error = new Error('Projection returned FAILURE result');
           await this.sendToDLQ(envelope, projectionName, error, attemptCount);
-          return { result: ProjectionResult.FAILURE, retryCount: attemptCount, sentToDLQ: true, error };
+          return {
+            result: ProjectionResult.FAILURE,
+            retryCount: attemptCount,
+            sentToDLQ: true,
+            error,
+          };
         }
 
         // RETRY result
@@ -214,7 +222,12 @@ export class ProjectionErrorHandler {
         if (!retry.shouldContinue) return retry.failureResult!;
         attemptCount++;
       } catch (error) {
-        const retry = await this.attemptRetry(envelope, projectionName, error as Error, attemptCount);
+        const retry = await this.attemptRetry(
+          envelope,
+          projectionName,
+          error as Error,
+          attemptCount
+        );
         if (!retry.shouldContinue) return retry.failureResult!;
         attemptCount++;
       }

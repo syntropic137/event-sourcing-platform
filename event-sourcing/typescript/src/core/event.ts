@@ -359,8 +359,8 @@ export function Event(eventType: EventType, version: string) {
     if (!isValidEventVersion(version)) {
       throw new Error(
         `Invalid event version format: "${version}" for event "${eventType}". ` +
-        `Version must be either simple format (e.g., "v1", "v2") or semantic format (e.g., "1.0.0", "2.1.3"). ` +
-        `See ADR-007 for event versioning guidelines.`
+          `Version must be either simple format (e.g., "v1", "v2") or semantic format (e.g., "1.0.0", "2.1.3"). ` +
+          `See ADR-007 for event versioning guidelines.`
       );
     }
 

@@ -5,11 +5,7 @@
 import { AggregateRoot } from '../../core/aggregate';
 import { DomainEvent } from '../../core/event';
 import { FixtureEvent } from '../fixtures/fixture-types';
-import {
-  InvariantMetadata,
-  InvariantAwareConstructor,
-  getInvariants,
-} from './invariant-decorator';
+import { InvariantMetadata, InvariantAwareConstructor, getInvariants } from './invariant-decorator';
 
 /**
  * Result of checking a single invariant
@@ -142,12 +138,11 @@ export class InvariantChecker<TAggregate extends AggregateRoot<DomainEvent>> {
   private readonly AggregateClass: new () => TAggregate;
   private readonly options: Required<InvariantCheckerOptions>;
   private readonly invariants: Map<string, InvariantMetadata>;
-  private readonly additionalInvariants: NonNullable<InvariantCheckerOptions['additionalInvariants']>;
+  private readonly additionalInvariants: NonNullable<
+    InvariantCheckerOptions['additionalInvariants']
+  >;
 
-  constructor(
-    AggregateClass: new () => TAggregate,
-    options: InvariantCheckerOptions = {}
-  ) {
+  constructor(AggregateClass: new () => TAggregate, options: InvariantCheckerOptions = {}) {
     this.AggregateClass = AggregateClass;
     this.options = {
       eventFactory: options.eventFactory ?? defaultEventFactory,

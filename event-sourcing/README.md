@@ -254,7 +254,7 @@ make start-services
 The TypeScript SDK includes a thin adapter over the Event Store TS gRPC client.
 
 ```ts
-import { EventStoreClientFactory } from '@event-sourcing-platform/typescript';
+import { EventStoreClientFactory } from '@syntropic137/event-sourcing-typescript';
 
 const client = EventStoreClientFactory.createGrpcClient({ serverAddress: 'localhost:50051' });
 await client.connect(); // no-op, for symmetry

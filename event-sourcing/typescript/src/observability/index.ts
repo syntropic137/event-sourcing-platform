@@ -21,7 +21,7 @@
  *   StructuredLogger,
  *   info,
  *   error,
- * } from '@event-sourcing-platform/typescript/observability';
+ * } from '@syntropic137/event-sourcing-typescript/observability';
  *
  * // Extract context from request
  * const ctx = TracingContext.fromRequest(req);

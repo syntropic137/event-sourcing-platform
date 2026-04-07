@@ -10,7 +10,7 @@ import {
   info,
   error,
   forComponent,
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 
 // Use global logger
 info('Order placed', { orderId: '123', total: 150.00 });
@@ -25,7 +25,7 @@ logger.info('Processing order', { orderId: '123' });
 ### JSON (Default)
 
 ```typescript
-import { StructuredLogger, ConsoleJsonOutput } from '@event-sourcing-platform/typescript/observability';
+import { StructuredLogger, ConsoleJsonOutput } from '@syntropic137/event-sourcing-typescript/observability';
 
 const logger = new StructuredLogger({
   output: new ConsoleJsonOutput(),
@@ -42,7 +42,7 @@ Output:
 ### Pretty (Development)
 
 ```typescript
-import { StructuredLogger, ConsolePrettyOutput } from '@event-sourcing-platform/typescript/observability';
+import { StructuredLogger, ConsolePrettyOutput } from '@syntropic137/event-sourcing-typescript/observability';
 
 const logger = new StructuredLogger({
   output: new ConsolePrettyOutput(),
@@ -86,7 +86,7 @@ import {
   runWithContext, 
   TracingContext, 
   info 
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 
 const ctx = TracingContext.create({
   correlationId: 'abc-123',
@@ -146,7 +146,7 @@ Use the pre-built helpers:
 import { 
   ESLogMessages, 
   forComponent 
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 
 const logger = forComponent('OrderAggregate');
 
@@ -168,7 +168,7 @@ import {
   configureGlobalLogger,
   ConsoleJsonOutput,
   ConsolePrettyOutput,
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 
 // Production
 configureGlobalLogger({
@@ -201,7 +201,7 @@ configureGlobalLogger({
 Implement `LogOutput` for custom destinations:
 
 ```typescript
-import { LogOutput, LogEntry } from '@event-sourcing-platform/typescript/observability';
+import { LogOutput, LogEntry } from '@syntropic137/event-sourcing-typescript/observability';
 
 class FileOutput implements LogOutput {
   write(entry: LogEntry): void {
@@ -226,7 +226,7 @@ Use `CollectorOutput` to capture logs:
 import { 
   StructuredLogger, 
   CollectorOutput 
-} from '@event-sourcing-platform/typescript/observability';
+} from '@syntropic137/event-sourcing-typescript/observability';
 
 const collector = new CollectorOutput();
 const logger = new StructuredLogger({ output: collector });
@@ -242,7 +242,7 @@ expect(collector.findByLevel('error')).toHaveLength(0);
 Or disable logging:
 
 ```typescript
-import { NoOpOutput } from '@event-sourcing-platform/typescript/observability';
+import { NoOpOutput } from '@syntropic137/event-sourcing-typescript/observability';
 
 const logger = new StructuredLogger({ output: new NoOpOutput() });
 ```
@@ -253,7 +253,7 @@ Wrap existing loggers:
 
 ```typescript
 import pino from 'pino';
-import { Logger, LogContext } from '@event-sourcing-platform/typescript/observability';
+import { Logger, LogContext } from '@syntropic137/event-sourcing-typescript/observability';
 
 class PinoLogger implements Logger {
   private pino = pino();
@@ -279,7 +279,7 @@ class PinoLogger implements Logger {
 ### Example: Request Handler
 
 ```typescript
-import { TracingContext, runWithContext, forComponent } from '@event-sourcing-platform/typescript/observability';
+import { TracingContext, runWithContext, forComponent } from '@syntropic137/event-sourcing-typescript/observability';
 
 const logger = forComponent('OrderController');
 

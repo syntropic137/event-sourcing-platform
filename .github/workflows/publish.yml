@@ -125,7 +125,7 @@ jobs:
         with:
           node-version: "20.x"
           registry-url: "https://npm.pkg.github.com"
-          scope: "@event-sourcing-platform"
+          scope: "@syntropic137"
           cache: "pnpm"
 
       - name: Install Protocol Buffers compiler
@@ -158,21 +158,21 @@ jobs:
         run: |
           echo "🚀 Dry run mode - Package would be published"
           echo "Version: ${{ needs.validate.outputs.version }}"
-          echo "Package: @event-sourcing-platform/typescript"
+          echo "Package: @syntropic137/event-sourcing-typescript"
 
       - name: Create release notes
         if: ${{ github.event_name == 'release' && github.event.inputs.dry-run != 'true' }}
         run: |
           echo "## Published Package" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📦 **Package:** @event-sourcing-platform/typescript" >> $GITHUB_STEP_SUMMARY
+          echo "📦 **Package:** @syntropic137/event-sourcing-typescript" >> $GITHUB_STEP_SUMMARY
           echo "🏷️ **Version:** ${{ needs.validate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "📝 **Tag:** ${{ needs.validate.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Installation" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "npm install @event-sourcing-platform/typescript@${{ needs.validate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "npm install @syntropic137/event-sourcing-typescript@${{ needs.validate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
   verify-publication:
@@ -193,14 +193,14 @@ jobs:
         with:
           node-version: "20.x"
           registry-url: "https://npm.pkg.github.com"
-          scope: "@event-sourcing-platform"
+          scope: "@syntropic137"
 
       - name: Verify package is accessible
         run: |
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" > ~/.npmrc
-          echo "@event-sourcing-platform:registry=https://npm.pkg.github.com" >> ~/.npmrc
+          echo "@syntropic137:registry=https://npm.pkg.github.com" >> ~/.npmrc
 
-          npm view @event-sourcing-platform/typescript@${{ needs.validate.outputs.version }} || {
+          npm view @syntropic137/event-sourcing-typescript@${{ needs.validate.outputs.version }} || {
             echo "⚠️ Package not immediately available (may take a few minutes)"
             exit 0
           }

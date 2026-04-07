@@ -5,12 +5,7 @@
  */
 
 import { ES_METRICS, ES_METRIC_LABELS } from '../types';
-import {
-  counter,
-  gauge,
-  histogram,
-  DEFAULT_LATENCY_BUCKETS,
-} from './metrics';
+import { counter, gauge, histogram, DEFAULT_LATENCY_BUCKETS } from './metrics';
 
 // ============================================================================
 // EVENT STORE METRICS
@@ -74,10 +69,7 @@ export function startAggregateLoadTimer(aggregateType: string): () => number {
 /**
  * Create a timer for measuring command execution duration.
  */
-export function startCommandTimer(
-  commandType: string,
-  aggregateType: string
-): () => number {
+export function startCommandTimer(commandType: string, aggregateType: string): () => number {
   const hist = histogram(
     ES_METRICS.COMMAND_DURATION,
     'Time to execute a command',
@@ -98,10 +90,7 @@ export function startCommandTimer(
 /**
  * Record that a projection processed an event.
  */
-export function recordProjectionEventProcessed(
-  projectionName: string,
-  eventType: string
-): void {
+export function recordProjectionEventProcessed(projectionName: string, eventType: string): void {
   const eventsProcessed = counter(
     ES_METRICS.PROJECTION_EVENTS_PROCESSED,
     'Total events processed by projection',
@@ -118,11 +107,9 @@ export function recordProjectionEventProcessed(
  * Update projection lag (events behind head).
  */
 export function setProjectionLag(projectionName: string, lag: number): void {
-  const lagGauge = gauge(
-    ES_METRICS.PROJECTION_LAG,
-    'Number of events projection is behind head',
-    [ES_METRIC_LABELS.PROJECTION_NAME]
-  );
+  const lagGauge = gauge(ES_METRICS.PROJECTION_LAG, 'Number of events projection is behind head', [
+    ES_METRIC_LABELS.PROJECTION_NAME,
+  ]);
 
   lagGauge.set(lag, {
     [ES_METRIC_LABELS.PROJECTION_NAME]: projectionName,
@@ -132,15 +119,11 @@ export function setProjectionLag(projectionName: string, lag: number): void {
 /**
  * Record a projection error.
  */
-export function recordProjectionError(
-  projectionName: string,
-  errorType: string
-): void {
-  const errors = counter(
-    ES_METRICS.PROJECTION_ERRORS,
-    'Total projection errors',
-    [ES_METRIC_LABELS.PROJECTION_NAME, ES_METRIC_LABELS.ERROR_TYPE]
-  );
+export function recordProjectionError(projectionName: string, errorType: string): void {
+  const errors = counter(ES_METRICS.PROJECTION_ERRORS, 'Total projection errors', [
+    ES_METRIC_LABELS.PROJECTION_NAME,
+    ES_METRIC_LABELS.ERROR_TYPE,
+  ]);
 
   errors.inc({
     [ES_METRIC_LABELS.PROJECTION_NAME]: projectionName,
@@ -172,11 +155,9 @@ export function startProjectionProcessTimer(projectionName: string): () => numbe
  * Update dead letter queue size.
  */
 export function setDlqSize(projectionName: string, size: number): void {
-  const dlqGauge = gauge(
-    ES_METRICS.DLQ_SIZE,
-    'Number of events in dead letter queue',
-    [ES_METRIC_LABELS.PROJECTION_NAME]
-  );
+  const dlqGauge = gauge(ES_METRICS.DLQ_SIZE, 'Number of events in dead letter queue', [
+    ES_METRIC_LABELS.PROJECTION_NAME,
+  ]);
 
   dlqGauge.set(size, {
     [ES_METRIC_LABELS.PROJECTION_NAME]: projectionName,
@@ -187,11 +168,9 @@ export function setDlqSize(projectionName: string, size: number): void {
  * Record a retry attempt.
  */
 export function recordRetry(projectionName: string, _attempt: number): void {
-  const retries = counter(
-    ES_METRICS.RETRIES_TOTAL,
-    'Total retry attempts',
-    [ES_METRIC_LABELS.PROJECTION_NAME]
-  );
+  const retries = counter(ES_METRICS.RETRIES_TOTAL, 'Total retry attempts', [
+    ES_METRIC_LABELS.PROJECTION_NAME,
+  ]);
 
   retries.inc({
     [ES_METRIC_LABELS.PROJECTION_NAME]: projectionName,
@@ -244,10 +223,7 @@ export class ESInstrumentation {
   /**
    * Instrument an aggregate load operation.
    */
-  async instrumentLoad<T>(
-    aggregateType: string,
-    operation: () => Promise<T>
-  ): Promise<T> {
+  async instrumentLoad<T>(aggregateType: string, operation: () => Promise<T>): Promise<T> {
     const endTimer = startAggregateLoadTimer(aggregateType);
 
     try {

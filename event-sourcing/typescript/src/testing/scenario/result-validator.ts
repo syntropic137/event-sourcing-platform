@@ -115,9 +115,7 @@ export class ResultValidator<TAggregate extends AggregateRoot<DomainEvent>> {
    */
   expectExceptionMessage(message: string | RegExp): this {
     if (!this.error) {
-      throw new ScenarioAssertionError(
-        `Expected exception with message but command succeeded`
-      );
+      throw new ScenarioAssertionError(`Expected exception with message but command succeeded`);
     }
 
     const matches =

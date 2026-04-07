@@ -18,8 +18,8 @@
     "noImplicitAny": false,
     "baseUrl": ".",
     "paths": {
-      "@neuralempowerment/event-sourcing-typescript": ["../../event-sourcing/typescript/dist/index"],
-      "@neuralempowerment/event-sourcing-typescript/testing": ["../../event-sourcing/typescript/dist/testing/index"]
+      "@syntropic137/event-sourcing-typescript": ["../../event-sourcing/typescript/dist/index"],
+      "@syntropic137/event-sourcing-typescript/testing": ["../../event-sourcing/typescript/dist/testing/index"]
     }
   },
   "include": ["src/**/*", "tests/**/*"]

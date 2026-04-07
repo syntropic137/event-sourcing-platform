@@ -16,7 +16,7 @@
   "author": "Event Sourcing Platform Team",
   "license": "MIT",
   "dependencies": {
-    "@neuralempowerment/event-sourcing-typescript": "workspace:*"
+    "@syntropic137/event-sourcing-typescript": "workspace:*"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",

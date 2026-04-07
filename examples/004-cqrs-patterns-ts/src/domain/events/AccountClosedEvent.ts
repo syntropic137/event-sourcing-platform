@@ -1,4 +1,4 @@
-import { BaseDomainEvent, Event } from "@neuralempowerment/event-sourcing-typescript";
+import { BaseDomainEvent, Event } from "@syntropic137/event-sourcing-typescript";
 
 @Event("AccountClosed", "v1")
 export class AccountClosedEvent extends BaseDomainEvent {

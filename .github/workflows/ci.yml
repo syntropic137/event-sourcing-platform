@@ -178,7 +178,7 @@ jobs:
         run: make -C event-sourcing/typescript qa-fast
 
       - name: TypeScript SDK tests
-        run: pnpm --filter "@neuralempowerment/event-sourcing-typescript" run test
+        run: pnpm --filter "@syntropic137/event-sourcing-typescript" run test
 
   python_sdk_fast:
     name: SDK (Python) • qa-fast

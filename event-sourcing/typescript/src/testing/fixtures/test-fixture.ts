@@ -35,9 +35,7 @@ function parseFixtureContent(
       return { parsed: yaml.load(content), format: 'yaml' };
     } catch (error) {
       if ((error as Error).message?.includes("Cannot find module 'js-yaml'")) {
-        throw new Error(
-          'YAML fixtures require js-yaml package. Install with: npm install js-yaml'
-        );
+        throw new Error('YAML fixtures require js-yaml package. Install with: npm install js-yaml');
       }
       throw new Error(`Invalid YAML in fixture file: ${resolvedPath}`);
     }
@@ -156,7 +154,9 @@ export async function loadFixturesByTags(
 /**
  * Create a fixture programmatically (useful for generating fixtures from tests)
  */
-export function createFixture(partial: Partial<TestFixture> & { events: TestFixture['events'] }): TestFixture {
+export function createFixture(
+  partial: Partial<TestFixture> & { events: TestFixture['events'] }
+): TestFixture {
   return {
     description: partial.description ?? 'Generated fixture',
     aggregateType: partial.aggregateType ?? 'Unknown',

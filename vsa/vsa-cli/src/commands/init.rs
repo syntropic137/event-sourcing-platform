@@ -16,10 +16,10 @@ language: typescript
 #   name: event-sourcing-platform
 #   base_types:
 #     domain_event:
-#       import: "@event-sourcing-platform/typescript"
+#       import: "@syntropic137/event-sourcing-typescript"
 #       class: "BaseDomainEvent"
 #     aggregate:
-#       import: "@event-sourcing-platform/typescript"
+#       import: "@syntropic137/event-sourcing-typescript"
 #       class: "AggregateRoot"
 
 # Validation rules
@@ -58,13 +58,13 @@ framework:
   name: event-sourcing-platform
   base_types:
     domain_event:
-      import: "@event-sourcing-platform/typescript"
+      import: "@syntropic137/event-sourcing-typescript"
       class: "BaseDomainEvent"
     aggregate:
-      import: "@event-sourcing-platform/typescript"
+      import: "@syntropic137/event-sourcing-typescript"
       class: "AggregateRoot"
     command_handler:
-      import: "@event-sourcing-platform/typescript"
+      import: "@syntropic137/event-sourcing-typescript"
       class: "CommandHandler"
 
 # Validation rules

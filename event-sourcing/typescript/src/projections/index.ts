@@ -17,7 +17,7 @@
  *   MemoryFailedEventStore,
  *   RetryPolicy,
  *   ProjectionHealthChecker,
- * } from '@event-sourcing-platform/typescript/projections';
+ * } from '@syntropic137/event-sourcing-typescript/projections';
  *
  * // Create a projection
  * class OrderSummaryProjection extends CheckpointedProjection {
@@ -63,10 +63,7 @@ export type {
 // CHECKPOINTED PROJECTION
 // ============================================================================
 
-export {
-  CheckpointedProjection,
-  InMemoryProjection,
-} from './checkpointed-projection';
+export { CheckpointedProjection, InMemoryProjection } from './checkpointed-projection';
 
 // ============================================================================
 // CHECKPOINT STORES

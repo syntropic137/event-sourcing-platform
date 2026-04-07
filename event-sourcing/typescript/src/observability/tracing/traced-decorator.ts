@@ -4,13 +4,7 @@
  * Decorator for automatic span creation around methods.
  */
 
-import {
-  Span,
-  SpanAttributes,
-  SpanKind,
-  SpanStatus,
-  Tracer,
-} from '../types';
+import { Span, SpanAttributes, SpanKind, SpanStatus, Tracer } from '../types';
 import { getCurrentContext } from './tracing-context';
 
 // ============================================================================
@@ -85,7 +79,7 @@ let globalTracer: Tracer = new NoOpTracer();
  * @example
  * ```typescript
  * import { trace } from '@opentelemetry/api';
- * import { setGlobalTracer, createOTelTracer } from '@event-sourcing-platform/typescript/observability';
+ * import { setGlobalTracer, createOTelTracer } from '@syntropic137/event-sourcing-typescript/observability';
  *
  * const tracer = createOTelTracer(trace.getTracer('my-service'));
  * setGlobalTracer(tracer);
@@ -169,9 +163,7 @@ export interface TracedOptions {
  * }
  * ```
  */
-export function Traced(
-  nameOrOptions?: string | TracedOptions
-): MethodDecorator {
+export function Traced(nameOrOptions?: string | TracedOptions): MethodDecorator {
   return function (
     target: object,
     propertyKey: string | symbol,
@@ -185,9 +177,7 @@ export function Traced(
 
     // Parse options
     const options: TracedOptions =
-      typeof nameOrOptions === 'string'
-        ? { name: nameOrOptions }
-        : nameOrOptions ?? {};
+      typeof nameOrOptions === 'string' ? { name: nameOrOptions } : (nameOrOptions ?? {});
 
     const recordExceptions = options.recordExceptions ?? true;
     const spanKind = options.kind ?? 'internal';
@@ -208,9 +198,7 @@ export function Traced(
       const staticAttrs = options.attributes ?? {};
 
       // Get dynamic attributes from args
-      const dynamicAttrs = options.extractAttributes
-        ? options.extractAttributes(args)
-        : {};
+      const dynamicAttrs = options.extractAttributes ? options.extractAttributes(args) : {};
 
       // Combine all attributes
       const attributes: SpanAttributes = {

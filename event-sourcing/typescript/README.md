@@ -10,12 +10,12 @@ High-level abstractions for building event-sourced systems with Event Sourcing, 
 
 ### Prerequisites
 
-This package is published to GitHub Package Registry. You need to configure npm to use GitHub Packages for `@event-sourcing-platform` scoped packages.
+This package is published to GitHub Package Registry. You need to configure npm to use GitHub Packages for `@syntropic137` scoped packages.
 
 Create or update `~/.npmrc`:
 
 ```bash
-@event-sourcing-platform:registry=https://npm.pkg.github.com
+@syntropic137:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN
 ```
 
@@ -26,11 +26,11 @@ Replace `YOUR_GITHUB_TOKEN` with a GitHub Personal Access Token with `read:packa
 ### Install the Package
 
 ```bash
-npm install @event-sourcing-platform/typescript
+npm install @syntropic137/event-sourcing-typescript
 # or
-pnpm add @event-sourcing-platform/typescript
+pnpm add @syntropic137/event-sourcing-typescript
 # or
-yarn add @event-sourcing-platform/typescript
+yarn add @syntropic137/event-sourcing-typescript
 ```
 
 ## Quick Start
@@ -44,7 +44,7 @@ import {
   BaseDomainEvent,
   RepositoryFactory,
   MemoryEventStoreClient
-} from '@event-sourcing-platform/typescript';
+} from '@syntropic137/event-sourcing-typescript';
 
 // 1. Define your command
 class DepositMoneyCommand {
@@ -148,7 +148,7 @@ import {
   Aggregate,
   CommandHandler,
   EventSourcingHandler
-} from '@event-sourcing-platform/typescript';
+} from '@syntropic137/event-sourcing-typescript';
 
 @Aggregate('Account')
 class AccountAggregate extends AggregateRoot<AccountEvent> {
@@ -191,7 +191,7 @@ class AccountAggregate extends AggregateRoot<AccountEvent> {
 Repositories handle loading and saving aggregates with optimistic concurrency control:
 
 ```ts
-import { RepositoryFactory, MemoryEventStoreClient } from '@event-sourcing-platform/typescript';
+import { RepositoryFactory, MemoryEventStoreClient } from '@syntropic137/event-sourcing-typescript';
 
 const client = new MemoryEventStoreClient();
 await client.connect();
@@ -219,7 +219,7 @@ if (loaded) {
 #### In-Memory (for testing)
 
 ```ts
-import { MemoryEventStoreClient } from '@event-sourcing-platform/typescript';
+import { MemoryEventStoreClient } from '@syntropic137/event-sourcing-typescript';
 
 const client = new MemoryEventStoreClient();
 await client.connect();
@@ -230,7 +230,7 @@ await client.connect();
 ```ts
 import {
   EventStoreClientFactory
-} from '@event-sourcing-platform/typescript';
+} from '@syntropic137/event-sourcing-typescript';
 
 const client = EventStoreClientFactory.createGrpcClient({
   serverAddress: '127.0.0.1:50051',
@@ -256,7 +256,7 @@ The SDK includes a comprehensive testing toolkit for event-sourced applications.
 ### Quick Example
 
 ```typescript
-import { scenario } from '@neuralempowerment/event-sourcing-typescript/testing';
+import { scenario } from '@syntropic137/event-sourcing-typescript/testing';
 
 describe('BankAccountAggregate', () => {
   it('should emit MoneyDeposited when depositing money', () => {

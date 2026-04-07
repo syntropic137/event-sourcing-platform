@@ -289,7 +289,7 @@ qa-event-sourcing-full:
 .PHONY: qa-grpc-harness
 qa-grpc-harness:
 	@echo "Running TypeScript gRPC harness smoke test..."
-	@pnpm --filter @event-sourcing-platform/typescript exec jest --runInBand tests/repository.grpc.test.ts
+	@pnpm --filter @syntropic137/event-sourcing-typescript exec jest --runInBand tests/repository.grpc.test.ts
 
 qa-examples:
 	@echo "QA checks for examples..."

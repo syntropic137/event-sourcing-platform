@@ -97,9 +97,9 @@ root: src/contexts
 framework:
   name: event-sourcing-platform
   aggregate_class: AggregateRoot
-  aggregate_import: "@event-sourcing-platform/typescript"
+  aggregate_import: "@syntropic137/event-sourcing-typescript"
   event_class: DomainEvent
-  event_import: "@event-sourcing-platform/typescript"
+  event_import: "@syntropic137/event-sourcing-typescript"
 
 bounded_contexts:
   - name: warehouse

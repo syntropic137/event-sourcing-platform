@@ -6,11 +6,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import {
-  TracingContextData,
-  HEADER_KEYS,
-  SpanAttributes,
-} from '../types';
+import { TracingContextData, HEADER_KEYS, SpanAttributes } from '../types';
 
 /**
  * Headers from an HTTP-like request.

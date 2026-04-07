@@ -152,7 +152,7 @@ importers:
 
   examples/002-simple-aggregate-ts:
     dependencies:
-      '@neuralempowerment/event-sourcing-typescript':
+      '@syntropic137/event-sourcing-typescript':
         specifier: workspace:*
         version: link:../../event-sourcing/typescript
     devDependencies:
@@ -180,7 +180,7 @@ importers:
 
   examples/004-cqrs-patterns-ts:
     dependencies:
-      '@neuralempowerment/event-sourcing-typescript':
+      '@syntropic137/event-sourcing-typescript':
         specifier: workspace:*
         version: link:../../event-sourcing/typescript
     devDependencies:
@@ -199,7 +199,7 @@ importers:
 
   examples/007-ecommerce-complete-ts:
     dependencies:
-      '@neuralempowerment/event-sourcing-typescript':
+      '@syntropic137/event-sourcing-typescript':
         specifier: workspace:*
         version: link:../../event-sourcing/typescript
     devDependencies:

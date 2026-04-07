@@ -28,7 +28,7 @@ The `scenario()` function is the primary tool for testing aggregate command hand
 ### TypeScript
 
 ```typescript
-import { scenario } from '@neuralempowerment/event-sourcing-typescript/testing';
+import { scenario } from '@syntropic137/event-sourcing-typescript/testing';
 
 describe('OrderAggregate', () => {
   it('should emit OrderCreatedEvent when creating a new order', () => {

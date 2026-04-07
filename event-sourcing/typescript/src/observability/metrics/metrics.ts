@@ -4,14 +4,7 @@
  * Simple metrics interface with in-memory implementation and Prometheus export.
  */
 
-import {
-  Counter,
-  Gauge,
-  Histogram,
-  MetricLabels,
-  MetricsRegistry,
-  Timer,
-} from '../types';
+import { Counter, Gauge, Histogram, MetricLabels, MetricsRegistry, Timer } from '../types';
 
 // ============================================================================
 // IN-MEMORY METRIC IMPLEMENTATIONS
@@ -168,9 +161,7 @@ class InMemoryHistogram implements Histogram {
   }
 
   getBuckets(): Map<string, Map<number, number>> {
-    return new Map(
-      Array.from(this.bucketValues.entries()).map(([k, v]) => [k, new Map(v)])
-    );
+    return new Map(Array.from(this.bucketValues.entries()).map(([k, v]) => [k, new Map(v)]));
   }
 
   getSums(): Map<string, number> {
@@ -195,9 +186,7 @@ class InMemoryHistogram implements Histogram {
 /**
  * Default histogram buckets (in seconds) for latency metrics.
  */
-export const DEFAULT_LATENCY_BUCKETS = [
-  0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
-];
+export const DEFAULT_LATENCY_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
 
 /**
  * In-memory metrics registry.
@@ -277,7 +266,9 @@ export class InMemoryMetricsRegistry implements MetricsRegistry {
       for (const [labels, bucketMap] of buckets) {
         const baseLabels = labels ? `${labels},` : '';
         for (const bucket of histogram.buckets) {
-          lines.push(`${histogram.name}_bucket{${baseLabels}le="${bucket}"} ${bucketMap.get(bucket) ?? 0}`);
+          lines.push(
+            `${histogram.name}_bucket{${baseLabels}le="${bucket}"} ${bucketMap.get(bucket) ?? 0}`
+          );
         }
         lines.push(`${histogram.name}_bucket{${baseLabels}le="+Inf"} ${counts.get(labels) ?? 0}`);
 
@@ -363,11 +354,7 @@ export function resetGlobalRegistry(): void {
 /**
  * Create or get a counter from the global registry.
  */
-export function counter(
-  name: string,
-  help: string,
-  labelNames?: string[]
-): Counter {
+export function counter(name: string, help: string, labelNames?: string[]): Counter {
   return globalRegistry.counter(name, help, labelNames);
 }
 

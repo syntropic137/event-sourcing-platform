@@ -44,7 +44,7 @@ import {
   ProjectionHealthChecker,
   MemoryCheckpointStore,
   MemoryFailedEventStore,
-} from '@event-sourcing-platform/typescript/projections';
+} from '@syntropic137/event-sourcing-typescript/projections';
 
 const healthChecker = new ProjectionHealthChecker({
   checkpointStore,
@@ -111,7 +111,7 @@ console.log(summary);
 Create an HTTP health check endpoint:
 
 ```typescript
-import { createHealthCheckResponse } from '@event-sourcing-platform/typescript/projections';
+import { createHealthCheckResponse } from '@syntropic137/event-sourcing-typescript/projections';
 
 app.get('/health/projections', async (req, res) => {
   const response = await createHealthCheckResponse(healthChecker);

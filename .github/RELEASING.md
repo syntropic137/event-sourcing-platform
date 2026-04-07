@@ -1,6 +1,6 @@
 # Release Guide
 
-This guide explains how to create a new release and publish the `@event-sourcing-platform/typescript` package to GitHub Packages.
+This guide explains how to create a new release and publish the `@syntropic137/event-sourcing-typescript` package to GitHub Packages.
 
 ## Prerequisites
 
@@ -176,7 +176,7 @@ After a successful release:
 
 1. ✅ Verify package is accessible:
    ```bash
-   npm view @event-sourcing-platform/typescript@X.Y.Z
+   npm view @syntropic137/event-sourcing-typescript@X.Y.Z
    ```
 
 2. ✅ Update documentation if needed

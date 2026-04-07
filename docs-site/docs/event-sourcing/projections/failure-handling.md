@@ -29,7 +29,7 @@ Issues that won't resolve by retrying:
 Configure retry behavior:
 
 ```typescript
-import { RetryPolicy } from '@event-sourcing-platform/typescript/projections';
+import { RetryPolicy } from '@syntropic137/event-sourcing-typescript/projections';
 
 // Exponential backoff (default)
 const policy = RetryPolicy.exponentialBackoff({
@@ -76,7 +76,7 @@ new RetryPolicy({
 Events that fail permanently go to the DLQ:
 
 ```typescript
-import { MemoryFailedEventStore } from '@event-sourcing-platform/typescript/projections';
+import { MemoryFailedEventStore } from '@syntropic137/event-sourcing-typescript/projections';
 
 const failedEventStore = new MemoryFailedEventStore();
 
