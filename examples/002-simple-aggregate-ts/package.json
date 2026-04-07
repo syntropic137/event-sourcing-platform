@@ -1,6 +1,6 @@
 {
   "name": "002-simple-aggregate-ts",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Simple aggregate demonstrating Hexagonal Event-Sourced VSA Architecture (TypeScript)",
   "main": "dist/main.js",
   "scripts": {
