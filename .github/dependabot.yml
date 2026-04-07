@@ -1,41 +1,76 @@
+# Monthly schedule to reduce PR noise — we batch-upgrade deps manually
+# when needed rather than chasing every weekly bump. Security vulns are
+# caught by OSV scanner in CI, not by dependabot cadence.
+
 version: 2
 updates:
   # GitHub Actions — keep action SHAs up to date
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     commit-message:
       prefix: "chore(deps):"
+    groups:
+      github-actions:
+        patterns: ["*"]
 
   # Rust — event-store workspace
   - package-ecosystem: "cargo"
     directory: "/event-store"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     commit-message:
       prefix: "chore(deps):"
+    groups:
+      rust-event-store-minor:
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+      rust-event-store-major:
+        update-types: ["major"]
+        patterns: ["*"]
 
   # Rust — event-sourcing/rust
   - package-ecosystem: "cargo"
     directory: "/event-sourcing/rust"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     commit-message:
       prefix: "chore(deps):"
+    groups:
+      rust-event-sourcing-minor:
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+      rust-event-sourcing-major:
+        update-types: ["major"]
+        patterns: ["*"]
 
   # Node.js — root workspace
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     commit-message:
       prefix: "chore(deps):"
+    groups:
+      npm-minor:
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+      npm-major:
+        update-types: ["major"]
+        patterns: ["*"]
 
   # Python — event-sourcing/python (uv)
   - package-ecosystem: "uv"
     directory: "/event-sourcing/python"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     commit-message:
       prefix: "chore(deps):"
+    groups:
+      python-minor:
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+      python-major:
+        update-types: ["major"]
+        patterns: ["*"]

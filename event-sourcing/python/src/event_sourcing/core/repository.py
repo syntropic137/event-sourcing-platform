@@ -1,15 +1,22 @@
 """Repository pattern for loading and saving aggregates."""
 
-import logging
-from collections.abc import Callable
-from typing import Any, Generic, Protocol, TypeVar
+from __future__ import annotations
 
-from event_sourcing.core.aggregate import BaseAggregate
+import logging
+from typing import TYPE_CHECKING, Generic, Protocol, TypeVar
+
 from event_sourcing.core.expected_version import ExpectedVersion
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from event_sourcing.client.event_store import EventStoreClient
+    from event_sourcing.core.aggregate import BaseAggregate
+    from event_sourcing.core.event import DomainEvent
 
 logger = logging.getLogger(__name__)
 
-TAggregate = TypeVar("TAggregate", bound=BaseAggregate[Any])
+TAggregate = TypeVar("TAggregate", bound="BaseAggregate[DomainEvent]")
 
 
 class Repository(Protocol, Generic[TAggregate]):
@@ -62,7 +69,7 @@ class EventStoreRepository(Generic[TAggregate]):
 
     def __init__(
         self,
-        event_store_client: Any,  # EventStoreClient
+        event_store_client: EventStoreClient,
         aggregate_factory: Callable[[], TAggregate],
         aggregate_type: str,
     ) -> None:
@@ -206,7 +213,7 @@ class EventStoreRepository(Generic[TAggregate]):
 class RepositoryFactory:
     """Factory for creating event store repositories."""
 
-    def __init__(self, event_store_client: Any) -> None:  # EventStoreClient
+    def __init__(self, event_store_client: EventStoreClient) -> None:
         """
         Initialize the factory.
 

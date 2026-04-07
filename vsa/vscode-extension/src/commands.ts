@@ -2,7 +2,6 @@ import * as vscode from 'vscode';
 import { ValidationService } from './validation';
 import { VsaDiagnosticProvider } from './diagnostics';
 import { spawn } from 'child_process';
-import * as path from 'path';
 
 export function registerCommands(
     context: vscode.ExtensionContext,
@@ -72,7 +71,7 @@ async function generateFeatureCommand() {
             if (!value || value.trim().length === 0) {
                 return 'Feature path cannot be empty';
             }
-            if (!/^[a-z0-9\-\/]+$/.test(value)) {
+            if (!/^[a-z0-9\-/]+$/.test(value)) {
                 return 'Feature path must contain only lowercase letters, numbers, hyphens, and slashes';
             }
             return null;
@@ -158,10 +157,7 @@ async function generateManifestCommand() {
             try {
                 const output = await runVsaCommand(workspaceFolder.uri.fsPath, ['manifest']);
                 
-                // Parse JSON and show in new document
-                const manifestPath = path.join(workspaceFolder.uri.fsPath, 'vsa-manifest.json');
-                const uri = vscode.Uri.file(manifestPath);
-                
+                // Show output in new document
                 const doc = await vscode.workspace.openTextDocument({
                     content: output,
                     language: 'json'

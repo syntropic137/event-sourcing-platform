@@ -22,14 +22,14 @@ class TestEvent(DomainEvent):
 class TestDomainEvent:
     """Tests for DomainEvent base class."""
 
-    def test_event_is_immutable(self):
+    def test_event_is_immutable(self) -> None:
         """Events should be immutable."""
         event = TestEvent(value="test")
 
         with pytest.raises(ValidationError):
             event.value = "changed"  # type: ignore
 
-    def test_event_serialization(self):
+    def test_event_serialization(self) -> None:
         """Events should serialize to JSON."""
         event = TestEvent(value="test")
         json_str = event.model_dump_json()
@@ -37,7 +37,7 @@ class TestDomainEvent:
         assert "test" in json_str
         assert '"value"' in json_str
 
-    def test_event_type_is_accessible(self):
+    def test_event_type_is_accessible(self) -> None:
         """Event type should be accessible as class variable."""
         event = TestEvent(value="test")
         assert event.event_type == "TestEvent"
@@ -46,7 +46,7 @@ class TestDomainEvent:
 class TestBaseDomainEvent:
     """Tests for BaseDomainEvent convenience class."""
 
-    def test_get_event_type_from_class_var(self):
+    def test_get_event_type_from_class_var(self) -> None:
         """Should get event type from class variable."""
 
         class MyEvent(BaseDomainEvent):
@@ -55,7 +55,7 @@ class TestBaseDomainEvent:
 
         assert MyEvent.get_event_type() == "MyCustomEvent"
 
-    def test_get_event_type_defaults_to_class_name(self):
+    def test_get_event_type_defaults_to_class_name(self) -> None:
         """Should default to class name if no event_type set."""
 
         class AnotherEvent(BaseDomainEvent):
@@ -68,7 +68,7 @@ class TestBaseDomainEvent:
 class TestEventMetadata:
     """Tests for EventMetadata."""
 
-    def test_metadata_creation_with_defaults(self):
+    def test_metadata_creation_with_defaults(self) -> None:
         """Should create metadata with auto-generated fields."""
         metadata = EventMetadata(
             aggregate_id="test-123",
@@ -83,7 +83,7 @@ class TestEventMetadata:
         assert metadata.timestamp is not None
         assert metadata.content_type == "application/json"
 
-    def test_metadata_is_immutable(self):
+    def test_metadata_is_immutable(self) -> None:
         """Metadata should be immutable."""
         metadata = EventMetadata(
             aggregate_id="test-123",
@@ -94,7 +94,7 @@ class TestEventMetadata:
         with pytest.raises(ValidationError):
             metadata.aggregate_id = "changed"  # type: ignore
 
-    def test_metadata_with_custom_fields(self):
+    def test_metadata_with_custom_fields(self) -> None:
         """Should support custom metadata fields."""
         metadata = EventMetadata(
             aggregate_id="test-123",
@@ -119,7 +119,7 @@ class TestEventMetadata:
 class TestEventEnvelope:
     """Tests for EventEnvelope."""
 
-    def test_envelope_creation(self):
+    def test_envelope_creation(self) -> None:
         """Should create envelope with event and metadata."""
         event = TestEvent(value="test")
         metadata = EventMetadata(
@@ -133,7 +133,7 @@ class TestEventEnvelope:
         assert envelope.event == event
         assert envelope.metadata == metadata
 
-    def test_envelope_is_immutable(self):
+    def test_envelope_is_immutable(self) -> None:
         """Envelope should be immutable."""
         event = TestEvent(value="test")
         metadata = EventMetadata(
@@ -150,7 +150,7 @@ class TestEventEnvelope:
 class TestEventFactory:
     """Tests for EventFactory."""
 
-    def test_create_envelope(self):
+    def test_create_envelope(self) -> None:
         """Should create complete envelope with generated metadata."""
         event = TestEvent(value="test")
 
@@ -167,7 +167,7 @@ class TestEventFactory:
         assert envelope.metadata.aggregate_nonce == 1
         assert envelope.metadata.event_id is not None
 
-    def test_create_with_optional_metadata(self):
+    def test_create_with_optional_metadata(self) -> None:
         """Should create envelope with optional metadata fields."""
         event = TestEvent(value="test")
 

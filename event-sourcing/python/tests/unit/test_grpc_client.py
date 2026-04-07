@@ -21,7 +21,7 @@ class TestConnectIdempotency:
     """connect() must be idempotent — calling it twice must not replace the channel."""
 
     @pytest.mark.asyncio
-    async def test_second_connect_is_noop(self, client: GrpcEventStoreClient):
+    async def test_second_connect_is_noop(self, client: GrpcEventStoreClient) -> None:
         """REGRESSION: repeated connect() must not replace channel/stub."""
         with patch("event_sourcing.client.grpc_client.grpc.aio.insecure_channel") as mock_channel:
             mock_channel.return_value = AsyncMock()
@@ -38,14 +38,13 @@ class TestConnectIdempotency:
             mock_channel.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_connect_after_disconnect_reconnects(self, client: GrpcEventStoreClient):
+    async def test_connect_after_disconnect_reconnects(self, client: GrpcEventStoreClient) -> None:
         """After disconnect(), connect() should create a new channel."""
         with patch("event_sourcing.client.grpc_client.grpc.aio.insecure_channel") as mock_channel:
             mock_ch = AsyncMock()
             mock_channel.return_value = mock_ch
 
             await client.connect()
-            first_channel = client._channel
 
             await client.disconnect()
             assert client._channel is None

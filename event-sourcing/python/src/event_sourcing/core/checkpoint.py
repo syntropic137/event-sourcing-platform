@@ -15,12 +15,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from event_sourcing.core.event import EventEnvelope
+    from event_sourcing.core.event import DomainEvent, EventEnvelope
 
 
 class ProjectionResult(Enum):
@@ -303,7 +303,7 @@ class CheckpointedProjection(ABC):
     @abstractmethod
     async def handle_event(
         self,
-        envelope: "EventEnvelope[Any]",
+        envelope: "EventEnvelope[DomainEvent]",
         checkpoint_store: ProjectionCheckpointStore,
     ) -> ProjectionResult:
         """
@@ -428,7 +428,7 @@ class AutoDispatchProjection(CheckpointedProjection, ABC):
 
     async def handle_event(
         self,
-        envelope: "EventEnvelope[Any]",
+        envelope: "EventEnvelope[DomainEvent]",
         checkpoint_store: "ProjectionCheckpointStore",
     ) -> "ProjectionResult":
         """Auto-dispatch to the matching on_* handler and save checkpoint."""

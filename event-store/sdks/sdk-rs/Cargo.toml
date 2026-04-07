@@ -8,15 +8,15 @@ repository.workspace = true
 
 [dependencies]
 anyhow = "1"
-tonic = { version = "0.12", features = ["transport"] }
+tonic = { version = "0.14", features = ["transport"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 eventstore-proto = { path = "../../eventstore-proto" }
 
 [dev-dependencies]
 tokio-stream = "0.1"
-tower-http = { version = "0.5.2", features = ["trace"] }
+tower-http = { version = "0.6", features = ["trace"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-tonic = { version = "0.12" }
+tonic = { version = "0.14" }
 eventstore-backend-memory = { path = "../../eventstore-backend-memory" }
 eventstore-bin = { path = "../../eventstore-bin" }
 portpicker = "0.1.1"

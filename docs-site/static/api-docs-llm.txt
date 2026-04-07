@@ -1,5 +1,5 @@
 === EVENT SOURCING PLATFORM API REFERENCE ===
-Generated: 2026-01-29T02:35:58.860Z
+Generated: 2026-04-03T22:29:34.996Z
 Format: Plain Text (LLM-optimized)
 
 This document contains comprehensive API documentation for the Event Sourcing Platform,

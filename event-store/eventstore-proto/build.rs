@@ -6,7 +6,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_files = &["proto/eventstore/v1/eventstore.proto"];
     let include_dirs = &["proto"]; // import roots
 
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .build_server(true)
         .build_client(true)
         .compile_protos(proto_files, include_dirs)?;
