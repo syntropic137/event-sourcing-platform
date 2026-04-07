@@ -100,6 +100,11 @@ help:
 	@echo "  examples-008      - Banking complete"
 	@echo "  examples-009      - Inventory complete"
 	@echo ""
+	@echo "Versioning:"
+	@echo "  bump-version VERSION=0.12.0  - Bump all packages to VERSION"
+	@echo "  check-version                - Validate version consistency"
+	@echo "  current-version              - Print current version"
+	@echo ""
 	@echo "Container Release:"
 	@echo "  release-build VERSION=v0.2.3  - Build multi-arch image (no push)"
 	@echo "  release-push  VERSION=v0.2.3  - Build + push to GHCR"
@@ -533,6 +538,27 @@ dev-shell:
 
 # Convenience aliases
 dev: dev-start
+
+# --- Versioning (coordinated bump across all packages) ------------------------
+# Bumps Rust workspace Cargo.toml, TypeScript package.json, Python pyproject.toml.
+# Minor/major bumps align everything. Patch bumps increment together.
+#
+# Usage:
+#   make bump-version VERSION=0.12.0       # Bump all packages
+#   make check-version                      # Validate consistency
+#   make current-version                    # Print current version
+
+bump-version:
+ifndef VERSION
+	$(error VERSION is required. Usage: make bump-version VERSION=0.12.0)
+endif
+	@python3 scripts/bump_version.py $(VERSION)
+
+check-version:
+	@python3 scripts/bump_version.py --check
+
+current-version:
+	@python3 scripts/bump_version.py --current
 
 # --- Container Release (local build + push to GHCR) --------------------------
 # Usage:

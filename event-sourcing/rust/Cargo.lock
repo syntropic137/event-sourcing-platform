@@ -210,7 +210,7 @@ dependencies = [
 
 [[package]]
 name = "eventstore-proto"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "prost",
  "prost-types",
