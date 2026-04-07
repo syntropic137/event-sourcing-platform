@@ -1,4 +1,4 @@
-# ADR-021: Strict Python Typing Strategy
+# ADR-022: Strict Python Typing Strategy
 
 **Status:** Accepted
 **Date:** 2026-04-06

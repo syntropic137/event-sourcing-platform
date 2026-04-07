@@ -67,14 +67,14 @@ type-ratchet:
 		echo "$$unjustified"; \
 		echo ""; \
 		echo "Add '# OBJRATCHET: <reason>' to justify, or replace with a concrete type."; \
-		echo "See ADR-021: docs/adrs/ADR-021-strict-python-typing.md"; \
+		echo "See ADR-021: docs/adrs/ADR-022-strict-python-typing.md"; \
 		exit 1; \
 	fi; \
 	count=$$(grep -rn --include='*.py' '# OBJRATCHET:' src/ | grep -v '__pycache__' | wc -l | tr -d ' '); \
 	if [ "$$count" -gt "$(OBJECT_RATCHET_MAX)" ]; then \
 		echo "❌ Object ratchet exceeded: $$count > $(OBJECT_RATCHET_MAX)"; \
 		echo "New object annotations are not allowed. Use a Protocol, TypedDict, or concrete type."; \
-		echo "See ADR-021: docs/adrs/ADR-021-strict-python-typing.md"; \
+		echo "See ADR-021: docs/adrs/ADR-022-strict-python-typing.md"; \
 		exit 1; \
 	fi; \
 	echo "✅ Object ratchet OK: $$count / $(OBJECT_RATCHET_MAX) (only goes down)"
