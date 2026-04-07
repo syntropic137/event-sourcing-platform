@@ -20,6 +20,7 @@ from event_sourcing.core.errors import (
     EventSourcingError,
     EventStoreError,
     InvalidAggregateStateError,
+    StreamAlreadyExistsError,
 )
 from event_sourcing.core.event import (
     BaseDomainEvent,
@@ -28,6 +29,7 @@ from event_sourcing.core.event import (
     EventMetadata,
     GenericDomainEvent,
 )
+from event_sourcing.core.expected_version import ExpectedVersion
 from event_sourcing.core.projection import (
     AutoDispatchProjection,
     CheckpointedProjection,
@@ -105,10 +107,13 @@ __all__ = [
     # Metadata helpers
     "get_command_metadata",
     "get_event_metadata",
+    # Concurrency Control
+    "ExpectedVersion",
     # Errors
     "EventSourcingError",
     "AggregateNotFoundError",
     "ConcurrencyConflictError",
+    "StreamAlreadyExistsError",
     "InvalidAggregateStateError",
     "EventStoreError",
 ]

@@ -41,6 +41,21 @@ class ConcurrencyConflictError(EventSourcingError):
         self.actual_version = actual_version
 
 
+class StreamAlreadyExistsError(ConcurrencyConflictError):
+    """Raised when appending with ExpectedVersion.NO_STREAM to an existing stream.
+
+    This is the specific error for set-based validation via the
+    stream-per-unique-value pattern. Catching this error (rather than
+    the broader ``ConcurrencyConflictError``) lets callers distinguish
+    "duplicate creation" from "stale read" conflicts.
+    """
+
+    def __init__(self, stream_name: str, actual_version: int) -> None:
+        super().__init__(expected_version=0, actual_version=actual_version)
+        self.stream_name = stream_name
+        self.message = f"Stream '{stream_name}' already exists (version: {actual_version})"
+
+
 class InvalidAggregateStateError(EventSourcingError):
     """Raised when an aggregate is in an invalid state."""
 
