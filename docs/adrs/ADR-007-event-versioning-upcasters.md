@@ -111,7 +111,7 @@ Upcasters migrate old events to new schema:
 
 ```typescript
 // domain/events/_upcasters/ItemAddedEvent.v1-v2.ts
-import { EventUpcaster, Upcaster } from '@event-sourcing-platform/typescript';
+import { EventUpcaster, Upcaster } from '@syntropic137/event-sourcing-typescript';
 import { ItemAddedEventV1 } from '../_versioned/ItemAddedEvent.v1';
 import { ItemAddedEvent } from '../ItemAddedEvent';
 
@@ -144,7 +144,7 @@ vsa event add ItemAdded --context cart
 
 ```typescript
 // domain/events/ItemAddedEvent.ts
-import { DomainEvent, Event } from '@event-sourcing-platform/typescript';
+import { DomainEvent, Event } from '@syntropic137/event-sourcing-typescript';
 
 @Event('ItemAdded', 'v1')  // Starts at v1
 export class ItemAddedEvent extends DomainEvent {
@@ -176,7 +176,7 @@ vsa event version ItemAdded --to v2
 **Step 1:** Old version moves to `_versioned/`:
 ```typescript
 // domain/events/_versioned/ItemAddedEvent.v1.ts
-import { DomainEvent, Event } from '@event-sourcing-platform/typescript';
+import { DomainEvent, Event } from '@syntropic137/event-sourcing-typescript';
 
 @Event('ItemAdded', 'v1')
 @Deprecated('Use ItemAddedEvent v2 - adds deviceFingerprint field')
@@ -194,7 +194,7 @@ export class ItemAddedEventV1 extends DomainEvent {
 **Step 2:** Current version updates:
 ```typescript
 // domain/events/ItemAddedEvent.ts
-import { DomainEvent, Event } from '@event-sourcing-platform/typescript';
+import { DomainEvent, Event } from '@syntropic137/event-sourcing-typescript';
 
 @Event('ItemAdded', 'v2')  // Version bumped
 export class ItemAddedEvent extends DomainEvent {
@@ -212,7 +212,7 @@ export class ItemAddedEvent extends DomainEvent {
 **Step 3:** Upcaster is scaffolded:
 ```typescript
 // domain/events/_upcasters/ItemAddedEvent.v1-v2.ts
-import { EventUpcaster, Upcaster } from '@event-sourcing-platform/typescript';
+import { EventUpcaster, Upcaster } from '@syntropic137/event-sourcing-typescript';
 import { ItemAddedEventV1 } from '../_versioned/ItemAddedEvent.v1';
 import { ItemAddedEvent } from '../ItemAddedEvent';
 
@@ -498,7 +498,7 @@ vsa validate
 
 ```typescript
 // domain/events/ItemAddedEvent.ts
-import { DomainEvent, Event } from '@event-sourcing-platform/typescript';
+import { DomainEvent, Event } from '@syntropic137/event-sourcing-typescript';
 
 @Event('ItemAdded', 'v2')
 export class ItemAddedEvent extends DomainEvent {
@@ -513,7 +513,7 @@ export class ItemAddedEvent extends DomainEvent {
 }
 
 // domain/events/_upcasters/ItemAddedEvent.v1-v2.ts
-import { EventUpcaster, Upcaster } from '@event-sourcing-platform/typescript';
+import { EventUpcaster, Upcaster } from '@syntropic137/event-sourcing-typescript';
 
 @Upcaster('ItemAdded', { from: 'v1', to: 'v2' })
 export class ItemAddedEventUpcasterV1V2 

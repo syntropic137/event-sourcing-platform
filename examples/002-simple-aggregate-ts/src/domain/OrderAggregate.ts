@@ -3,7 +3,7 @@ import {
   AggregateRoot,
   CommandHandler,
   EventSourcingHandler,
-} from "@neuralempowerment/event-sourcing-typescript";
+} from "@syntropic137/event-sourcing-typescript";
 import { SubmitOrderCommand } from "./commands/SubmitOrderCommand";
 import { CancelOrderCommand } from "./commands/CancelOrderCommand";
 import { OrderSubmittedEvent } from "./events/OrderSubmittedEvent";

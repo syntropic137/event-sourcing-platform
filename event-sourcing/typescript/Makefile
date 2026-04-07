@@ -19,7 +19,7 @@ help:
 
 # Install dependencies (pnpm required for workspace: protocol)
 install:
-	@pnpm install --filter @event-sourcing-platform/typescript...
+	@pnpm install --filter @syntropic137/event-sourcing-typescript...
 
 # Build the project
 build: install
@@ -44,18 +44,18 @@ qa-full: qa build
 
 # Format code
 fmt:
-	@pnpm --filter @event-sourcing-platform/typescript exec prettier --check "src/**/*.ts" "tests/**/*.ts"
+	@pnpm --filter @syntropic137/event-sourcing-typescript exec prettier --check "src/**/*.ts" "tests/**/*.ts"
 
 # Lint code
 lint:
-	@pnpm --filter @event-sourcing-platform/typescript exec eslint "src" "tests" --ext .ts
+	@pnpm --filter @syntropic137/event-sourcing-typescript exec eslint "src" "tests" --ext .ts
 
 # Type check (src and tests separately to catch all issues)
 type-check:
 	@echo "Type checking src/..."
-	@pnpm --filter @event-sourcing-platform/typescript exec tsc --noEmit
+	@pnpm --filter @syntropic137/event-sourcing-typescript exec tsc --noEmit
 	@echo "Type checking tests/..."
-	@pnpm --filter @event-sourcing-platform/typescript exec tsc --noEmit --project tsconfig.jest.json
+	@pnpm --filter @syntropic137/event-sourcing-typescript exec tsc --noEmit --project tsconfig.jest.json
 
 # Run tests
 test: install

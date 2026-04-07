@@ -25,11 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ```typescript
 // Before
-import { AutoDispatchAggregate } from '@event-sourcing-platform/typescript';
+import { AutoDispatchAggregate } from '@syntropic137/event-sourcing-typescript';
 class MyAggregate extends AutoDispatchAggregate<MyEvent> { }
 
 // After
-import { AggregateRoot } from '@event-sourcing-platform/typescript';
+import { AggregateRoot } from '@syntropic137/event-sourcing-typescript';
 class MyAggregate extends AggregateRoot<MyEvent> { }
 ```
 

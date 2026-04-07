@@ -82,11 +82,7 @@ export interface SubscriptionCoordinatorConfig {
       envelope: EventEnvelope<DomainEvent>,
       result: ProjectionResult
     ) => void;
-    onError?: (
-      projectionName: string,
-      envelope: EventEnvelope<DomainEvent>,
-      error: Error
-    ) => void;
+    onError?: (projectionName: string, envelope: EventEnvelope<DomainEvent>, error: Error) => void;
     onBatchComplete?: (batchSize: number, projectionResults: Map<string, ProjectionResult>) => void;
   };
 }

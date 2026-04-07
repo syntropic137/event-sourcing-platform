@@ -202,7 +202,7 @@ export class OrderAggregate extends AggregateRoot<OrderEvent> {
 ### Event Versioning
 ```typescript
 // domain/events/OrderSubmittedEvent.ts
-import { BaseDomainEvent, Event } from "@event-sourcing-platform/typescript";
+import { BaseDomainEvent, Event } from "@syntropic137/event-sourcing-typescript";
 
 @Event("OrderSubmitted", "v1")  // ← Version decorator!
 export class OrderSubmittedEvent extends BaseDomainEvent {

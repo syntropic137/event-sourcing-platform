@@ -65,19 +65,19 @@ vsa:
     name: event-sourcing-platform
     base_types:
       domain_event:
-        import: "@event-sourcing-platform/typescript"
+        import: "@syntropic137/event-sourcing-typescript"
         class: "BaseDomainEvent"
       
       aggregate:
-        import: "@event-sourcing-platform/typescript"
+        import: "@syntropic137/event-sourcing-typescript"
         class: "AggregateRoot"
       
       event_sourcing_handler:
-        import: "@event-sourcing-platform/typescript"
+        import: "@syntropic137/event-sourcing-typescript"
         decorator: "EventSourcingHandler"
       
       repository:
-        import: "@event-sourcing-platform/typescript"
+        import: "@syntropic137/event-sourcing-typescript"
         class: "Repository"
 ```
 
@@ -86,7 +86,7 @@ vsa:
 ```typescript
 // Generated: contexts/warehouse/products/create-product/ProductCreatedEvent.ts
 
-import { BaseDomainEvent } from '@event-sourcing-platform/typescript';
+import { BaseDomainEvent } from '@syntropic137/event-sourcing-typescript';
 
 export class ProductCreatedEvent extends BaseDomainEvent {
   readonly eventType = 'ProductCreatedEvent' as const;
@@ -169,19 +169,19 @@ impl FrameworkPreset {
             name: "event-sourcing-platform".to_string(),
             base_types: hashmap! {
                 "domain_event" => TypeConfig {
-                    import: "@event-sourcing-platform/typescript".to_string(),
+                    import: "@syntropic137/event-sourcing-typescript".to_string(),
                     class: Some("BaseDomainEvent".to_string()),
                     interface: None,
                     decorator: None,
                 },
                 "aggregate" => TypeConfig {
-                    import: "@event-sourcing-platform/typescript".to_string(),
+                    import: "@syntropic137/event-sourcing-typescript".to_string(),
                     class: Some("AggregateRoot".to_string()),
                     interface: None,
                     decorator: None,
                 },
                 "event_sourcing_handler" => TypeConfig {
-                    import: "@event-sourcing-platform/typescript".to_string(),
+                    import: "@syntropic137/event-sourcing-typescript".to_string(),
                     class: None,
                     interface: None,
                     decorator: Some("EventSourcingHandler".to_string()),
@@ -200,7 +200,7 @@ VSA can detect framework from dependencies:
 ```bash
 vsa init
 
-> Detected @event-sourcing-platform/typescript in package.json
+> Detected @syntropic137/event-sourcing-typescript in package.json
 > Use event-sourcing-platform framework? (Y/n): y
 
 ✅ Configured framework: event-sourcing-platform
@@ -318,8 +318,8 @@ vsa:
 ```typescript
 // contexts/warehouse/products/create-product/ProductAggregate.ts
 
-import { AggregateRoot } from '@event-sourcing-platform/typescript';
-import { EventSourcingHandler } from '@event-sourcing-platform/typescript';
+import { AggregateRoot } from '@syntropic137/event-sourcing-typescript';
+import { EventSourcingHandler } from '@syntropic137/event-sourcing-typescript';
 import { ProductCreatedEvent } from './ProductCreatedEvent';
 
 export class ProductAggregate extends AggregateRoot<ProductCreatedEvent> {

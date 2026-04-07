@@ -38,10 +38,10 @@ Replace all imports of `AutoDispatchAggregate` with `AggregateRoot`:
 
 ```typescript
 // ❌ Before
-import { AutoDispatchAggregate } from '@event-sourcing-platform/typescript';
+import { AutoDispatchAggregate } from '@syntropic137/event-sourcing-typescript';
 
 // ✅ After
-import { AggregateRoot } from '@event-sourcing-platform/typescript';
+import { AggregateRoot } from '@syntropic137/event-sourcing-typescript';
 ```
 
 ### Step 2: Update Class Declarations
@@ -81,7 +81,7 @@ import {
   AutoDispatchAggregate,
   BaseDomainEvent,
   EventSourcingHandler,
-} from '@event-sourcing-platform/typescript';
+} from '@syntropic137/event-sourcing-typescript';
 
 class TaskCreatedEvent extends BaseDomainEvent {
   readonly eventType = 'TaskCreated' as const;
@@ -128,7 +128,7 @@ import {
   AggregateRoot,  // ← Only change: import name
   BaseDomainEvent,
   EventSourcingHandler,
-} from '@event-sourcing-platform/typescript';
+} from '@syntropic137/event-sourcing-typescript';
 
 class TaskCreatedEvent extends BaseDomainEvent {
   readonly eventType = 'TaskCreated' as const;
@@ -179,7 +179,7 @@ vsa:
     name: event-sourcing-platform
     base_types:
       aggregate:
-        import: "@event-sourcing-platform/typescript"
+        import: "@syntropic137/event-sourcing-typescript"
         class: "AutoDispatchAggregate"
 
 # ✅ After
@@ -188,7 +188,7 @@ vsa:
     name: event-sourcing-platform
     base_types:
       aggregate:
-        import: "@event-sourcing-platform/typescript"
+        import: "@syntropic137/event-sourcing-typescript"
         class: "AggregateRoot"
 ```
 
@@ -197,7 +197,7 @@ vsa:
 If you need manual event handling without decorators, you can still use `BaseAggregate`:
 
 ```typescript
-import { BaseAggregate } from '@event-sourcing-platform/typescript';
+import { BaseAggregate } from '@syntropic137/event-sourcing-typescript';
 
 class LowLevelAggregate extends BaseAggregate<MyEvent> {
   getAggregateType(): string {
@@ -227,7 +227,7 @@ Don't mix `AutoDispatchAggregate` and `AggregateRoot` in the same codebase:
 
 ```typescript
 // ❌ Bad - will cause import errors
-import { AutoDispatchAggregate } from '@event-sourcing-platform/typescript';
+import { AutoDispatchAggregate } from '@syntropic137/event-sourcing-typescript';
 class TaskAggregate extends AutoDispatchAggregate<TaskEvent> { }
 ```
 
@@ -265,7 +265,7 @@ Update your `vsa.yaml` configuration file as shown above, then regenerate any te
 
 ### Q: What version introduced this change?
 
-**A:** Version 0.2.0 of `@event-sourcing-platform/typescript`.
+**A:** Version 0.2.0 of `@syntropic137/event-sourcing-typescript`.
 
 ## Automated Migration
 

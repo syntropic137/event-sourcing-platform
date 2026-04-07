@@ -4,14 +4,7 @@
  * Adapter for using OpenTelemetry as the tracing backend.
  */
 
-import {
-  Span,
-  Tracer,
-  SpanAttributes,
-  SpanKind,
-  SpanStatus,
-  StartSpanOptions,
-} from '../types';
+import { Span, Tracer, SpanAttributes, SpanKind, SpanStatus, StartSpanOptions } from '../types';
 
 // ============================================================================
 // TYPE DEFINITIONS FOR OTEL API
@@ -106,10 +99,7 @@ class OTelSpanAdapter implements Span {
   }
 
   addEvent(name: string, attributes?: SpanAttributes): void {
-    this.otelSpan.addEvent(
-      name,
-      attributes as Record<string, unknown> | undefined
-    );
+    this.otelSpan.addEvent(name, attributes as Record<string, unknown> | undefined);
   }
 
   end(): void {
@@ -258,7 +248,7 @@ class OTelTracerAdapter implements Tracer {
  * @example
  * ```typescript
  * import { trace } from '@opentelemetry/api';
- * import { createOTelTracer, setGlobalTracer } from '@event-sourcing-platform/typescript/observability';
+ * import { createOTelTracer, setGlobalTracer } from '@syntropic137/event-sourcing-typescript/observability';
  *
  * const otelTracer = trace.getTracer('my-service', '1.0.0');
  * const tracer = createOTelTracer({
@@ -279,7 +269,7 @@ export function createOTelTracer(config: OTelTracerConfig): Tracer {
  * @example
  * ```typescript
  * import { trace } from '@opentelemetry/api';
- * import { fromOTelTracer } from '@event-sourcing-platform/typescript/observability';
+ * import { fromOTelTracer } from '@syntropic137/event-sourcing-typescript/observability';
  *
  * const tracer = fromOTelTracer(trace.getTracer('my-service'));
  * ```

@@ -82,11 +82,7 @@ describe('InMemoryMetricsRegistry', () => {
 
   describe('Histogram', () => {
     it('should observe values and track sums/counts', async () => {
-      const hist = registry.histogram(
-        'request_duration',
-        'Request duration',
-        [0.1, 0.5, 1.0]
-      );
+      const hist = registry.histogram('request_duration', 'Request duration', [0.1, 0.5, 1.0]);
       hist.observe(0.05);
       hist.observe(0.3);
       hist.observe(0.8);
@@ -97,14 +93,10 @@ describe('InMemoryMetricsRegistry', () => {
     });
 
     it('should distribute values across buckets', async () => {
-      const hist = registry.histogram(
-        'latency',
-        'Latency',
-        [0.1, 0.5, 1.0]
-      );
+      const hist = registry.histogram('latency', 'Latency', [0.1, 0.5, 1.0]);
       hist.observe(0.05); // <= 0.1, 0.5, 1.0
-      hist.observe(0.3);  // <= 0.5, 1.0
-      hist.observe(0.8);  // <= 1.0
+      hist.observe(0.3); // <= 0.5, 1.0
+      hist.observe(0.8); // <= 1.0
 
       const output = await registry.getMetrics();
       expect(output).toContain('latency_bucket{le="0.1"} 1');

@@ -109,9 +109,9 @@ Merge `AutoDispatchAggregate` functionality directly into `AggregateRoot`, creat
 The migration is trivial for external consumers:
 
 ```diff
-- import { AutoDispatchAggregate } from '@event-sourcing-platform/typescript';
+- import { AutoDispatchAggregate } from '@syntropic137/event-sourcing-typescript';
 - class MyAggregate extends AutoDispatchAggregate<MyEvent> {
-+ import { AggregateRoot } from '@event-sourcing-platform/typescript';
++ import { AggregateRoot } from '@syntropic137/event-sourcing-typescript';
 + class MyAggregate extends AggregateRoot<MyEvent> {
 ```
 
@@ -323,7 +323,7 @@ If you're using `AutoDispatchAggregate` directly:
 
 ```typescript
 // Before
-import { AutoDispatchAggregate } from '@event-sourcing-platform/typescript';
+import { AutoDispatchAggregate } from '@syntropic137/event-sourcing-typescript';
 
 @Aggregate('MyDomain')
 class MyAggregate extends AutoDispatchAggregate<MyEvent> {
@@ -331,7 +331,7 @@ class MyAggregate extends AutoDispatchAggregate<MyEvent> {
 }
 
 // After
-import { AggregateRoot } from '@event-sourcing-platform/typescript';
+import { AggregateRoot } from '@syntropic137/event-sourcing-typescript';
 
 @Aggregate('MyDomain')
 class MyAggregate extends AggregateRoot<MyEvent> {
@@ -347,7 +347,7 @@ If you need manual event handling without decorators:
 
 ```typescript
 // Use BaseAggregate instead
-import { BaseAggregate } from '@event-sourcing-platform/typescript';
+import { BaseAggregate } from '@syntropic137/event-sourcing-typescript';
 
 class LowLevelAggregate extends BaseAggregate<MyEvent> {
   protected handleEvent(event: MyEvent): void {

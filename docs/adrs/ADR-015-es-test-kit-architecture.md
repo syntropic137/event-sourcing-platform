@@ -159,7 +159,7 @@ scenario(OrderAggregate) \
 ### 2. Golden Replay Testing
 
 ```typescript
-import { ReplayTester, loadFixture } from '@event-sourcing-platform/typescript/testing';
+import { ReplayTester, loadFixture } from '@syntropic137/event-sourcing-typescript/testing';
 
 describe('OrderAggregate', () => {
   it('calculates total correctly', async () => {
@@ -201,7 +201,7 @@ describe('OrderAggregate', () => {
 ### 2. Invariant Testing
 
 ```typescript
-import { InvariantChecker, Invariant } from '@event-sourcing-platform/typescript/testing';
+import { InvariantChecker, Invariant } from '@syntropic137/event-sourcing-typescript/testing';
 
 @Aggregate('BankAccount')
 class BankAccountAggregate extends AggregateRoot<BankAccountEvent> {
@@ -228,7 +228,7 @@ describe('BankAccountAggregate invariants', () => {
 ### 3. Property Testing Integration
 
 ```typescript
-import { PropertyTester } from '@event-sourcing-platform/typescript/testing';
+import { PropertyTester } from '@syntropic137/event-sourcing-typescript/testing';
 import * as fc from 'fast-check';
 
 describe('BankAccountAggregate properties', () => {
@@ -252,7 +252,7 @@ describe('BankAccountAggregate properties', () => {
 ### 4. Projection Testing
 
 ```typescript
-import { ProjectionTester } from '@event-sourcing-platform/typescript/testing';
+import { ProjectionTester } from '@syntropic137/event-sourcing-typescript/testing';
 
 describe('OrderSummaryProjection', () => {
   it('is deterministic', async () => {

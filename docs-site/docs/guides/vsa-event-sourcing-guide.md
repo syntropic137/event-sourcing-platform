@@ -191,7 +191,7 @@ cd my-event-sourced-app
 npm init -y
 
 # Install event sourcing platform
-npm install @event-sourcing-platform/typescript
+npm install @syntropic137/event-sourcing-typescript
 
 # Install development dependencies
 npm install --save-dev typescript @types/node jest @types/jest ts-jest
@@ -213,7 +213,7 @@ root: src/contexts
 framework:
   name: event-sourcing-platform
   aggregate_class: AggregateRoot
-  aggregate_import: "@event-sourcing-platform/typescript"
+  aggregate_import: "@syntropic137/event-sourcing-typescript"
 
 # Define bounded contexts
 bounded_contexts:
@@ -287,7 +287,7 @@ import {
   CommandHandler, 
   EventSourcingHandler,
   BaseDomainEvent 
-} from '@event-sourcing-platform/typescript';
+} from '@syntropic137/event-sourcing-typescript';
 
 // Define events
 class OrderPlacedEvent extends BaseDomainEvent {
@@ -392,7 +392,7 @@ import {
   EventStoreClientFactory,
   MemoryEventStoreClient,
   RepositoryFactory 
-} from '@event-sourcing-platform/typescript';
+} from '@syntropic137/event-sourcing-typescript';
 
 export class EventStore {
   private client: EventStoreClient;
@@ -422,7 +422,7 @@ Route commands to aggregates:
 
 ```typescript
 // src/infrastructure/CommandBus.ts
-import { RepositoryFactory, EventStoreClient, Repository } from '@event-sourcing-platform/typescript';
+import { RepositoryFactory, EventStoreClient, Repository } from '@syntropic137/event-sourcing-typescript';
 import { OrderAggregate } from '../contexts/orders/place-order/OrderAggregate';
 import { PlaceOrderCommand } from '../contexts/orders/place-order/PlaceOrderCommand';
 
@@ -459,7 +459,7 @@ Create projections for queries:
 
 ```typescript
 // src/contexts/orders/list-orders/OrderListProjection.ts
-import { EventBus } from '@event-sourcing-platform/typescript';
+import { EventBus } from '@syntropic137/event-sourcing-typescript';
 import { OrderPlacedEvent } from '../place-order/OrderPlacedEvent';
 
 export interface OrderListItem {
@@ -504,7 +504,7 @@ Enable cross-context communication:
 
 ```typescript
 // src/_shared/integration-events/orders/OrderPlacedIntegrationEvent.ts
-import { BaseDomainEvent } from '@event-sourcing-platform/typescript';
+import { BaseDomainEvent } from '@syntropic137/event-sourcing-typescript';
 
 export class OrderPlacedIntegrationEvent extends BaseDomainEvent {
   readonly eventType = 'OrderPlaced' as const;

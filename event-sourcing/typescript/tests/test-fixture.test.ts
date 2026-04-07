@@ -30,9 +30,7 @@ function writeFixtureFile(name: string, content: object): string {
 const VALID_FIXTURE = {
   description: 'Test fixture',
   aggregateType: 'TestAggregate',
-  events: [
-    { type: 'TestEvent', version: 'v1', data: { field: 'value' } },
-  ],
+  events: [{ type: 'TestEvent', version: 'v1', data: { field: 'value' } }],
 };
 
 // ---------------------------------------------------------------------------

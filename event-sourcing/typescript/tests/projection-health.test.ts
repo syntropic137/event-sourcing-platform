@@ -15,11 +15,13 @@ import {
 // MOCK FACTORIES
 // ============================================================================
 
-function createMockCheckpointStore(checkpoints: Array<{
-  projectionName: string;
-  globalPosition: number;
-  updatedAt: Date;
-}> = []) {
+function createMockCheckpointStore(
+  checkpoints: Array<{
+    projectionName: string;
+    globalPosition: number;
+    updatedAt: Date;
+  }> = []
+) {
   return {
     getCheckpoint: jest.fn((name: string) => {
       const cp = checkpoints.find((c) => c.projectionName === name);

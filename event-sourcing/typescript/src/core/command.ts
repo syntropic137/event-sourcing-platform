@@ -126,8 +126,7 @@ export abstract class BaseAggregateCommandHandler<
   TAggregate extends Aggregate,
   TCommand extends Command,
   TEvent extends DomainEvent = DomainEvent,
-> implements AggregateCommandHandler<TAggregate, TCommand, TEvent>
-{
+> implements AggregateCommandHandler<TAggregate, TCommand, TEvent> {
   /** Handle the command - must be implemented by subclasses */
   abstract handle(aggregate: TAggregate, command: TCommand): Promise<TEvent[]>;
 

@@ -47,9 +47,9 @@ export interface Aggregate<TEvent extends DomainEvent = DomainEvent> {
 }
 
 /** Base class for event-sourced aggregates */
-export abstract class BaseAggregate<TEvent extends DomainEvent = DomainEvent>
-  implements Aggregate<TEvent>
-{
+export abstract class BaseAggregate<
+  TEvent extends DomainEvent = DomainEvent,
+> implements Aggregate<TEvent> {
   private _id: AggregateId | null = null;
   private _version: Version = 0;
   private _uncommittedEvents: EventEnvelope<TEvent>[] = [];

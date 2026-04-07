@@ -15,7 +15,7 @@
  *   ReplayTester,
  *   InvariantChecker,
  *   ProjectionTester,
- * } from '@neuralempowerment/event-sourcing-typescript/testing';
+ * } from '@syntropic137/event-sourcing-typescript/testing';
  *
  * // Given-When-Then scenario test
  * scenario(OrderAggregate)

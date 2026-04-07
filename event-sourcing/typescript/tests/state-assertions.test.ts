@@ -202,9 +202,7 @@ describe('formatDifferences', () => {
   });
 
   it('should produce readable output for differences', () => {
-    const diffs: StateDifference[] = [
-      { path: 'name', expected: 'Alice', actual: 'Bob' },
-    ];
+    const diffs: StateDifference[] = [{ path: 'name', expected: 'Alice', actual: 'Bob' }];
     const output = formatDifferences(diffs);
     expect(output).toContain('Found 1 difference(s)');
     expect(output).toContain('name:');

@@ -62,5 +62,5 @@ export { EventSerializer, BaseDomainEvent } from './core/event';
 export { RepositoryFactory } from './core/repository';
 
 // Testing utilities are available via separate import to avoid bundling in production:
-// import { ReplayTester, InvariantChecker, ProjectionTester } from '@event-sourcing-platform/typescript/testing';
+// import { ReplayTester, InvariantChecker, ProjectionTester } from '@syntropic137/event-sourcing-typescript/testing';
 // See: src/testing/index.ts

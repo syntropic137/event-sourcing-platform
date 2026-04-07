@@ -371,7 +371,7 @@ ADR-004 is implemented across all three language SDKs (TypeScript, Python, Rust)
 TypeScript uses decorators to mark command handlers and event sourcing handlers:
 
 ```typescript
-import { Aggregate, AggregateRoot, CommandHandler, EventSourcingHandler } from '@event-sourcing-platform/typescript';
+import { Aggregate, AggregateRoot, CommandHandler, EventSourcingHandler } from '@syntropic137/event-sourcing-typescript';
 
 @Aggregate('Task')
 export class TaskAggregate extends AggregateRoot<TaskEvent> {

@@ -33,7 +33,7 @@ curl http://service:3000/health/projections | jq
 ### 3. Get Failed Event Details
 
 ```typescript
-import { MemoryFailedEventStore } from '@event-sourcing-platform/typescript/projections';
+import { MemoryFailedEventStore } from '@syntropic137/event-sourcing-typescript/projections';
 
 // Get all failed events for a projection
 const failed = await failedEventStore.getByProjection('OrderSummary');

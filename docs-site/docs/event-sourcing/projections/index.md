@@ -23,7 +23,7 @@ import {
   MemoryFailedEventStore,
   RetryPolicy,
   ProjectionResult,
-} from '@event-sourcing-platform/typescript/projections';
+} from '@syntropic137/event-sourcing-typescript/projections';
 
 // 1. Define a projection
 class OrderSummaryProjection extends CheckpointedProjection {

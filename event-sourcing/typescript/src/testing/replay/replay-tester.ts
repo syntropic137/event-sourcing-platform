@@ -101,7 +101,10 @@ function defaultEventFactory(fixtureEvent: FixtureEvent): DomainEvent {
  * Try extracting state via getState() method
  */
 function tryGetState(aggregate: object): Record<string, unknown> | null {
-  if ('getState' in aggregate && typeof (aggregate as Record<string, unknown>).getState === 'function') {
+  if (
+    'getState' in aggregate &&
+    typeof (aggregate as Record<string, unknown>).getState === 'function'
+  ) {
     return (aggregate as { getState: () => unknown }).getState() as Record<string, unknown>;
   }
   return null;
@@ -111,7 +114,10 @@ function tryGetState(aggregate: object): Record<string, unknown> | null {
  * Try extracting state via toJSON() method
  */
 function tryToJSON(aggregate: object): Record<string, unknown> | null {
-  if ('toJSON' in aggregate && typeof (aggregate as Record<string, unknown>).toJSON === 'function') {
+  if (
+    'toJSON' in aggregate &&
+    typeof (aggregate as Record<string, unknown>).toJSON === 'function'
+  ) {
     return (aggregate as { toJSON: () => unknown }).toJSON() as Record<string, unknown>;
   }
   return null;
@@ -170,10 +176,7 @@ export class ReplayTester<TAggregate extends AggregateRoot<DomainEvent>> {
   private readonly AggregateClass: new () => TAggregate;
   private readonly options: Required<ReplayTesterOptions>;
 
-  constructor(
-    AggregateClass: new () => TAggregate,
-    options: ReplayTesterOptions = {}
-  ) {
+  constructor(AggregateClass: new () => TAggregate, options: ReplayTesterOptions = {}) {
     this.AggregateClass = AggregateClass;
     this.options = {
       eventFactory: options.eventFactory ?? defaultEventFactory,
@@ -285,7 +288,11 @@ export class ReplayTester<TAggregate extends AggregateRoot<DomainEvent>> {
     events: FixtureEvent[],
     aggregateId?: string
   ): Promise<Array<{ eventIndex: number; event: FixtureEvent; state: Record<string, unknown> }>> {
-    const steps: Array<{ eventIndex: number; event: FixtureEvent; state: Record<string, unknown> }> = [];
+    const steps: Array<{
+      eventIndex: number;
+      event: FixtureEvent;
+      state: Record<string, unknown>;
+    }> = [];
 
     for (let i = 0; i < events.length; i++) {
       const eventsToReplay = events.slice(0, i + 1);

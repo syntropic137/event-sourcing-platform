@@ -6,7 +6,7 @@
  *
  * @example
  * ```typescript
- * import { scenario } from '@neuralempowerment/event-sourcing-typescript/testing';
+ * import { scenario } from '@syntropic137/event-sourcing-typescript/testing';
  *
  * // Happy path: command produces events
  * scenario(OrderAggregate)

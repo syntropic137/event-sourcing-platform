@@ -119,7 +119,7 @@ export interface OrderPlacedEvent {
 Aggregates handle commands and maintain state through events.
 
 ```typescript title="OrderAggregate.ts"
-import { Aggregate, AggregateRoot, CommandHandler, EventSourcingHandler } from '@event-sourcing-platform/typescript';
+import { Aggregate, AggregateRoot, CommandHandler, EventSourcingHandler } from '@syntropic137/event-sourcing-typescript';
 
 @Aggregate('Order')
 export class OrderAggregate extends AggregateRoot<OrderEvent> {

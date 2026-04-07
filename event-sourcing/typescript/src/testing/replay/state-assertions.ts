@@ -55,10 +55,7 @@ export function deepEqual(a: unknown, b: unknown): boolean {
     if (keysA.length !== keysB.length) return false;
 
     return keysA.every((key) =>
-      deepEqual(
-        (a as Record<string, unknown>)[key],
-        (b as Record<string, unknown>)[key]
-      )
+      deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])
     );
   }
 
@@ -98,9 +95,7 @@ export function partialMatch(expected: unknown, actual: unknown): boolean {
     const expectedObj = expected as Record<string, unknown>;
     const actualObj = actual as Record<string, unknown>;
 
-    return Object.keys(expectedObj).every((key) =>
-      partialMatch(expectedObj[key], actualObj[key])
-    );
+    return Object.keys(expectedObj).every((key) => partialMatch(expectedObj[key], actualObj[key]));
   }
 
   return false;
@@ -109,11 +104,7 @@ export function partialMatch(expected: unknown, actual: unknown): boolean {
 /**
  * Diff two arrays element-by-element (only checks expected indices)
  */
-function diffArrays(
-  expected: unknown[],
-  actual: unknown[],
-  path: string
-): StateDifference[] {
+function diffArrays(expected: unknown[], actual: unknown[], path: string): StateDifference[] {
   const differences: StateDifference[] = [];
   expected.forEach((item, index) => {
     const itemPath = path ? `${path}[${index}]` : `[${index}]`;
@@ -149,11 +140,7 @@ function diffObjects(
 /**
  * Diff two Date instances by time value
  */
-function diffDates(
-  expected: Date,
-  actual: Date,
-  path: string
-): StateDifference[] {
+function diffDates(expected: Date, actual: Date, path: string): StateDifference[] {
   return expected.getTime() === actual.getTime()
     ? []
     : [{ path: path || 'root', expected, actual }];

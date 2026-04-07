@@ -67,7 +67,7 @@ We define **observability conventions** for the platform:
 ### 2. Tracing Context Utility
 
 ```typescript
-import { TracingContext } from '@event-sourcing-platform/typescript/observability';
+import { TracingContext } from '@syntropic137/event-sourcing-typescript/observability';
 
 // Create context from incoming request
 const ctx = TracingContext.fromRequest(req);
@@ -100,7 +100,7 @@ class OrderProjection {
 ### 3. OpenTelemetry Integration
 
 ```typescript
-import { OTelIntegration } from '@event-sourcing-platform/typescript/observability';
+import { OTelIntegration } from '@syntropic137/event-sourcing-typescript/observability';
 import { trace } from '@opentelemetry/api';
 
 // Configure once at startup
@@ -135,7 +135,7 @@ class OrderProjection {
 | `es_dlq_size` | Gauge | `projection_name` | Dead letter queue size |
 
 ```typescript
-import { Metrics } from '@event-sourcing-platform/typescript/observability';
+import { Metrics } from '@syntropic137/event-sourcing-typescript/observability';
 
 // Automatic metric recording
 class InstrumentedRepository {
@@ -160,7 +160,7 @@ class InstrumentedRepository {
 ### 5. Structured Logging
 
 ```typescript
-import { Logger } from '@event-sourcing-platform/typescript/observability';
+import { Logger } from '@syntropic137/event-sourcing-typescript/observability';
 
 const logger = Logger.forComponent('OrderAggregate');
 

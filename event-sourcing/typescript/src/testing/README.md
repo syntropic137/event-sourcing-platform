@@ -9,13 +9,13 @@ Test aggregate command handlers using the Given-When-Then pattern.
 ### Installation
 
 ```typescript
-import { scenario } from '@neuralempowerment/event-sourcing-typescript/testing';
+import { scenario } from '@syntropic137/event-sourcing-typescript/testing';
 ```
 
 ### Usage
 
 ```typescript
-import { scenario } from '@neuralempowerment/event-sourcing-typescript/testing';
+import { scenario } from '@syntropic137/event-sourcing-typescript/testing';
 
 describe('OrderAggregate', () => {
   // Happy path: command produces events

@@ -69,7 +69,7 @@ describe('ProjectionErrorHandler', () => {
       const result = await handler.executeWithRetry(
         mockEnvelope,
         PROJECTION_NAME,
-        async () => ProjectionResult.SUCCESS,
+        async () => ProjectionResult.SUCCESS
       );
 
       expect(result.result).toBe(ProjectionResult.SUCCESS);
@@ -88,7 +88,7 @@ describe('ProjectionErrorHandler', () => {
       const result = await handler.executeWithRetry(
         mockEnvelope,
         PROJECTION_NAME,
-        async () => ProjectionResult.SKIP,
+        async () => ProjectionResult.SKIP
       );
 
       expect(result.result).toBe(ProjectionResult.SKIP);
@@ -106,7 +106,7 @@ describe('ProjectionErrorHandler', () => {
       const result = await handler.executeWithRetry(
         mockEnvelope,
         PROJECTION_NAME,
-        async () => ProjectionResult.FAILURE,
+        async () => ProjectionResult.FAILURE
       );
 
       expect(result.result).toBe(ProjectionResult.FAILURE);
@@ -128,14 +128,10 @@ describe('ProjectionErrorHandler', () => {
       });
 
       let callCount = 0;
-      const result = await handler.executeWithRetry(
-        mockEnvelope,
-        PROJECTION_NAME,
-        async () => {
-          callCount++;
-          return callCount < 3 ? ProjectionResult.RETRY : ProjectionResult.SUCCESS;
-        },
-      );
+      const result = await handler.executeWithRetry(mockEnvelope, PROJECTION_NAME, async () => {
+        callCount++;
+        return callCount < 3 ? ProjectionResult.RETRY : ProjectionResult.SUCCESS;
+      });
 
       expect(result.result).toBe(ProjectionResult.SUCCESS);
       expect(result.retryCount).toBe(2);
@@ -157,15 +153,11 @@ describe('ProjectionErrorHandler', () => {
       });
 
       let callCount = 0;
-      const result = await handler.executeWithRetry(
-        mockEnvelope,
-        PROJECTION_NAME,
-        async () => {
-          callCount++;
-          if (callCount === 1) throw new Error('connection refused');
-          return ProjectionResult.SUCCESS;
-        },
-      );
+      const result = await handler.executeWithRetry(mockEnvelope, PROJECTION_NAME, async () => {
+        callCount++;
+        if (callCount === 1) throw new Error('connection refused');
+        return ProjectionResult.SUCCESS;
+      });
 
       expect(result.result).toBe(ProjectionResult.SUCCESS);
       expect(result.retryCount).toBe(1);
@@ -186,14 +178,10 @@ describe('ProjectionErrorHandler', () => {
       });
 
       let callCount = 0;
-      const result = await handler.executeWithRetry(
-        mockEnvelope,
-        PROJECTION_NAME,
-        async () => {
-          callCount++;
-          return ProjectionResult.RETRY;
-        },
-      );
+      const result = await handler.executeWithRetry(mockEnvelope, PROJECTION_NAME, async () => {
+        callCount++;
+        return ProjectionResult.RETRY;
+      });
 
       expect(result.result).toBe(ProjectionResult.FAILURE);
       expect(result.sentToDLQ).toBe(true);
@@ -226,7 +214,7 @@ describe('ProjectionErrorHandler', () => {
         mockEnvelope,
         PROJECTION_NAME,
         error,
-        0,
+        0
       );
 
       expect(shouldRetry).toBe(false);
@@ -252,7 +240,7 @@ describe('ProjectionErrorHandler', () => {
         mockEnvelope,
         PROJECTION_NAME,
         error,
-        0,
+        0
       );
 
       expect(shouldRetry).toBe(true);

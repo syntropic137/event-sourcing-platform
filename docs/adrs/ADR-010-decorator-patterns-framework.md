@@ -74,7 +74,7 @@ We use **decorators** to annotate classes and methods with metadata for framewor
 
 **Usage:**
 ```typescript
-import { DomainEvent, Event } from '@event-sourcing-platform/typescript';
+import { DomainEvent, Event } from '@syntropic137/event-sourcing-typescript';
 
 @Event('ItemAdded', 'v2')  // eventType, version (REQUIRED)
 export class ItemAddedEvent extends DomainEvent {
@@ -123,7 +123,7 @@ const event = EventRegistry.deserialize({
 
 **Usage:**
 ```typescript
-import { EventUpcaster, Upcaster } from '@event-sourcing-platform/typescript';
+import { EventUpcaster, Upcaster } from '@syntropic137/event-sourcing-typescript';
 import { ItemAddedEventV1 } from '../_versioned/ItemAddedEvent.v1';
 import { ItemAddedEvent } from '../ItemAddedEvent';
 

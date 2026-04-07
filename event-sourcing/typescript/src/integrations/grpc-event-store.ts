@@ -3,7 +3,10 @@
  */
 
 import { EventSerializer, type EventEnvelope } from '../core/event';
-import type { EventStoreClient as RepoEventStoreClient, ReadAllResult } from '../client/event-store-client';
+import type {
+  EventStoreClient as RepoEventStoreClient,
+  ReadAllResult,
+} from '../client/event-store-client';
 import { EventStoreError } from '../core/errors';
 import type { JsonObject, JsonValue } from '../types/common';
 
@@ -70,7 +73,7 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
     const all: EventEnvelope[] = [];
 
     try {
-      for (; ;) {
+      for (;;) {
         const resp = await client.readStream({
           tenantId: this.tenantId,
           aggregateId,
@@ -175,11 +178,7 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
   /**
    * Read all events from a global position (for projections/catch-up).
    */
-  async readAll(
-    fromGlobalNonce = 0,
-    maxCount = 100,
-    forward = true
-  ): Promise<ReadAllResult> {
+  async readAll(fromGlobalNonce = 0, maxCount = 100, forward = true): Promise<ReadAllResult> {
     try {
       const client = await this.clientPromise;
       const resp = await client.readAll({

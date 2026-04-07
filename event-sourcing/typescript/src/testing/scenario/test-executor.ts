@@ -97,10 +97,7 @@ export class TestExecutor<TAggregate extends AggregateRoot<DomainEvent>> {
   /**
    * Execute command using the aggregate's handleCommand method
    */
-  private executeCommand<TCommand extends object>(
-    aggregate: TAggregate,
-    command: TCommand
-  ): void {
+  private executeCommand<TCommand extends object>(aggregate: TAggregate, command: TCommand): void {
     // Access the protected handleCommand method via cast
     const aggregateWithHandler = aggregate as unknown as {
       handleCommand: (command: TCommand) => void;

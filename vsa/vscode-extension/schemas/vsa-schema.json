@@ -55,7 +55,7 @@
           "type": "string",
           "description": "Import path for base aggregate class",
           "examples": [
-            "@event-sourcing-platform/typescript"
+            "@syntropic137/event-sourcing-typescript"
           ]
         },
         "event_class": {
@@ -70,7 +70,7 @@
           "type": "string",
           "description": "Import path for base event class",
           "examples": [
-            "@event-sourcing-platform/typescript"
+            "@syntropic137/event-sourcing-typescript"
           ]
         }
       },

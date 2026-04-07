@@ -144,9 +144,9 @@ export interface ProjectionManager {
 }
 
 /** Base class for projections */
-export abstract class BaseProjection<TEvent extends DomainEvent = DomainEvent>
-  implements Projection<TEvent>
-{
+export abstract class BaseProjection<
+  TEvent extends DomainEvent = DomainEvent,
+> implements Projection<TEvent> {
   abstract getName(): string;
   abstract getVersion(): number;
   abstract handleEvent(event: EventEnvelope<TEvent>): Promise<void>;
