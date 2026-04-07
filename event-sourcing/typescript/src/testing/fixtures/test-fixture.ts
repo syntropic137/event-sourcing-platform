@@ -72,7 +72,7 @@ export async function loadFixture(
   let content: string;
   try {
     content = fs.readFileSync(resolvedPath, 'utf-8');
-  } catch (error) {
+  } catch {
     throw new Error(`Failed to read fixture file: ${resolvedPath}`);
   }
 
