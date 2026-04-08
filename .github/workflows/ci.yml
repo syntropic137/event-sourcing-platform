@@ -205,9 +205,9 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           git fetch origin ${{ github.base_ref }} --depth=1
-          branch_max=$(grep 'OBJECT_RATCHET_MAX' event-sourcing/python/Makefile | grep -oE '[0-9]+')
+          branch_max=$(grep '^OBJECT_RATCHET_MAX[[:space:]]*:=' event-sourcing/python/Makefile | head -n1 | grep -oE '[0-9]+')
           base_max=$(git show origin/${{ github.base_ref }}:event-sourcing/python/Makefile \
-            | grep 'OBJECT_RATCHET_MAX' | grep -oE '[0-9]+')
+            | grep '^OBJECT_RATCHET_MAX[[:space:]]*:=' | head -n1 | grep -oE '[0-9]+')
           echo "Base (${{ github.base_ref }}): ${base_max}  PR branch: ${branch_max}"
           if [ "$branch_max" -gt "$base_max" ]; then
             echo "❌ OBJECT_RATCHET_MAX increased from ${base_max} → ${branch_max}."
