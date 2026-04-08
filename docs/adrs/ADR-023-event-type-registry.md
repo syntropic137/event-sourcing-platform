@@ -39,7 +39,7 @@ Fallback:      _proto_to_envelope(meta.event_type="Unknown") → GenericDomainEv
 ```
 
 The registry is:
-- **Append-only** — entries are never removed at runtime
+- **No deletions at runtime** — entries are never removed once registered; later registrations for the same `event_type` overwrite the existing entry
 - **Global per process** — one registry shared across all aggregates and projections
 - **Populated at import time** — when Python modules containing `@event`-decorated classes are imported, they auto-register
 

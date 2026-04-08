@@ -34,6 +34,18 @@ def get_event_type_registry() -> dict[str, type[DomainEvent]]:
     return dict(_EVENT_TYPE_REGISTRY)
 
 
+def resolve_event_type(event_type: str) -> type[DomainEvent] | None:
+    """Look up a concrete DomainEvent class by event type string.
+
+    Unlike ``get_event_type_registry()`` this does not copy the registry,
+    making it suitable for hot-path lookups (e.g. per-event in gRPC client).
+
+    Returns:
+        The registered class, or ``None`` if not found.
+    """
+    return _EVENT_TYPE_REGISTRY.get(event_type)
+
+
 # ============================================================================
 # EVENT HANDLER DECORATOR (for aggregate methods)
 # ============================================================================

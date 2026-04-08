@@ -54,6 +54,7 @@ from event_sourcing.decorators.events import (
     event_sourcing_handler,
     get_event_metadata,
     get_event_type_registry,
+    resolve_event_type,
 )
 from event_sourcing.stores import MemoryCheckpointStore, PostgresCheckpointStore
 from event_sourcing.subscriptions import SubscriptionCoordinator
@@ -109,6 +110,7 @@ __all__ = [
     "get_command_metadata",
     "get_event_metadata",
     "get_event_type_registry",
+    "resolve_event_type",
     # Concurrency Control
     "ExpectedVersion",
     # Errors

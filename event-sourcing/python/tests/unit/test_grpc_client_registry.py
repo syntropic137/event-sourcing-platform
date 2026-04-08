@@ -14,7 +14,6 @@ from event_sourcing import DomainEvent, event
 from event_sourcing.client.grpc_client import GrpcEventStoreClient
 from event_sourcing.core.event import GenericDomainEvent
 
-
 # --- Test event classes (auto-registered via @event) ---
 
 
@@ -173,7 +172,7 @@ class TestProtoToEnvelopeRegistryResolution:
 
         envelope = self.client._proto_to_envelope(proto_event)
 
-        with pytest.raises(Exception):  # ValidationError from frozen model
+        with pytest.raises((TypeError, AttributeError, ValueError)):
             envelope.event.order_id = "changed"  # type: ignore[attr-defined]
 
     def test_malformed_payload_falls_back_to_generic(self) -> None:

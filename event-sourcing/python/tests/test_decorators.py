@@ -12,7 +12,7 @@ from event_sourcing import (
     get_event_type_registry,
 )
 from event_sourcing.decorators.commands import CommandDecoratorMetadata
-from event_sourcing.decorators.events import EventDecoratorMetadata, _EVENT_TYPE_REGISTRY
+from event_sourcing.decorators.events import _EVENT_TYPE_REGISTRY, EventDecoratorMetadata
 
 # ============================================================================
 # @event decorator tests

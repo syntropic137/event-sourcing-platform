@@ -175,11 +175,17 @@ export class EventSerializer {
       // ADR-023: Graceful fallback for unknown event types.
       // Return a generic event object with eventType preserved so
       // aggregate rehydration can still dispatch by type string.
+      const payloadData = eventData.data;
+      const payloadObject: JsonObject =
+        payloadData !== null && typeof payloadData === 'object' && !Array.isArray(payloadData)
+          ? (payloadData as JsonObject)
+          : {};
+
       const genericEvent: DomainEvent = {
+        ...(payloadObject as object),
         eventType,
         schemaVersion: Number(eventData.schemaVersion ?? 1),
-        toJson: () => (eventData.data ?? eventData) as JsonObject,
-        ...(eventData.data as object),
+        toJson: () => payloadObject,
       };
       return { event: genericEvent, metadata };
     }
