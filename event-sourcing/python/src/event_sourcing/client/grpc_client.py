@@ -307,6 +307,10 @@ class GrpcEventStoreClient:
         event_type_str = meta.event_type if meta.event_type else ""
         concrete_cls = resolve_event_type(event_type_str) if event_type_str else None
 
+        # Build GenericDomainEvent, removing any existing event_type key from the
+        # payload to avoid a duplicate-kwarg TypeError (older producers may include it).
+        cleaned = {k: v for k, v in payload_dict.items() if k != "event_type"}
+
         if concrete_cls is not None:
             try:
                 event: DomainEvent = concrete_cls.model_validate(payload_dict)
@@ -316,23 +320,11 @@ class GrpcEventStoreClient:
                     concrete_cls.__name__,
                     exc_info=True,
                 )
-                event = self._make_generic_event(payload_dict, event_type_str)
+                event = GenericDomainEvent(**cleaned, event_type=event_type_str) if event_type_str else GenericDomainEvent(**cleaned)
         else:
-            event = self._make_generic_event(payload_dict, event_type_str)
+            event = GenericDomainEvent(**cleaned, event_type=event_type_str) if event_type_str else GenericDomainEvent(**cleaned)
 
         return EventEnvelope(event=event, metadata=metadata)
-
-    @staticmethod
-    def _make_generic_event(
-        payload_dict: dict[str, object],  # OBJRATCHET: JSON payload from protobuf — field values are mixed types (str, int, float, bool, None, list, dict) with no shared base
-        event_type_str: str,
-    ) -> GenericDomainEvent:
-        """Build a GenericDomainEvent, handling payload that may already contain event_type."""
-        # Remove event_type from payload to avoid TypeError on duplicate kwarg
-        cleaned = {k: v for k, v in payload_dict.items() if k != "event_type"}
-        if event_type_str:
-            return GenericDomainEvent(**cleaned, event_type=event_type_str)
-        return GenericDomainEvent(**cleaned)
 
     async def read_all(
         self,
