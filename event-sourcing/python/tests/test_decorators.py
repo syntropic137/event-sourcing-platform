@@ -9,9 +9,10 @@ from event_sourcing import (
     event,
     get_command_metadata,
     get_event_metadata,
+    get_event_type_registry,
 )
 from event_sourcing.decorators.commands import CommandDecoratorMetadata
-from event_sourcing.decorators.events import EventDecoratorMetadata
+from event_sourcing.decorators.events import EventDecoratorMetadata, _EVENT_TYPE_REGISTRY
 
 # ============================================================================
 # @event decorator tests
@@ -109,6 +110,61 @@ class TestEventDecorator:
             @event("TaskCreated", "v1")
             class MismatchedEvent(DomainEvent):
                 event_type = "DifferentName"  # Mismatch!
+
+
+# ============================================================================
+# Event Type Registry tests (ADR-023)
+# ============================================================================
+
+
+class TestEventTypeRegistry:
+    """Tests for the global event type registry (ADR-023)."""
+
+    def test_event_decorator_registers_domain_event(self) -> None:
+        """@event should auto-register DomainEvent subclasses in the registry."""
+
+        @event("RegistryTestEvent", "v1")
+        class RegistryTestEvent(DomainEvent):
+            event_type = "RegistryTestEvent"
+            value: str
+
+        registry = get_event_type_registry()
+        assert "RegistryTestEvent" in registry
+        assert registry["RegistryTestEvent"] is RegistryTestEvent
+
+    def test_registry_returns_copy(self) -> None:
+        """get_event_type_registry() should return a copy, not the internal dict."""
+        registry1 = get_event_type_registry()
+        registry2 = get_event_type_registry()
+        assert registry1 is not registry2
+        assert registry1 is not _EVENT_TYPE_REGISTRY
+
+    def test_non_domain_event_not_registered(self) -> None:
+        """@event on a non-DomainEvent class should not register it."""
+
+        @event("PlainClassEvent", "v1")
+        class PlainClassEvent:
+            event_type = "PlainClassEvent"
+
+        registry = get_event_type_registry()
+        assert "PlainClassEvent" not in registry
+
+    def test_registry_overwrites_on_duplicate_event_type(self) -> None:
+        """A second @event with the same type should overwrite the first (versioning)."""
+
+        @event("OverwriteTestEvent", "v1")
+        class OverwriteTestEventV1(DomainEvent):
+            event_type = "OverwriteTestEvent"
+            value: str
+
+        @event("OverwriteTestEvent", "v2")
+        class OverwriteTestEventV2(DomainEvent):
+            event_type = "OverwriteTestEvent"
+            value: str
+            extra: str = ""
+
+        registry = get_event_type_registry()
+        assert registry["OverwriteTestEvent"] is OverwriteTestEventV2
 
 
 # ============================================================================

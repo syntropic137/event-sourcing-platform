@@ -216,6 +216,85 @@ class TestAggregateRoot:
         assert "No handler found" in caplog.text
 
 
+class TestAggregateRehydrationWithGenericEvents:
+    """Tests for aggregate rehydration with GenericDomainEvent (ADR-023 fallback).
+
+    Verifies the P0 fix: when events come from the gRPC client as
+    GenericDomainEvent with event_type preserved as an instance attribute,
+    aggregate rehydration should still dispatch to the correct handler.
+    """
+
+    def test_generic_event_with_event_type_dispatches_correctly(self) -> None:
+        """GenericDomainEvent with event_type attr should route to correct handler."""
+        from event_sourcing.core.event import EventFactory, GenericDomainEvent
+
+        # Simulate what _proto_to_envelope does for unknown events:
+        # GenericDomainEvent(**payload, event_type="TestEvent")
+        generic_event = GenericDomainEvent(value="from-generic", event_type="TestEvent")
+
+        # Verify event_type is accessible as instance attribute
+        assert hasattr(generic_event, "event_type")
+        assert generic_event.event_type == "TestEvent"
+
+        # Create envelope like the gRPC client would
+        envelope = EventFactory.create(
+            event=generic_event,
+            aggregate_id="test-456",
+            aggregate_type="TestAggregate",
+            aggregate_nonce=1,
+        )
+
+        # Rehydrate aggregate from this envelope
+        agg = TestAggregate()
+        agg.rehydrate([envelope])
+
+        # The handler should have been called despite the event being GenericDomainEvent
+        assert agg.value == "from-generic"
+        assert agg.version == 1
+
+    def test_concrete_event_dispatches_correctly(self) -> None:
+        """Concrete DomainEvent subclasses should dispatch as before."""
+        from event_sourcing.core.event import EventFactory
+
+        event = TestEvent(value="concrete-value")
+
+        envelope = EventFactory.create(
+            event=event,
+            aggregate_id="test-789",
+            aggregate_type="TestAggregate",
+            aggregate_nonce=1,
+        )
+
+        agg = TestAggregate()
+        agg.rehydrate([envelope])
+
+        assert agg.value == "concrete-value"
+        assert agg.version == 1
+
+    def test_generic_event_without_event_type_logs_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """GenericDomainEvent WITHOUT event_type falls back to class name → handler miss."""
+        from event_sourcing.core.event import EventFactory, GenericDomainEvent
+
+        # No event_type passed — will resolve to "GenericDomainEvent" class name
+        generic_event = GenericDomainEvent(value="no-type")
+
+        envelope = EventFactory.create(
+            event=generic_event,
+            aggregate_id="test-000",
+            aggregate_type="TestAggregate",
+            aggregate_nonce=1,
+        )
+
+        agg = TestAggregate()
+        agg.rehydrate([envelope])
+
+        # Handler should NOT have fired — "GenericDomainEvent" doesn't match any handler
+        assert agg.value == ""  # unchanged from default
+        assert "No handler found" in caplog.text
+
+
 class TestEventHandlerDecorator:
     """Tests for @event_sourcing_handler decorator."""
 

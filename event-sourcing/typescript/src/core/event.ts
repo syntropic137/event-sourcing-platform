@@ -172,7 +172,16 @@ export class EventSerializer {
     const EventClass = this.eventRegistry.get(eventType);
 
     if (!EventClass) {
-      throw new Error(`Unknown event type: ${eventType}`);
+      // ADR-023: Graceful fallback for unknown event types.
+      // Return a generic event object with eventType preserved so
+      // aggregate rehydration can still dispatch by type string.
+      const genericEvent: DomainEvent = {
+        eventType,
+        schemaVersion: Number(eventData.schemaVersion ?? 1),
+        toJson: () => (eventData.data ?? eventData) as JsonObject,
+        ...(eventData.data as object),
+      };
+      return { event: genericEvent, metadata };
     }
 
     // Create event instance and populate from data
@@ -369,6 +378,9 @@ export function Event(eventType: EventType, version: string) {
       eventType,
       version,
     };
+
+    // ADR-023: Auto-register in the event type registry for deserialization
+    EventSerializer.registerEvent(eventType, constructor as unknown as new () => DomainEvent);
 
     return constructor;
   };
