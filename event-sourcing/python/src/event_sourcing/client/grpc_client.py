@@ -324,7 +324,8 @@ class GrpcEventStoreClient:
 
     @staticmethod
     def _make_generic_event(
-        payload_dict: dict[str, object], event_type_str: str
+        payload_dict: dict[str, object],  # OBJRATCHET: JSON payload from protobuf — field values are mixed types (str, int, float, bool, None, list, dict) with no shared base
+        event_type_str: str,
     ) -> GenericDomainEvent:
         """Build a GenericDomainEvent, handling payload that may already contain event_type."""
         # Remove event_type from payload to avoid TypeError on duplicate kwarg
