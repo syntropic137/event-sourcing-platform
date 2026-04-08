@@ -37,7 +37,7 @@ class ProjectionResult(Enum):
 
     Example:
         async def handle_event(self, envelope, checkpoint_store) -> ProjectionResult:
-            if envelope.event.event_type not in self._handlers:
+            if envelope.metadata.event_type not in self._handlers:
                 return ProjectionResult.SKIP
 
             try:
@@ -432,7 +432,7 @@ class AutoDispatchProjection(CheckpointedProjection, ABC):
         checkpoint_store: "ProjectionCheckpointStore",
     ) -> "ProjectionResult":
         """Auto-dispatch to the matching on_* handler and save checkpoint."""
-        event_type = envelope.event.event_type
+        event_type = envelope.metadata.event_type or "Unknown"
         event_data = envelope.event.model_dump()
         global_nonce = envelope.metadata.global_nonce or 0
 
