@@ -79,6 +79,7 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 || [ADR-020](./ADR-020-bounded-context-aggregate-convention.md) | **Bounded Context & Aggregate Convention** | ✅ Accepted | **Defines aggregate_<name>/ folder convention, entity/VO rules, BC requirements** |
 | [ADR-021](./ADR-021-expected-version-and-set-based-validation.md) | ExpectedVersion & Set-Based Validation | ✅ Accepted | NoStream semantics, stream-per-unique-value pattern, StreamAlreadyExistsError |
 | [ADR-022](./ADR-022-strict-python-typing.md) | **Strict Python Typing Strategy** | ✅ Accepted | **Multi-layer type safety for Python SDK: pyright strict + ruff ANN401 + object ratchet** |
+| [ADR-023](./ADR-023-event-type-registry.md) | **Event Type Registry** | ✅ Accepted | **Global registry for resolving concrete event types from wire format — auto-populated by @event decorator** |
 
 ---
 
@@ -554,6 +555,7 @@ vsa validate --config vsa.yaml
 | 2025-12-22 | 2.0.0 | **Added ADR-019: Comprehensive VSA Standard Structure (canonical reference)** |
 | 2026-01-28 | 2.1.0 | **Updated ADR-015: Added Given-When-Then scenario testing (TypeScript + Python)** |
 || 2026-02-02 | 2.2.0 | **Added ADR-020: Bounded Context & Aggregate Convention (aggregate_<name>/ folders)** |
+| 2026-04-07 | 2.3.0 | **Added ADR-023: Event Type Registry (auto-populated by @event, resolves concrete types from wire format)** |
 
 ---
 

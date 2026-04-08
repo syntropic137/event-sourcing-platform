@@ -201,6 +201,22 @@ jobs:
       - name: Python SDK QA
         run: make -C event-sourcing/python qa
 
+      - name: Object ratchet — no increases allowed
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1
+          branch_max=$(grep 'OBJECT_RATCHET_MAX' event-sourcing/python/Makefile | grep -oE '[0-9]+')
+          base_max=$(git show origin/${{ github.base_ref }}:event-sourcing/python/Makefile \
+            | grep 'OBJECT_RATCHET_MAX' | grep -oE '[0-9]+')
+          echo "Base (${{ github.base_ref }}): ${base_max}  PR branch: ${branch_max}"
+          if [ "$branch_max" -gt "$base_max" ]; then
+            echo "❌ OBJECT_RATCHET_MAX increased from ${base_max} → ${branch_max}."
+            echo "The ratchet only goes down. Replace object annotations with concrete types."
+            echo "See ADR-022: docs/adrs/ADR-022-strict-python-typing.md"
+            exit 1
+          fi
+          echo "✅ Ratchet not increased (${branch_max} ≤ ${base_max})"
+
   examples_test:
     name: Examples • build & smoke test
     runs-on: ubuntu-latest

@@ -25,6 +25,7 @@ from event_sourcing.core.event import (
     EventMetadata,
     GenericDomainEvent,
 )
+from event_sourcing.decorators.events import resolve_event_type
 from event_sourcing.proto.eventstore.v1 import eventstore_pb2, eventstore_pb2_grpc
 
 logger = logging.getLogger(__name__)
@@ -282,7 +283,10 @@ class GrpcEventStoreClient:
         # Deserialize payload from JSON
         payload_dict = json.loads(event_data.payload.decode("utf-8"))
 
-        # Create metadata
+        # Create metadata — event_type lives here, not in the payload.
+        # Injecting it into the payload caused ValidationError when downstream
+        # code called model_validate() on concrete DomainEvent subclasses
+        # (which use extra="forbid").
         metadata = EventMetadata(
             event_id=meta.event_id,
             aggregate_id=meta.aggregate_id,
@@ -292,12 +296,33 @@ class GrpcEventStoreClient:
             causation_id=meta.causation_id if meta.causation_id else None,
             actor_id=meta.actor_id if meta.actor_id else None,
             global_nonce=meta.global_nonce if meta.global_nonce > 0 else None,
+            event_type=meta.event_type if meta.event_type else None,
         )
 
-        # Create a generic event dict (will be deserialized by the repository)
-        # Add event_type from metadata for projection dispatching
-        payload_dict["event_type"] = meta.event_type if meta.event_type else "Unknown"
-        event = GenericDomainEvent(**payload_dict)
+        # ADR-023: Consult the event type registry to resolve concrete types.
+        # If the event type was registered via @event decorator, deserialize
+        # into the concrete class. Otherwise fall back to GenericDomainEvent
+        # with event_type preserved as an instance attribute so aggregate
+        # rehydration can still route to the correct handler.
+        event_type_str = meta.event_type if meta.event_type else ""
+        concrete_cls = resolve_event_type(event_type_str) if event_type_str else None
+
+        # Build GenericDomainEvent, removing any existing event_type key from the
+        # payload to avoid a duplicate-kwarg TypeError (older producers may include it).
+        cleaned = {k: v for k, v in payload_dict.items() if k != "event_type"}
+
+        if concrete_cls is not None:
+            try:
+                event: DomainEvent = concrete_cls.model_validate(cleaned)
+            except Exception:
+                logger.debug(
+                    "Failed to deserialize as %s, falling back to GenericDomainEvent",
+                    concrete_cls.__name__,
+                    exc_info=True,
+                )
+                event = GenericDomainEvent(**cleaned, event_type=event_type_str) if event_type_str else GenericDomainEvent(**cleaned)
+        else:
+            event = GenericDomainEvent(**cleaned, event_type=event_type_str) if event_type_str else GenericDomainEvent(**cleaned)
 
         return EventEnvelope(event=event, metadata=metadata)
 
