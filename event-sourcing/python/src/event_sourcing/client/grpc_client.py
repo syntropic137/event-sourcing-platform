@@ -313,7 +313,7 @@ class GrpcEventStoreClient:
 
         if concrete_cls is not None:
             try:
-                event: DomainEvent = concrete_cls.model_validate(payload_dict)
+                event: DomainEvent = concrete_cls.model_validate(cleaned)
             except Exception:
                 logger.debug(
                     "Failed to deserialize as %s, falling back to GenericDomainEvent",

@@ -55,20 +55,26 @@ def get_event_type_registry() -> dict[str, type[DomainEvent]]:
     return dict(_EVENT_TYPE_REGISTRY)
 ```
 
-In `@event` decorator:
+In `@event` decorator (via `_try_register_event_type()`):
 ```python
-if isinstance(cls, type) and issubclass(cls, DomainEvent):
-    _EVENT_TYPE_REGISTRY[event_type] = cls
+try:
+    if issubclass(cls, DomainEvent):
+        _EVENT_TYPE_REGISTRY[event_type] = cls
+except TypeError:
+    pass  # Guard: issubclass() raises if cls is not a class
 ```
 
 In `GrpcEventStoreClient._proto_to_envelope()`:
 ```python
-registry = get_event_type_registry()
-concrete_cls = registry.get(event_type_str)
+concrete_cls = resolve_event_type(event_type_str)
+cleaned = {k: v for k, v in payload_dict.items() if k != "event_type"}
 if concrete_cls is not None:
-    event = concrete_cls.model_validate(payload_dict)
+    try:
+        event = concrete_cls.model_validate(cleaned)  # strip event_type to avoid extra="forbid" clash
+    except Exception:
+        event = GenericDomainEvent(**cleaned, event_type=event_type_str)
 else:
-    event = GenericDomainEvent(**payload_dict, event_type=event_type_str)
+    event = GenericDomainEvent(**cleaned, event_type=event_type_str)
 ```
 
 ### TypeScript SDK

@@ -369,7 +369,7 @@ function isValidEventVersion(version: string): boolean {
  * @see ADR-010: Decorator Patterns for Framework Integration
  */
 export function Event(eventType: EventType, version: string) {
-  return function <T extends new (...args: any[]) => any>(constructor: T): T {
+  return function <T extends new (...args: any[]) => DomainEvent>(constructor: T): T {
     // Validate version format
     if (!isValidEventVersion(version)) {
       throw new Error(

@@ -126,8 +126,11 @@ def _is_valid_event_version(version: str) -> bool:
 
 def _try_register_event_type(event_type: str, cls: type) -> None:
     """Register cls in the event type registry if it's a DomainEvent subclass."""
-    if issubclass(cls, DomainEvent):
-        _EVENT_TYPE_REGISTRY[event_type] = cls
+    try:
+        if issubclass(cls, DomainEvent):
+            _EVENT_TYPE_REGISTRY[event_type] = cls
+    except TypeError:
+        pass
 
 
 def event(event_type: str, version: str) -> Callable[[T], T]:

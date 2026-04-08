@@ -12,7 +12,7 @@ from event_sourcing import (
     get_event_type_registry,
 )
 from event_sourcing.decorators.commands import CommandDecoratorMetadata
-from event_sourcing.decorators.events import _EVENT_TYPE_REGISTRY, EventDecoratorMetadata
+from event_sourcing.decorators.events import EventDecoratorMetadata
 
 # ============================================================================
 # @event decorator tests
@@ -135,9 +135,10 @@ class TestEventTypeRegistry:
     def test_registry_returns_copy(self) -> None:
         """get_event_type_registry() should return a copy, not the internal dict."""
         registry1 = get_event_type_registry()
+        # Mutating the returned copy must not affect subsequent calls
+        registry1["__poison__"] = type("Fake", (), {})  # type: ignore[assignment]
         registry2 = get_event_type_registry()
-        assert registry1 is not registry2
-        assert registry1 is not _EVENT_TYPE_REGISTRY
+        assert "__poison__" not in registry2
 
     def test_non_domain_event_not_registered(self) -> None:
         """@event on a non-DomainEvent class should not register it."""
