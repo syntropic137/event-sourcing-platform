@@ -282,7 +282,10 @@ class GrpcEventStoreClient:
         # Deserialize payload from JSON
         payload_dict = json.loads(event_data.payload.decode("utf-8"))
 
-        # Create metadata
+        # Create metadata — event_type lives here, not in the payload.
+        # Injecting it into the payload caused ValidationError when downstream
+        # code called model_validate() on concrete DomainEvent subclasses
+        # (which use extra="forbid").
         metadata = EventMetadata(
             event_id=meta.event_id,
             aggregate_id=meta.aggregate_id,
@@ -292,11 +295,9 @@ class GrpcEventStoreClient:
             causation_id=meta.causation_id if meta.causation_id else None,
             actor_id=meta.actor_id if meta.actor_id else None,
             global_nonce=meta.global_nonce if meta.global_nonce > 0 else None,
+            event_type=meta.event_type if meta.event_type else None,
         )
 
-        # Create a generic event dict (will be deserialized by the repository)
-        # Add event_type from metadata for projection dispatching
-        payload_dict["event_type"] = meta.event_type if meta.event_type else "Unknown"
         event = GenericDomainEvent(**payload_dict)
 
         return EventEnvelope(event=event, metadata=metadata)
