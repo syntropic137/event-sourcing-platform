@@ -30,26 +30,29 @@ describe('EventSerializer edge cases', () => {
     expect(deserialised.metadata.aggregateNonce).toBe(1);
   });
 
-  it('throws when deserialising an unregistered event type', () => {
-    expect(() =>
-      EventSerializer.deserialize({
-        event: {
-          eventType: 'UnknownEvent',
-          schemaVersion: 1,
-          data: {},
-        },
-        metadata: {
-          eventId: 'evt-1',
-          timestamp: new Date().toISOString(),
-          recordedTimestamp: new Date().toISOString(),
-          aggregateVersion: 1,
-          aggregateId: 'agg-unknown',
-          aggregateType: 'Unknown',
-          contentType: 'application/json',
-          headers: {},
-          customMetadata: {},
-        },
-      })
-    ).toThrow('Unknown event type: UnknownEvent');
+  it('returns generic event with eventType preserved for unregistered types (ADR-023)', () => {
+    const result = EventSerializer.deserialize({
+      event: {
+        eventType: 'UnknownEvent',
+        schemaVersion: 1,
+        data: { someField: 'someValue' },
+      },
+      metadata: {
+        eventId: 'evt-1',
+        timestamp: new Date().toISOString(),
+        recordedTimestamp: new Date().toISOString(),
+        aggregateVersion: 1,
+        aggregateId: 'agg-unknown',
+        aggregateType: 'Unknown',
+        contentType: 'application/json',
+        headers: {},
+        customMetadata: {},
+      },
+    });
+
+    // Should return a generic event with eventType preserved (not throw)
+    expect(result.event.eventType).toBe('UnknownEvent');
+    expect(result.event.schemaVersion).toBe(1);
+    expect(result.metadata.aggregateId).toBe('agg-unknown');
   });
 });

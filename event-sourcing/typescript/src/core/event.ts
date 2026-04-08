@@ -172,7 +172,22 @@ export class EventSerializer {
     const EventClass = this.eventRegistry.get(eventType);
 
     if (!EventClass) {
-      throw new Error(`Unknown event type: ${eventType}`);
+      // ADR-023: Graceful fallback for unknown event types.
+      // Return a generic event object with eventType preserved so
+      // aggregate rehydration can still dispatch by type string.
+      const payloadData = eventData.data;
+      const payloadObject: JsonObject =
+        payloadData !== null && typeof payloadData === 'object' && !Array.isArray(payloadData)
+          ? (payloadData as JsonObject)
+          : {};
+
+      const genericEvent: DomainEvent = {
+        ...(payloadObject as object),
+        eventType,
+        schemaVersion: Number(eventData.schemaVersion ?? 1),
+        toJson: () => payloadObject,
+      };
+      return { event: genericEvent, metadata };
     }
 
     // Create event instance and populate from data
@@ -354,7 +369,7 @@ function isValidEventVersion(version: string): boolean {
  * @see ADR-010: Decorator Patterns for Framework Integration
  */
 export function Event(eventType: EventType, version: string) {
-  return function <T extends new (...args: any[]) => any>(constructor: T): T {
+  return function <T extends new (...args: any[]) => DomainEvent>(constructor: T): T {
     // Validate version format
     if (!isValidEventVersion(version)) {
       throw new Error(
@@ -369,6 +384,9 @@ export function Event(eventType: EventType, version: string) {
       eventType,
       version,
     };
+
+    // ADR-023: Auto-register in the event type registry for deserialization
+    EventSerializer.registerEvent(eventType, constructor as unknown as new () => DomainEvent);
 
     return constructor;
   };

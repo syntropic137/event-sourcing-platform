@@ -6,8 +6,45 @@ import re
 from collections.abc import Callable
 from typing import TypeVar
 
+from event_sourcing.core.event import DomainEvent
+
 F = TypeVar("F", bound=Callable[..., object])  # OBJRATCHET: decorator preserves any callable signature
 T = TypeVar("T", bound=type)
+
+# ============================================================================
+# EVENT TYPE REGISTRY (ADR-023)
+# ============================================================================
+
+# Global registry mapping event_type strings to concrete DomainEvent subclasses.
+# Populated automatically by the @event decorator at import time.
+# Consulted by GrpcEventStoreClient._proto_to_envelope() to resolve concrete
+# types from the wire format instead of always falling back to GenericDomainEvent.
+_EVENT_TYPE_REGISTRY: dict[str, type[DomainEvent]] = {}
+
+
+def get_event_type_registry() -> dict[str, type[DomainEvent]]:
+    """Return the global event type registry (read-only snapshot).
+
+    The registry maps event type strings (e.g. ``"WorkflowCreated"``) to their
+    concrete ``DomainEvent`` subclass.  Populated automatically by ``@event``.
+
+    Returns:
+        A copy of the registry dict.
+    """
+    return dict(_EVENT_TYPE_REGISTRY)
+
+
+def resolve_event_type(event_type: str) -> type[DomainEvent] | None:
+    """Look up a concrete DomainEvent class by event type string.
+
+    Unlike ``get_event_type_registry()`` this does not copy the registry,
+    making it suitable for hot-path lookups (e.g. per-event in gRPC client).
+
+    Returns:
+        The registered class, or ``None`` if not found.
+    """
+    return _EVENT_TYPE_REGISTRY.get(event_type)
+
 
 # ============================================================================
 # EVENT HANDLER DECORATOR (for aggregate methods)
@@ -87,6 +124,15 @@ def _is_valid_event_version(version: str) -> bool:
     return False
 
 
+def _try_register_event_type(event_type: str, cls: type) -> None:
+    """Register cls in the event type registry if it's a DomainEvent subclass."""
+    try:
+        if issubclass(cls, DomainEvent):
+            _EVENT_TYPE_REGISTRY[event_type] = cls
+    except TypeError:
+        pass
+
+
 def event(event_type: str, version: str) -> Callable[[T], T]:
     """
     Decorator for event classes to store metadata about event type and version.
@@ -145,6 +191,11 @@ def event(event_type: str, version: str) -> Callable[[T], T]:
             )
             raise ValueError(msg)
         cls.event_type = event_type
+
+        # Auto-register in the global event type registry (ADR-023).
+        # Only register DomainEvent subclasses — non-domain classes
+        # decorated with @event (e.g. for VSA metadata only) are skipped.
+        _try_register_event_type(event_type, cls)
 
         return cls
 

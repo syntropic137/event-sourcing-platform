@@ -25,6 +25,7 @@ from event_sourcing.core.event import (
     EventMetadata,
     GenericDomainEvent,
 )
+from event_sourcing.decorators.events import resolve_event_type
 from event_sourcing.proto.eventstore.v1 import eventstore_pb2, eventstore_pb2_grpc
 
 logger = logging.getLogger(__name__)
@@ -298,7 +299,30 @@ class GrpcEventStoreClient:
             event_type=meta.event_type if meta.event_type else None,
         )
 
-        event = GenericDomainEvent(**payload_dict)
+        # ADR-023: Consult the event type registry to resolve concrete types.
+        # If the event type was registered via @event decorator, deserialize
+        # into the concrete class. Otherwise fall back to GenericDomainEvent
+        # with event_type preserved as an instance attribute so aggregate
+        # rehydration can still route to the correct handler.
+        event_type_str = meta.event_type if meta.event_type else ""
+        concrete_cls = resolve_event_type(event_type_str) if event_type_str else None
+
+        # Build GenericDomainEvent, removing any existing event_type key from the
+        # payload to avoid a duplicate-kwarg TypeError (older producers may include it).
+        cleaned = {k: v for k, v in payload_dict.items() if k != "event_type"}
+
+        if concrete_cls is not None:
+            try:
+                event: DomainEvent = concrete_cls.model_validate(cleaned)
+            except Exception:
+                logger.debug(
+                    "Failed to deserialize as %s, falling back to GenericDomainEvent",
+                    concrete_cls.__name__,
+                    exc_info=True,
+                )
+                event = GenericDomainEvent(**cleaned, event_type=event_type_str) if event_type_str else GenericDomainEvent(**cleaned)
+        else:
+            event = GenericDomainEvent(**cleaned, event_type=event_type_str) if event_type_str else GenericDomainEvent(**cleaned)
 
         return EventEnvelope(event=event, metadata=metadata)
 

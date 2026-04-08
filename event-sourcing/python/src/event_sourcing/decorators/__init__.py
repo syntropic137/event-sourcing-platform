@@ -12,6 +12,8 @@ from event_sourcing.decorators.events import (
     event,
     event_sourcing_handler,
     get_event_metadata,
+    get_event_type_registry,
+    resolve_event_type,
 )
 
 __all__ = [
@@ -27,4 +29,6 @@ __all__ = [
     "EventDecoratorMetadata",
     "get_command_metadata",
     "get_event_metadata",
+    "get_event_type_registry",
+    "resolve_event_type",
 ]
