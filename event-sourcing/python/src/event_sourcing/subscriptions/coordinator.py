@@ -272,7 +272,7 @@ class SubscriptionCoordinator:
         Args:
             envelope: Event envelope to dispatch
         """
-        event_type = envelope.event.event_type
+        event_type = envelope.metadata.event_type or "Unknown"
         global_nonce = envelope.metadata.global_nonce or 0
 
         for name, projection in self._projections.items():
@@ -304,7 +304,7 @@ class SubscriptionCoordinator:
             envelope: Event envelope to dispatch
         """
         name = projection.get_name()
-        event_type = envelope.event.event_type
+        event_type = envelope.metadata.event_type or "Unknown"
         global_nonce = envelope.metadata.global_nonce or 0
 
         try:

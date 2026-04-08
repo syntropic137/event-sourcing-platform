@@ -108,6 +108,7 @@ class EventMetadata(BaseModel):
     causation_id: str | None = None
     actor_id: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
+    event_type: str | None = None  # From proto EventMeta.event_type — used for projection dispatch
     payload_hash: str | None = None
     custom_metadata: dict[str, str] = Field(default_factory=dict)
 

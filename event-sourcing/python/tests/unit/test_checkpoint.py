@@ -345,6 +345,7 @@ def _make_envelope(
             aggregate_type="TestAggregate",
             aggregate_nonce=1,
             global_nonce=global_nonce,
+            event_type=event.event_type,
         ),
     )
 
