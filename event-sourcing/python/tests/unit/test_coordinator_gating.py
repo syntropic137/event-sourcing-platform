@@ -9,7 +9,6 @@ Verifies that the SubscriptionCoordinator:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
@@ -23,10 +22,6 @@ from event_sourcing.core.event import DomainEvent, EventEnvelope, EventMetadata
 from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.stores.memory_checkpoint import MemoryCheckpointStore
 from event_sourcing.subscriptions.coordinator import SubscriptionCoordinator
-
-if TYPE_CHECKING:
-    pass
-
 
 # ============================================================================
 # Test Fixtures
@@ -66,8 +61,9 @@ class StubProjection:
     ) -> ProjectionResult:
         self.received_contexts.append(context)
         # Save checkpoint to prevent "already processed" skips
-        from event_sourcing.core.checkpoint import ProjectionCheckpoint
         from datetime import UTC, datetime
+
+        from event_sourcing.core.checkpoint import ProjectionCheckpoint
 
         await checkpoint_store.save_checkpoint(
             ProjectionCheckpoint(
@@ -107,8 +103,9 @@ class StubProcessManager(ProcessManager):
         context: DispatchContext | None = None,
     ) -> ProjectionResult:
         self.handle_event_calls += 1
-        from event_sourcing.core.checkpoint import ProjectionCheckpoint
         from datetime import UTC, datetime
+
+        from event_sourcing.core.checkpoint import ProjectionCheckpoint
 
         await checkpoint_store.save_checkpoint(
             ProjectionCheckpoint(
@@ -305,7 +302,6 @@ class TestProcessManagerGating:
     async def test_process_pending_exception_does_not_crash_coordinator(self) -> None:
         """If process_pending() raises, coordinator should log and continue."""
         pm = StubProcessManager("pm1")
-        original = pm.process_pending
 
         async def _exploding_process_pending() -> int:
             raise RuntimeError("Kaboom!")

@@ -13,7 +13,6 @@ from event_sourcing.core.checkpoint import (
 from event_sourcing.core.event import DomainEvent, EventEnvelope, EventMetadata
 from event_sourcing.core.process_manager import ProcessManager
 
-
 # ============================================================================
 # Test Events
 # ============================================================================

@@ -31,9 +31,12 @@ Usage::
 from __future__ import annotations
 
 import ast
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from event_sourcing.fitness.violations import Violation
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # Default allowed module prefixes for projections.
 # These are pure stdlib modules and the ESP framework itself.
@@ -122,6 +125,9 @@ def check_projection_purity(
 
         elif isinstance(node, ast.ImportFrom):
             if node.module is None:
+                continue
+            # Relative imports (level > 0) are intra-package and always allowed
+            if node.level and node.level > 0:
                 continue
             if _in_type_checking_block(node.lineno, type_checking_lines):
                 continue

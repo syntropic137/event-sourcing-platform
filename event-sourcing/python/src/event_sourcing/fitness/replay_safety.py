@@ -15,6 +15,7 @@ Usage::
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
@@ -22,7 +23,6 @@ from event_sourcing.fitness.violations import Violation
 
 if TYPE_CHECKING:
     from event_sourcing.core.event import DomainEvent, EventEnvelope
-    from event_sourcing.core.process_manager import ProcessManager
     from event_sourcing.subscriptions.coordinator import SubscriptionCoordinator
 
 
@@ -64,9 +64,15 @@ class ReplaySafetyChecker:
                 spy = AsyncMock(return_value=0)
                 spies[name] = spy
 
-        # Force catch-up mode
+        # Force catch-up mode and prevent the catch-up -> live transition.
+        # Setting _is_catching_up = True alone is insufficient because
+        # _dispatch_event() flips it to live when global_nonce exceeds
+        # _live_boundary_nonce. Pin the boundary to sys.maxsize so the
+        # transition never fires during the check.
         original_catching_up = self._coordinator._is_catching_up
+        original_boundary = self._coordinator._live_boundary_nonce
         self._coordinator._is_catching_up = True
+        self._coordinator._live_boundary_nonce = sys.maxsize
 
         try:
             for name, spy in spies.items():
@@ -91,5 +97,6 @@ class ReplaySafetyChecker:
                     )
         finally:
             self._coordinator._is_catching_up = original_catching_up
+            self._coordinator._live_boundary_nonce = original_boundary
 
         return violations

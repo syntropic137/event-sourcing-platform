@@ -8,8 +8,8 @@ Tests cover:
 
 from __future__ import annotations
 
-from pathlib import Path
 from textwrap import dedent
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -27,6 +27,8 @@ from event_sourcing.fitness.projection_purity import (
 )
 from event_sourcing.fitness.violations import Violation
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ============================================================================
 # Violation Tests

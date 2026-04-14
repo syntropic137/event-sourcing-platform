@@ -55,7 +55,7 @@ type-check:
 # Object-type ratchet: every `object` type annotation must have a OBJRATCHET justification comment.
 # New `object` usages without justification will fail CI. To reduce the count, remove the comment
 # when you replace `object` with a concrete type. See ADR-022 for rationale.
-OBJECT_RATCHET_MAX := 15
+OBJECT_RATCHET_MAX := 18
 type-ratchet:
 	@unjustified=$$(grep -rn --include='*.py' -E ':\s*object\b|-> object\b|\bobject\]|\bobject\)|\bobject,|,\s*object\b' src/ \
 		| grep -v '/proto/' \

@@ -76,6 +76,8 @@ impl ImportParser for PythonImportParser {
 
     fn parse_source(&self, source: &str) -> Vec<ImportStatement> {
         let mut imports = Vec::new();
+        let mut in_type_checking_block = false;
+        let mut type_checking_indent: Option<usize> = None;
 
         for (line_num, line) in source.lines().enumerate() {
             let trimmed = line.trim();
@@ -83,6 +85,32 @@ impl ImportParser for PythonImportParser {
             // Skip comments and empty lines
             if trimmed.starts_with('#') || trimmed.is_empty() {
                 continue;
+            }
+
+            // Detect `if TYPE_CHECKING:` blocks
+            if trimmed == "if TYPE_CHECKING:"
+                || trimmed == "if typing.TYPE_CHECKING:"
+            {
+                in_type_checking_block = true;
+                // Record the indentation level of the `if` statement
+                let indent = line.len() - line.trim_start().len();
+                type_checking_indent = Some(indent);
+                continue;
+            }
+
+            // If inside a TYPE_CHECKING block, check if we've dedented back out
+            if in_type_checking_block {
+                if let Some(base_indent) = type_checking_indent {
+                    let current_indent = line.len() - line.trim_start().len();
+                    if current_indent <= base_indent {
+                        // We've left the TYPE_CHECKING block
+                        in_type_checking_block = false;
+                        type_checking_indent = None;
+                    } else {
+                        // Still inside TYPE_CHECKING - skip this import
+                        continue;
+                    }
+                }
             }
 
             // Check for import statements

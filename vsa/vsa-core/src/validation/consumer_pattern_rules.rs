@@ -21,7 +21,7 @@ use std::collections::HashSet;
 
 /// Default allowed module prefixes for projections.
 /// Matches event_sourcing.fitness.projection_purity.PROJECTION_ALLOWED_PREFIXES.
-fn default_projection_allowed_prefixes() -> HashSet<&'static str> {
+fn default_projection_allowed_prefixes() -> HashSet<String> {
     [
         // Python stdlib (pure, no side effects)
         "__future__",
@@ -43,13 +43,14 @@ fn default_projection_allowed_prefixes() -> HashSet<&'static str> {
         "event_sourcing",
     ]
     .into_iter()
+    .map(String::from)
     .collect()
 }
 
 /// Check if a module name matches any allowed prefix.
-fn is_allowed_import(module: &str, allowed: &HashSet<&str>) -> bool {
+fn is_allowed_import(module: &str, allowed: &HashSet<String>) -> bool {
     for prefix in allowed {
-        if module == *prefix || module.starts_with(&format!("{}.", prefix)) {
+        if module == prefix.as_str() || module.starts_with(&format!("{}.", prefix)) {
             return true;
         }
     }
@@ -65,8 +66,8 @@ fn is_allowed_import(module: &str, allowed: &HashSet<&str>) -> bool {
 ///
 /// Uses a whitelist approach (CSP-style default-deny). Any runtime import
 /// whose top-level module is not in the allowed set is a violation.
-/// Imports inside `if TYPE_CHECKING:` blocks are not checked by the
-/// line-based parser, so they pass through safely.
+/// Imports inside `if TYPE_CHECKING:` blocks are excluded by the
+/// line-based parser via indentation-based block detection.
 ///
 /// The rule scans for Python files in `slices/` directories that have
 /// "projection" in their filename or path, checking their imports against
@@ -98,8 +99,7 @@ impl ValidationRule for ProjectionPurityRule {
         // Add project-specific allowed prefixes from config
         if let Some(ref extra) = ctx.config.projection_allowed_prefixes {
             for prefix in extra {
-                // Leak to get 'static lifetime - these live for the duration of validation
-                allowed.insert(Box::leak(prefix.clone().into_boxed_str()));
+                allowed.insert(prefix.clone());
             }
         }
 

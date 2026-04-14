@@ -11,7 +11,6 @@ from event_sourcing.core.checkpoint import (
 from event_sourcing.core.event import DomainEvent, EventEnvelope
 from event_sourcing.core.process_manager import ProcessManager
 
-
 # ============================================================================
 # DispatchContext Tests
 # ============================================================================

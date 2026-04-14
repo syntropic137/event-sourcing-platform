@@ -7,8 +7,12 @@ required methods and have ``SIDE_EFFECTS_ALLOWED = True``.
 
 from __future__ import annotations
 
-from event_sourcing.core.process_manager import ProcessManager
+from typing import TYPE_CHECKING
+
 from event_sourcing.fitness.violations import Violation
+
+if TYPE_CHECKING:
+    from event_sourcing.core.process_manager import ProcessManager
 
 
 def check_process_manager(cls: type[ProcessManager]) -> list[Violation]:
@@ -65,7 +69,7 @@ def check_process_manager(cls: type[ProcessManager]) -> list[Violation]:
     return violations
 
 
-def _get_source_file(cls: type[object]) -> str:
+def _get_source_file(cls: type[object]) -> str:  # OBJRATCHET: accepts any class type
     """Best-effort source file path for a class."""
     import inspect
 
