@@ -38,7 +38,8 @@ impl ValidationRuleSet {
             ApplicationIsolationRule, ContextBoundariesRule, DomainPurityRule, EventsIsolationRule,
             IntegrationEventNamingRule, IntegrationEventsLocationRule, NoCircularDependenciesRule,
             NoCrossSliceImportsRule, NoDuplicateIntegrationEventsRule, PortIsolationRule,
-            ProjectionEventSubscriptionRule, RequireAggregatesInDomainRootRule,
+            ProcessManagerStructureRule, ProjectionEventSubscriptionRule,
+            ProjectionPurityRule, RequireAggregatesInDomainRootRule,
             RequireBusesInInfrastructureRule, RequireCommandsInDomainRule,
             RequireEventsInDomainRule, RequireHandlerForQueryRule, RequirePortSuffixRule,
             RequirePortsInPortsFolderRule, RequireProjectionForQueryRule, RequireSharedFolderRule,
@@ -82,6 +83,9 @@ impl ValidationRuleSet {
             Box::new(PortIsolationRule), // VSA029: Port isolation (domain/events only)
             Box::new(ApplicationIsolationRule), // VSA030: Application isolation (no infra/slices)
             Box::new(SliceIsolationRule), // VSA031: Slice isolation (no cross-slice)
+            // Consumer pattern rules (ADR-025)
+            Box::new(ProjectionPurityRule),          // VSA032: Projection purity (whitelist)
+            Box::new(ProcessManagerStructureRule),    // VSA033: ProcessManager structure
             // Slice isolation rules (legacy)
             Box::new(NoCrossSliceImportsRule),
             Box::new(ThinAdapterRule),

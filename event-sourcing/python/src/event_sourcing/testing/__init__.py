@@ -6,9 +6,10 @@ Each tool addresses a specific testing concern unique to event sourcing.
 
 Tools:
     - scenario(): Given-When-Then command testing
+    - ProcessManagerScenario: Test projection side of ProcessManagers
+    - IdempotencyVerifier: Verify process_pending() is idempotent
     - ReplayTester: Golden replay state verification (TODO)
     - InvariantChecker: Business rule verification (TODO)
-    - ProjectionTester: Read model testing (TODO)
 
 Example:
     >>> from event_sourcing.testing import scenario
@@ -24,6 +25,11 @@ Example:
     ...     ])
 """
 
+from event_sourcing.testing.process_manager_scenario import (
+    IdempotencyResult,
+    IdempotencyVerifier,
+    ProcessManagerScenario,
+)
 from event_sourcing.testing.scenario import (
     AggregateScenario,
     ResultValidator,
@@ -41,4 +47,8 @@ __all__ = [
     "ResultValidator",
     "ScenarioAssertionError",
     "ScenarioExecutionError",
+    # ProcessManager testing
+    "ProcessManagerScenario",
+    "IdempotencyVerifier",
+    "IdempotencyResult",
 ]

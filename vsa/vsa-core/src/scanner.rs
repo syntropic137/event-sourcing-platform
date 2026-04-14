@@ -171,6 +171,7 @@ mod tests {
             contexts: HashMap::new(),
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
+            projection_allowed_prefixes: None,
         }
     }
 

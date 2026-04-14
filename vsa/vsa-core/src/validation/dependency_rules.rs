@@ -640,6 +640,7 @@ mod tests {
             contexts: HashMap::new(),
             validation: crate::config::ValidationConfig::default(),
             patterns: crate::config::PatternsConfig::default(),
+            projection_allowed_prefixes: None,
         };
         let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
         (temp_dir, ctx)
@@ -1002,6 +1003,7 @@ mod tests {
             contexts: HashMap::new(),
             validation: crate::config::ValidationConfig::default(),
             patterns: crate::config::PatternsConfig::default(),
+            projection_allowed_prefixes: None,
         };
         config.validation.exclude_from_isolation =
             vec!["list_repos".to_string()];
@@ -1048,6 +1050,7 @@ mod tests {
             contexts: HashMap::new(),
             validation: crate::config::ValidationConfig::default(),
             patterns: crate::config::PatternsConfig::default(),
+            projection_allowed_prefixes: None,
         };
         // Exclude list_repos but NOT other_slice
         config.validation.exclude_from_isolation =

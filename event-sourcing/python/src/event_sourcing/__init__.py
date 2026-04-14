@@ -13,6 +13,7 @@ from event_sourcing.client import (
     MemoryEventStoreClient,
 )
 from event_sourcing.core.aggregate import AggregateRoot, BaseAggregate
+from event_sourcing.core.checkpoint import DispatchContext
 from event_sourcing.core.command import Command, CommandBus, CommandHandler, InMemoryCommandBus
 from event_sourcing.core.errors import (
     AggregateNotFoundError,
@@ -30,6 +31,7 @@ from event_sourcing.core.event import (
     GenericDomainEvent,
 )
 from event_sourcing.core.expected_version import ExpectedVersion
+from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.core.projection import (
     AutoDispatchProjection,
     CheckpointedProjection,
@@ -82,9 +84,12 @@ __all__ = [
     # Projections (ADR-014 Checkpoint Architecture)
     "AutoDispatchProjection",
     "CheckpointedProjection",
+    "DispatchContext",
     "ProjectionCheckpoint",
     "ProjectionCheckpointStore",
     "ProjectionResult",
+    # Process Manager (To-Do List pattern)
+    "ProcessManager",
     # Checkpoint Stores
     "PostgresCheckpointStore",
     "MemoryCheckpointStore",
