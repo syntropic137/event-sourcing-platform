@@ -454,6 +454,51 @@ from domain.WorkflowAggregate import WorkflowAggregate
         assert_eq!(imports[0].module, "domain.WorkflowAggregate");
     }
 
+    #[test]
+    fn test_python_type_checking_block_excluded() {
+        let parser = PythonImportParser::new();
+        let source = r#"
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from event_sourcing.core.checkpoint import CheckpointedProjection
+
+if TYPE_CHECKING:
+    from httpx import AsyncClient
+    from boto3 import Session
+
+from datetime import datetime
+"#;
+        let imports = parser.parse_source(source);
+
+        // Should have 4 imports: __future__, typing, event_sourcing, datetime
+        // httpx and boto3 are inside TYPE_CHECKING and should be excluded
+        assert_eq!(imports.len(), 4);
+        assert_eq!(imports[0].module, "__future__");
+        assert_eq!(imports[1].module, "typing");
+        assert_eq!(imports[2].module, "event_sourcing.core.checkpoint");
+        assert_eq!(imports[3].module, "datetime");
+    }
+
+    #[test]
+    fn test_python_type_checking_block_with_typing_prefix() {
+        let parser = PythonImportParser::new();
+        let source = r#"
+import typing
+
+if typing.TYPE_CHECKING:
+    from httpx import AsyncClient
+
+from uuid import uuid4
+"#;
+        let imports = parser.parse_source(source);
+
+        assert_eq!(imports.len(), 2);
+        assert_eq!(imports[0].module, "typing");
+        assert_eq!(imports[1].module, "uuid");
+    }
+
     // ========================================================================
     // TYPESCRIPT IMPORT PARSER TESTS
     // ========================================================================

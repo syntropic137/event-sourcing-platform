@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol, TypedDict
 
@@ -221,8 +222,11 @@ class SubscriptionCoordinator:
         # This is the durable catch-up/live boundary: events with
         # global_nonce <= this value were already in the store when we
         # subscribed and are historical. Events above are live.
+        # Read backwards from the highest possible nonce to get the head event.
+        # from_global_nonce is inclusive: backwards reads return events with
+        # global_nonce <= from_global_nonce, so 0 would return nothing useful.
         head_events, _is_end, _next = await self._event_store.read_all(
-            from_global_nonce=0, max_count=1, forward=False,
+            from_global_nonce=sys.maxsize, max_count=1, forward=False,
         )
         if head_events and head_events[0].metadata.global_nonce is not None:
             self._live_boundary_nonce = head_events[0].metadata.global_nonce
