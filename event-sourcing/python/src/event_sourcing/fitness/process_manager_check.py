@@ -69,7 +69,7 @@ def check_process_manager(cls: type[ProcessManager]) -> list[Violation]:
     return violations
 
 
-def _get_source_file(cls: type[object]) -> str:  # OBJRATCHET: accepts any class type
+def _get_source_file(cls: type[ProcessManager]) -> str:
     """Best-effort source file path for a class."""
     import inspect
 

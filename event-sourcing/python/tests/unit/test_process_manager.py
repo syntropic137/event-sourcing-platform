@@ -38,8 +38,8 @@ class TodoProcessManager(ProcessManager):
     """
 
     def __init__(self) -> None:
-        self.pending_items: list[dict[str, object]] = []
-        self.done_items: list[dict[str, object]] = []
+        self.pending_items: list[dict[str, str | int | float | bool | None]] = []
+        self.done_items: list[dict[str, str | int | float | bool | None]] = []
         self.process_pending_calls: int = 0
         self.handle_event_calls: int = 0
 
@@ -75,7 +75,7 @@ class TodoProcessManager(ProcessManager):
         self.pending_items = [i for i in self.pending_items if i["status"] == "pending"]
         return processed
 
-    def get_idempotency_key(self, todo_item: dict[str, object]) -> str:
+    def get_idempotency_key(self, todo_item: dict[str, str | int | float | bool | None]) -> str:
         return str(todo_item["task_id"])
 
 

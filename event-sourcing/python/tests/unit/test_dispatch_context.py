@@ -140,7 +140,7 @@ class TestSideEffectsAllowed:
             async def process_pending(self) -> int:
                 return 0
 
-            def get_idempotency_key(self, todo_item: dict[str, object]) -> str:
+            def get_idempotency_key(self, todo_item: dict[str, str | int | float | bool | None]) -> str:
                 return str(todo_item.get("id", ""))
 
         assert MyManager.SIDE_EFFECTS_ALLOWED is True

@@ -98,7 +98,7 @@ class ProcessManager(CheckpointedProjection):
                     await self._store.mark_done(item)
                 return len(pending)
 
-            def get_idempotency_key(self, todo_item: dict[str, object]) -> str:  # OBJRATCHET: generic todo item schema varies per PM
+            def get_idempotency_key(self, todo_item: dict[str, str | int | float | bool | None]) -> str:
                 return str(todo_item["execution_id"])
     """
 
@@ -145,7 +145,7 @@ class ProcessManager(CheckpointedProjection):
         ...
 
     @abstractmethod
-    def get_idempotency_key(self, todo_item: dict[str, object]) -> str:  # OBJRATCHET: generic todo item schema varies per PM
+    def get_idempotency_key(self, todo_item: dict[str, str | int | float | bool | None]) -> str:
         """Return a stable dedup key for a to-do item.
 
         The key must be deterministic for the same logical work item.

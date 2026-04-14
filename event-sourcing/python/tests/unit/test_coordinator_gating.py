@@ -121,7 +121,7 @@ class StubProcessManager(ProcessManager):
         self.process_pending_calls += 1
         return 1
 
-    def get_idempotency_key(self, todo_item: dict[str, object]) -> str:
+    def get_idempotency_key(self, todo_item: dict[str, str | int | float | bool | None]) -> str:
         return str(todo_item.get("id", ""))
 
     async def clear_all_data(self) -> None:

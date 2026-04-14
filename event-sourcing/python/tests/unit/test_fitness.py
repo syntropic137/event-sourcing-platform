@@ -238,7 +238,7 @@ class TestProcessManagerCheck:
             async def process_pending(self) -> int:
                 return 0
 
-            def get_idempotency_key(self, todo_item: dict[str, object]) -> str:
+            def get_idempotency_key(self, todo_item: dict[str, str | int | float | bool | None]) -> str:
                 return ""
 
         violations = check_process_manager(ValidPM)
@@ -269,7 +269,7 @@ class TestProcessManagerCheck:
             async def process_pending(self) -> int:
                 return 0
 
-            def get_idempotency_key(self, todo_item: dict[str, object]) -> str:
+            def get_idempotency_key(self, todo_item: dict[str, str | int | float | bool | None]) -> str:
                 return ""
 
         violations = check_process_manager(BadPM)
@@ -314,7 +314,7 @@ class TestProcessManagerScenario:
             async def process_pending(self) -> int:
                 return 0
 
-            def get_idempotency_key(self, todo_item: dict[str, object]) -> str:
+            def get_idempotency_key(self, todo_item: dict[str, str | int | float | bool | None]) -> str:
                 return ""
 
         from event_sourcing.core.event import EventMetadata
@@ -373,7 +373,7 @@ class TestProcessManagerScenario:
                 self.pending_called = True
                 return 1
 
-            def get_idempotency_key(self, todo_item: dict[str, object]) -> str:
+            def get_idempotency_key(self, todo_item: dict[str, str | int | float | bool | None]) -> str:
                 return ""
 
         from event_sourcing.core.event import EventMetadata
@@ -434,7 +434,7 @@ class TestIdempotencyVerifier:
                     return 3
                 return 0  # Idempotent: second call processes nothing
 
-            def get_idempotency_key(self, todo_item: dict[str, object]) -> str:
+            def get_idempotency_key(self, todo_item: dict[str, str | int | float | bool | None]) -> str:
                 return ""
 
         pm = IdempotentPM()
@@ -470,7 +470,7 @@ class TestIdempotencyVerifier:
             async def process_pending(self) -> int:
                 return 2  # Always processes 2, not idempotent
 
-            def get_idempotency_key(self, todo_item: dict[str, object]) -> str:
+            def get_idempotency_key(self, todo_item: dict[str, str | int | float | bool | None]) -> str:
                 return ""
 
         pm = NonIdempotentPM()
