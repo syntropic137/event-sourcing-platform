@@ -20,5 +20,10 @@
   "devDependencies": {
     "turbo": "^2.9.3"
   },
+  "pnpm": {
+    "overrides": {
+      "follow-redirects": ">=1.16.0"
+    }
+  },
   "packageManager": "pnpm@10.20.0"
 }
