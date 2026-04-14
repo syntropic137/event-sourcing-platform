@@ -1443,6 +1443,8 @@ mod tests {
             validation: crate::config::ValidationConfig::default(),
             patterns: crate::config::PatternsConfig::default(),
             projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
         }
     }
 

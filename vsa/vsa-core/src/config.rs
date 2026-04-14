@@ -55,6 +55,24 @@ pub struct VsaConfig {
     /// Example: ["syn_domain", "syn_shared", "syn_adapters.projection_stores"]
     #[serde(default)]
     pub projection_allowed_prefixes: Option<Vec<String>>,
+
+    /// Additional scan paths for cross-context rule (outside context root)
+    #[serde(default)]
+    pub cross_context_scan_paths: Vec<PathBuf>,
+
+    /// Exception budgets for grandfathered violations
+    #[serde(default)]
+    pub exceptions: Vec<ExceptionBudget>,
+}
+
+/// Exception budget for a specific file+rule combination
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExceptionBudget {
+    pub file: String,
+    pub rule: String,
+    pub budget: usize,
+    #[serde(default)]
+    pub issue: Option<String>,
 }
 
 /// Architecture type
@@ -1212,6 +1230,8 @@ mod tests {
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
             projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
         };
 
         assert!(config.validate().is_ok());
@@ -1233,6 +1253,8 @@ mod tests {
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
             projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
         };
 
         assert!(config.validate().is_ok());
@@ -1255,6 +1277,8 @@ mod tests {
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
             projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
         };
 
         assert!(config.validate().is_err());
@@ -1275,6 +1299,8 @@ mod tests {
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
             projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
         };
 
         assert!(config.validate().is_err());
@@ -1295,6 +1321,8 @@ mod tests {
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
             projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
         };
 
         assert!(config.validate().is_err());

@@ -641,6 +641,8 @@ mod tests {
             validation: crate::config::ValidationConfig::default(),
             patterns: crate::config::PatternsConfig::default(),
             projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
         };
         let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
         (temp_dir, ctx)
@@ -1004,6 +1006,8 @@ mod tests {
             validation: crate::config::ValidationConfig::default(),
             patterns: crate::config::PatternsConfig::default(),
             projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
         };
         config.validation.exclude_from_isolation =
             vec!["list_repos".to_string()];
@@ -1051,6 +1055,8 @@ mod tests {
             validation: crate::config::ValidationConfig::default(),
             patterns: crate::config::PatternsConfig::default(),
             projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
         };
         // Exclude list_repos but NOT other_slice
         config.validation.exclude_from_isolation =

@@ -35,7 +35,8 @@ impl ValidationRuleSet {
     /// Create a new rule set with default rules
     pub fn default_rules() -> Self {
         use super::{
-            ApplicationIsolationRule, ContextBoundariesRule, DomainPurityRule, EventsIsolationRule,
+            ApplicationIsolationRule, ContextBoundariesRule, ContextPublicApiExistsRule,
+            CrossContextPublicApiRule, DomainPurityRule, EventsIsolationRule,
             IntegrationEventNamingRule, IntegrationEventsLocationRule, NoCircularDependenciesRule,
             NoCrossSliceImportsRule, NoDuplicateIntegrationEventsRule, PortIsolationRule,
             ProcessManagerStructureRule, ProjectionEventSubscriptionRule,
@@ -86,6 +87,9 @@ impl ValidationRuleSet {
             // Consumer pattern rules (ADR-025)
             Box::new(ProjectionPurityRule),          // VSA032: Projection purity (whitelist)
             Box::new(ProcessManagerStructureRule),    // VSA033: ProcessManager structure
+            // Cross-context boundary rules
+            Box::new(CrossContextPublicApiRule),      // VSA204
+            Box::new(ContextPublicApiExistsRule),     // VSA205
             // Slice isolation rules (legacy)
             Box::new(NoCrossSliceImportsRule),
             Box::new(ThinAdapterRule),

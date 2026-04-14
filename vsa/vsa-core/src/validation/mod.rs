@@ -2,6 +2,7 @@
 
 mod bounded_context_rules;
 mod consumer_pattern_rules;
+mod cross_context_rules;
 mod dependency_rules;
 mod import_parser;
 mod integration_event_rules;
@@ -17,6 +18,7 @@ pub use bounded_context_rules::{
     RequireSharedFolderRule,
 };
 pub use consumer_pattern_rules::{ProcessManagerStructureRule, ProjectionPurityRule};
+pub use cross_context_rules::{ContextPublicApiExistsRule, CrossContextPublicApiRule};
 pub use dependency_rules::{
     ApplicationIsolationRule, DomainPurityRule, EventsIsolationRule, PortIsolationRule,
     SliceIsolationRule,
