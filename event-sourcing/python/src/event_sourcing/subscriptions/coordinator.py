@@ -167,6 +167,40 @@ class SubscriptionCoordinator:
         """True if the coordinator is running and has no active error."""
         return self._running and self._last_error is None
 
+    @property
+    def projections(self) -> dict[str, CheckpointedProjection]:
+        """Registered projections (name -> instance). Read-only view."""
+        return self._projections
+
+    @property
+    def is_catching_up(self) -> bool:
+        """True while replaying historical events, False for live events."""
+        return self._is_catching_up
+
+    @is_catching_up.setter
+    def is_catching_up(self, value: bool) -> None:
+        self._is_catching_up = value
+
+    @property
+    def live_boundary_nonce(self) -> int:
+        """The head global_nonce snapshot taken before subscribing."""
+        return self._live_boundary_nonce
+
+    @live_boundary_nonce.setter
+    def live_boundary_nonce(self, value: int) -> None:
+        self._live_boundary_nonce = value
+
+    async def dispatch_event(
+        self,
+        envelope: EventEnvelope[DomainEvent],
+    ) -> None:
+        """Dispatch a single event to all subscribed projections.
+
+        Public interface for testing and fitness tooling. Production
+        code uses start() which calls this internally.
+        """
+        await self._dispatch_event(envelope)
+
     async def start(self) -> None:
         """
         Start the subscription coordinator with exponential-backoff retry.

@@ -58,28 +58,28 @@ class ReplaySafetyChecker:
         violations: list[Violation] = []
         spies: dict[str, AsyncMock] = {}
 
-        # Patch all ProcessManager instances to spy on process_pending()
-        for name, projection in self._coordinator._projections.items():
+        # Identify all ProcessManager instances to spy on
+        for name, projection in self._coordinator.projections.items():
             if isinstance(projection, ProcessManager):
                 spy = AsyncMock(return_value=0)
                 spies[name] = spy
 
         # Force catch-up mode and prevent the catch-up -> live transition.
-        # Setting _is_catching_up = True alone is insufficient because
-        # _dispatch_event() flips it to live when global_nonce exceeds
-        # _live_boundary_nonce. Pin the boundary to sys.maxsize so the
+        # Setting is_catching_up = True alone is insufficient because
+        # dispatch_event() flips it to live when global_nonce exceeds
+        # live_boundary_nonce. Pin the boundary to sys.maxsize so the
         # transition never fires during the check.
-        original_catching_up = self._coordinator._is_catching_up
-        original_boundary = self._coordinator._live_boundary_nonce
-        self._coordinator._is_catching_up = True
-        self._coordinator._live_boundary_nonce = sys.maxsize
+        original_catching_up = self._coordinator.is_catching_up
+        original_boundary = self._coordinator.live_boundary_nonce
+        self._coordinator.is_catching_up = True
+        self._coordinator.live_boundary_nonce = sys.maxsize
 
         try:
             for name, spy in spies.items():
-                projection = self._coordinator._projections[name]
+                projection = self._coordinator.projections[name]
                 with patch.object(projection, "process_pending", spy):
                     for event in events:
-                        await self._coordinator._dispatch_event(event)
+                        await self._coordinator.dispatch_event(event)
 
             # Check: no process_pending() calls during catch-up
             for name, spy in spies.items():
@@ -96,7 +96,7 @@ class ReplaySafetyChecker:
                         )
                     )
         finally:
-            self._coordinator._is_catching_up = original_catching_up
-            self._coordinator._live_boundary_nonce = original_boundary
+            self._coordinator.is_catching_up = original_catching_up
+            self._coordinator.live_boundary_nonce = original_boundary
 
         return violations

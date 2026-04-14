@@ -156,8 +156,8 @@ def _make_coordinator(
         checkpoint_store=mock_checkpoint_store,
         projections=projections,  # type: ignore[arg-type]
     )
-    coordinator._live_boundary_nonce = live_boundary_nonce
-    coordinator._is_catching_up = is_catching_up
+    coordinator.live_boundary_nonce = live_boundary_nonce
+    coordinator.is_catching_up = is_catching_up
     return coordinator
 
 
@@ -175,11 +175,11 @@ class TestCatchUpTransition:
         proj = StubProjection("p1")
         coordinator = _make_coordinator([proj], live_boundary_nonce=100, is_catching_up=True)
 
-        await coordinator._dispatch_event(_make_envelope(global_nonce=50))
-        assert coordinator._is_catching_up is True
+        await coordinator.dispatch_event(_make_envelope(global_nonce=50))
+        assert coordinator.is_catching_up is True
 
-        await coordinator._dispatch_event(_make_envelope(global_nonce=100))
-        assert coordinator._is_catching_up is True  # AT boundary, still catching up
+        await coordinator.dispatch_event(_make_envelope(global_nonce=100))
+        assert coordinator.is_catching_up is True  # AT boundary, still catching up
 
     @pytest.mark.asyncio
     async def test_transitions_to_live_past_boundary(self) -> None:
@@ -187,8 +187,8 @@ class TestCatchUpTransition:
         proj = StubProjection("p1")
         coordinator = _make_coordinator([proj], live_boundary_nonce=100, is_catching_up=True)
 
-        await coordinator._dispatch_event(_make_envelope(global_nonce=101))
-        assert coordinator._is_catching_up is False
+        await coordinator.dispatch_event(_make_envelope(global_nonce=101))
+        assert coordinator.is_catching_up is False
 
     @pytest.mark.asyncio
     async def test_transition_is_one_way(self) -> None:
@@ -197,8 +197,8 @@ class TestCatchUpTransition:
         coordinator = _make_coordinator([proj], live_boundary_nonce=100, is_catching_up=False)
 
         # Already live, dispatch event with lower nonce - stays live
-        await coordinator._dispatch_event(_make_envelope(global_nonce=50))
-        assert coordinator._is_catching_up is False
+        await coordinator.dispatch_event(_make_envelope(global_nonce=50))
+        assert coordinator.is_catching_up is False
 
 
 # ============================================================================
@@ -215,7 +215,7 @@ class TestDispatchContextPassing:
         proj = StubProjection("p1")
         coordinator = _make_coordinator([proj], live_boundary_nonce=100, is_catching_up=True)
 
-        await coordinator._dispatch_event(_make_envelope(global_nonce=50))
+        await coordinator.dispatch_event(_make_envelope(global_nonce=50))
 
         assert len(proj.received_contexts) == 1
         ctx = proj.received_contexts[0]
@@ -230,7 +230,7 @@ class TestDispatchContextPassing:
         proj = StubProjection("p1")
         coordinator = _make_coordinator([proj], live_boundary_nonce=100, is_catching_up=False)
 
-        await coordinator._dispatch_event(_make_envelope(global_nonce=101))
+        await coordinator.dispatch_event(_make_envelope(global_nonce=101))
 
         assert len(proj.received_contexts) == 1
         ctx = proj.received_contexts[0]
@@ -253,7 +253,7 @@ class TestProcessManagerGating:
         pm = StubProcessManager("pm1")
         coordinator = _make_coordinator([pm], live_boundary_nonce=100, is_catching_up=True)
 
-        await coordinator._dispatch_event(_make_envelope(global_nonce=50))
+        await coordinator.dispatch_event(_make_envelope(global_nonce=50))
 
         assert pm.handle_event_calls == 1
         assert pm.process_pending_calls == 0  # Key invariant
@@ -264,7 +264,7 @@ class TestProcessManagerGating:
         pm = StubProcessManager("pm1")
         coordinator = _make_coordinator([pm], live_boundary_nonce=100, is_catching_up=False)
 
-        await coordinator._dispatch_event(_make_envelope(global_nonce=101))
+        await coordinator.dispatch_event(_make_envelope(global_nonce=101))
 
         assert pm.handle_event_calls == 1
         assert pm.process_pending_calls == 1  # Should be called
@@ -275,7 +275,7 @@ class TestProcessManagerGating:
         proj = StubProjection("p1")
         coordinator = _make_coordinator([proj], live_boundary_nonce=100, is_catching_up=False)
 
-        await coordinator._dispatch_event(_make_envelope(global_nonce=101))
+        await coordinator.dispatch_event(_make_envelope(global_nonce=101))
 
         # StubProjection doesn't have process_pending_calls attribute
         assert not hasattr(proj, "process_pending_calls")
@@ -288,13 +288,13 @@ class TestProcessManagerGating:
 
         # Catch-up events (1-5): no process_pending
         for nonce in range(1, 6):
-            await coordinator._dispatch_event(_make_envelope(global_nonce=nonce))
+            await coordinator.dispatch_event(_make_envelope(global_nonce=nonce))
         assert pm.handle_event_calls == 5
         assert pm.process_pending_calls == 0
 
         # Live events (6-8): process_pending called each time
         for nonce in range(6, 9):
-            await coordinator._dispatch_event(_make_envelope(global_nonce=nonce))
+            await coordinator.dispatch_event(_make_envelope(global_nonce=nonce))
         assert pm.handle_event_calls == 8
         assert pm.process_pending_calls == 3
 
@@ -311,7 +311,7 @@ class TestProcessManagerGating:
         coordinator = _make_coordinator([pm], live_boundary_nonce=0, is_catching_up=False)
 
         # Should not raise - coordinator catches and logs the exception
-        await coordinator._dispatch_event(_make_envelope(global_nonce=1))
+        await coordinator.dispatch_event(_make_envelope(global_nonce=1))
 
         # handle_event was still called
         assert pm.handle_event_calls == 1
