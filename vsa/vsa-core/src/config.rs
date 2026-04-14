@@ -49,6 +49,12 @@ pub struct VsaConfig {
     /// Pattern definitions
     #[serde(default)]
     pub patterns: PatternsConfig,
+
+    /// Additional allowed module prefixes for projection purity checks (VSA032).
+    /// Merged with the default whitelist (stdlib + event_sourcing).
+    /// Example: ["syn_domain", "syn_shared", "syn_adapters.projection_stores"]
+    #[serde(default)]
+    pub projection_allowed_prefixes: Option<Vec<String>>,
 }
 
 /// Architecture type
@@ -1205,6 +1211,7 @@ mod tests {
             contexts: HashMap::new(),
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
+            projection_allowed_prefixes: None,
         };
 
         assert!(config.validate().is_ok());
@@ -1225,6 +1232,7 @@ mod tests {
             contexts: HashMap::new(),
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
+            projection_allowed_prefixes: None,
         };
 
         assert!(config.validate().is_ok());
@@ -1246,6 +1254,7 @@ mod tests {
             contexts: HashMap::new(),
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
+            projection_allowed_prefixes: None,
         };
 
         assert!(config.validate().is_err());
@@ -1265,6 +1274,7 @@ mod tests {
             contexts: HashMap::new(),
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
+            projection_allowed_prefixes: None,
         };
 
         assert!(config.validate().is_err());
@@ -1284,6 +1294,7 @@ mod tests {
             contexts: HashMap::new(),
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
+            projection_allowed_prefixes: None,
         };
 
         assert!(config.validate().is_err());

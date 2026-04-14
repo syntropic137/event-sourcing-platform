@@ -6,6 +6,7 @@ This module provides the core abstractions for checkpointed projections:
 - ProjectionResult: Explicit result type for event handlers
 - ProjectionCheckpointStore: Protocol for checkpoint persistence
 - CheckpointedProjection: Abstract base class with mandatory checkpoint tracking
+- DispatchContext: Replay awareness context passed by the coordinator
 
 See ADR-014 for architectural decision rationale.
 """
@@ -15,7 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +205,35 @@ class ProjectionCheckpointStore(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class DispatchContext:
+    """Context passed by the SubscriptionCoordinator during event dispatch.
+
+    Provides replay awareness so projections and process managers can
+    distinguish between historical catch-up events and live events.
+
+    The coordinator snapshots the head ``global_nonce`` from the event
+    store before subscribing. Events at or below that boundary are
+    historical (catch-up); events above it are live.
+
+    Attributes:
+        is_catching_up: True during catch-up replay, False for live events.
+        global_nonce: The ``global_nonce`` of the current event (monotonic,
+            assigned by the event store at append time).
+        live_boundary_nonce: The head ``global_nonce`` snapshot taken before
+            subscribing. Events at or below this value are historical.
+    """
+
+    is_catching_up: bool
+    global_nonce: int
+    live_boundary_nonce: int
+
+    @property
+    def is_live(self) -> bool:
+        """True when processing live (non-replay) events."""
+        return not self.is_catching_up
+
+
 class CheckpointedProjection(ABC):
     """
     Abstract base class for projections with mandatory checkpoint tracking.
@@ -213,6 +243,11 @@ class CheckpointedProjection(ABC):
     2. Version number for schema evolution and rebuild detection
     3. Explicit event type filtering for performance
     4. Explicit result types (no silent failures)
+
+    Projections are **read-only** by default: they build derived state
+    from events and must never produce side effects. Replaying the entire
+    event store through a projection must yield the same result with zero
+    external calls.
 
     Subclasses MUST implement:
     - get_name(): Unique projection identifier
@@ -258,6 +293,9 @@ class CheckpointedProjection(ABC):
                     logger.error("Failed to process event", exc_info=True)
                     return ProjectionResult.FAILURE
     """
+
+    SIDE_EFFECTS_ALLOWED: ClassVar[bool] = False
+    """Projections must not produce side effects. ProcessManager overrides to True."""
 
     @abstractmethod
     def get_name(self) -> str:
@@ -305,6 +343,7 @@ class CheckpointedProjection(ABC):
         self,
         envelope: "EventEnvelope[DomainEvent]",
         checkpoint_store: ProjectionCheckpointStore,
+        context: "DispatchContext | None" = None,
     ) -> ProjectionResult:
         """
         Handle an event and update the checkpoint atomically.
@@ -321,6 +360,8 @@ class CheckpointedProjection(ABC):
         Args:
             envelope: Event envelope containing event and metadata
             checkpoint_store: Store for persisting checkpoints
+            context: Dispatch context with replay awareness. ``None`` for
+                backwards compatibility with callers that do not pass it.
 
         Returns:
             ProjectionResult.SUCCESS: Event processed, advance checkpoint
@@ -430,6 +471,7 @@ class AutoDispatchProjection(CheckpointedProjection, ABC):
         self,
         envelope: "EventEnvelope[DomainEvent]",
         checkpoint_store: "ProjectionCheckpointStore",
+        context: "DispatchContext | None" = None,
     ) -> "ProjectionResult":
         """Auto-dispatch to the matching on_* handler and save checkpoint."""
         event_type = envelope.metadata.event_type or "Unknown"

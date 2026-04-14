@@ -30,6 +30,8 @@ from event_sourcing.core.event import (
     GenericDomainEvent,
 )
 from event_sourcing.core.expected_version import ExpectedVersion
+from event_sourcing.core.checkpoint import DispatchContext
+from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.core.projection import (
     AutoDispatchProjection,
     CheckpointedProjection,
@@ -82,9 +84,12 @@ __all__ = [
     # Projections (ADR-014 Checkpoint Architecture)
     "AutoDispatchProjection",
     "CheckpointedProjection",
+    "DispatchContext",
     "ProjectionCheckpoint",
     "ProjectionCheckpointStore",
     "ProjectionResult",
+    # Process Manager (To-Do List pattern)
+    "ProcessManager",
     # Checkpoint Stores
     "PostgresCheckpointStore",
     "MemoryCheckpointStore",

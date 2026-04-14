@@ -19,10 +19,12 @@ from typing import TYPE_CHECKING, Protocol, TypedDict
 
 from event_sourcing.core.checkpoint import (
     CheckpointedProjection,
+    DispatchContext,
     ProjectionCheckpoint,
     ProjectionCheckpointStore,
     ProjectionResult,
 )
+from event_sourcing.core.process_manager import ProcessManager
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -61,6 +63,25 @@ class EventStoreSubscriber(Protocol):
 
         Yields:
             Event envelopes in order
+        """
+        ...
+
+    async def read_all(
+        self,
+        from_global_nonce: int = 0,
+        max_count: int = 100,
+        forward: bool = True,
+    ) -> tuple[list[EventEnvelope[DomainEvent]], bool, int]:
+        """
+        Read events from a global position (for catch-up and head detection).
+
+        Args:
+            from_global_nonce: Inclusive start position (0 = beginning)
+            max_count: Maximum events to return per page
+            forward: Direction (True = ascending, False = descending)
+
+        Returns:
+            Tuple of (events, is_end, next_from_global_nonce)
         """
         ...
 
@@ -118,6 +139,8 @@ class SubscriptionCoordinator:
         self._checkpoint_store = checkpoint_store
         self._running = False
         self._last_error: Exception | None = None
+        self._live_boundary_nonce: int = 0
+        self._is_catching_up: bool = True
 
         # Validate for duplicate projection names
         self._projections: dict[str, CheckpointedProjection] = {}
@@ -186,13 +209,34 @@ class SubscriptionCoordinator:
         Loads checkpoints, subscribes from the minimum position, and
         dispatches events until the stream ends or self._running is False.
         Clears _last_error on the first successful event dispatch.
+
+        Before subscribing, snapshots the head global_nonce from the event
+        store. Events at or below that boundary are historical (catch-up);
+        events above it are live. This is re-queried on every subscription
+        loop start for durability.
         """
         min_position = await self._get_minimum_position()
+
+        # Snapshot the head global_nonce from the event store.
+        # This is the durable catch-up/live boundary: events with
+        # global_nonce <= this value were already in the store when we
+        # subscribed and are historical. Events above are live.
+        head_events, _is_end, _next = await self._event_store.read_all(
+            from_global_nonce=0, max_count=1, forward=False,
+        )
+        if head_events and head_events[0].metadata.global_nonce is not None:
+            self._live_boundary_nonce = head_events[0].metadata.global_nonce
+        else:
+            self._live_boundary_nonce = 0
+
+        self._is_catching_up = min_position <= self._live_boundary_nonce
 
         logger.info(
             "Starting subscription",
             extra={
                 "from_position": min_position,
+                "live_boundary_nonce": self._live_boundary_nonce,
+                "is_catching_up": self._is_catching_up,
                 "projection_count": len(self._projections),
             },
         )
@@ -269,11 +313,26 @@ class SubscriptionCoordinator:
         """
         Dispatch an event to all relevant projections.
 
+        Tracks the catch-up/live transition based on global_nonce.
+
         Args:
             envelope: Event envelope to dispatch
         """
         event_type = envelope.metadata.event_type or "Unknown"
         global_nonce = envelope.metadata.global_nonce or 0
+
+        # Transition: catch-up -> live when we pass the boundary nonce.
+        # Uses > (strictly greater): events at the boundary were already
+        # in the store when we subscribed, so they are historical.
+        if self._is_catching_up and global_nonce > self._live_boundary_nonce:
+            self._is_catching_up = False
+            logger.info(
+                "Coordinator transitioned to live mode",
+                extra={
+                    "global_nonce": global_nonce,
+                    "live_boundary_nonce": self._live_boundary_nonce,
+                },
+            )
 
         for name, projection in self._projections.items():
             # Check if projection subscribes to this event type
@@ -307,8 +366,16 @@ class SubscriptionCoordinator:
         event_type = envelope.metadata.event_type or "Unknown"
         global_nonce = envelope.metadata.global_nonce or 0
 
+        context = DispatchContext(
+            is_catching_up=self._is_catching_up,
+            global_nonce=global_nonce,
+            live_boundary_nonce=self._live_boundary_nonce,
+        )
+
         try:
-            result = await projection.handle_event(envelope, self._checkpoint_store)
+            result = await projection.handle_event(
+                envelope, self._checkpoint_store, context,
+            )
 
             if result == ProjectionResult.FAILURE:
                 logger.error(
@@ -332,6 +399,26 @@ class SubscriptionCoordinator:
                 )
                 # Checkpoint should be saved by the projection itself
                 # for atomicity with data updates
+
+                # ProcessManager: run the processor side for live events only.
+                # The key invariant: process_pending() is NEVER called
+                # while is_catching_up is True.
+                if not self._is_catching_up and isinstance(projection, ProcessManager):
+                    try:
+                        processed = await projection.process_pending()
+                        if processed > 0:
+                            logger.info(
+                                "ProcessManager processed pending items",
+                                extra={
+                                    "projection_name": name,
+                                    "items_processed": processed,
+                                },
+                            )
+                    except Exception:
+                        logger.exception(
+                            "ProcessManager.process_pending() failed",
+                            extra={"projection_name": name},
+                        )
             elif result == ProjectionResult.SKIP:
                 # SKIP means the projection doesn't care about this event.
                 # We must still advance the checkpoint so it's not retried.

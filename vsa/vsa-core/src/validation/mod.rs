@@ -1,6 +1,7 @@
 //! Enhanced validation system for VSA
 
 mod bounded_context_rules;
+mod consumer_pattern_rules;
 mod dependency_rules;
 mod import_parser;
 mod integration_event_rules;
@@ -15,6 +16,7 @@ pub use bounded_context_rules::{
     ContextBoundariesRule, NoCircularDependenciesRule, RequireAggregatesForBoundedContextRule,
     RequireSharedFolderRule,
 };
+pub use consumer_pattern_rules::{ProcessManagerStructureRule, ProjectionPurityRule};
 pub use dependency_rules::{
     ApplicationIsolationRule, DomainPurityRule, EventsIsolationRule, PortIsolationRule,
     SliceIsolationRule,
