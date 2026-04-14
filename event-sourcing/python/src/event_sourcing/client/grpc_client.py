@@ -216,27 +216,43 @@ class GrpcEventStoreClient:
     def _extract_actual_version(rpc_error: grpc.RpcError) -> int:
         """Extract actual_last_aggregate_nonce from gRPC ConcurrencyErrorDetail.
 
-        The Rust event store encodes the detail as a ``google.protobuf.Any``
-        wrapper inside the gRPC status trailing metadata.  Falls back to ``-1``
-        if the detail cannot be decoded.
+        The Rust event store (tonic) encodes the detail as a serialized
+        ``google.protobuf.Any`` wrapping ``ConcurrencyErrorDetail`` and puts it
+        directly in the ``grpc-status-details-bin`` trailing metadata via
+        ``tonic::Status::with_details``.
+
+        Falls back to ``-1`` if the detail cannot be decoded.
         """
         try:
+            from google.protobuf.any_pb2 import Any as AnyPb  # type: ignore[import-untyped]
 
-            # grpc-python exposes trailing_metadata on RpcError
-            status = rpc_error  # type: ignore[union-attr]
-            raw_details = status.trailing_metadata()
-            for key, value in raw_details:
+            # grpc-python (both sync and aio) exposes trailing_metadata on RpcError
+            metadata = rpc_error.trailing_metadata()  # type: ignore[union-attr]
+            if metadata is None:
+                return -1
+            for key, value in metadata:
                 if key == "grpc-status-details-bin":
-                    # The value is a serialized google.rpc.Status
-                    from google.rpc import status_pb2  # type: ignore[import-untyped]
+                    # tonic with_details: raw Any wrapping ConcurrencyErrorDetail
+                    any_msg = AnyPb()
+                    any_msg.ParseFromString(value)
+                    if any_msg.Is(eventstore_pb2.ConcurrencyErrorDetail.DESCRIPTOR):
+                        concurrency_detail = eventstore_pb2.ConcurrencyErrorDetail()
+                        any_msg.Unpack(concurrency_detail)
+                        return int(concurrency_detail.actual_last_aggregate_nonce)
 
-                    rpc_status = status_pb2.Status()
-                    rpc_status.ParseFromString(value)
-                    for detail in rpc_status.details:
-                        if detail.Is(eventstore_pb2.ConcurrencyErrorDetail.DESCRIPTOR):
-                            concurrency_detail = eventstore_pb2.ConcurrencyErrorDetail()
-                            detail.Unpack(concurrency_detail)
-                            return int(concurrency_detail.actual_last_aggregate_nonce)
+                    # Standard google.rpc.Status envelope (if googleapis-common-protos installed)
+                    try:
+                        from google.rpc import status_pb2  # type: ignore[import-untyped]
+
+                        rpc_status = status_pb2.Status()
+                        rpc_status.ParseFromString(value)
+                        for detail in rpc_status.details:
+                            if detail.Is(eventstore_pb2.ConcurrencyErrorDetail.DESCRIPTOR):
+                                concurrency_detail = eventstore_pb2.ConcurrencyErrorDetail()
+                                detail.Unpack(concurrency_detail)
+                                return int(concurrency_detail.actual_last_aggregate_nonce)
+                    except ImportError:
+                        pass
         except Exception:
             logger.debug("Could not decode ConcurrencyErrorDetail from gRPC status", exc_info=True)
         return -1
