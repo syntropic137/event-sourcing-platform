@@ -48,13 +48,19 @@ class StubPoller(HistoricalPoller):
         self.fetch_results: dict[str, PollResult] = {}
         self.processed_events: list[tuple[str, list[PollEvent]]] = []
         self.fetch_calls: list[str] = []
+        self.fetch_error: Exception | None = None
+        self.process_error: Exception | None = None
 
     async def fetch(self, source_key: str) -> PollResult:
         self.fetch_calls.append(source_key)
+        if self.fetch_error is not None:
+            raise self.fetch_error
         return self.fetch_results[source_key]
 
     async def process(self, source_key: str, events: list[PollEvent]) -> None:
         self.processed_events.append((source_key, list(events)))
+        if self.process_error is not None:
+            raise self.process_error
 
 
 def _event(minutes_ago: float, data: dict[str, str] | None = None) -> PollEvent:
@@ -439,3 +445,183 @@ class TestEdgeCases:
         saved = await store.load("repo-a")
         assert saved is not None
         assert saved.value == "etag-2"
+
+
+# ============================================================================
+# Exception Safety Tests
+# ============================================================================
+
+
+class TestExceptionSafety:
+    """Verify poller state remains consistent when fetch/process raise."""
+
+    @pytest.mark.asyncio
+    async def test_fetch_error_does_not_corrupt_state(self) -> None:
+        """If fetch() raises, poller state is unchanged."""
+        poller = StubPoller(MemoryCursorStore())
+        await poller.initialize()
+
+        poller.fetch_error = RuntimeError("network timeout")
+
+        with pytest.raises(RuntimeError, match="network timeout"):
+            await poller.poll("repo-a")
+
+        # Source should NOT be primed after a failed fetch
+        assert "repo-a" not in poller.primed_sources
+        assert len(poller.processed_events) == 0
+
+    @pytest.mark.asyncio
+    async def test_process_error_on_cold_start_still_primes(self) -> None:
+        """If process() raises on cold start, cursor was already persisted."""
+        store = MemoryCursorStore()
+        poller = StubPoller(store)
+        await poller.initialize()
+
+        new_event = _event(minutes_ago=-1)
+        poller.fetch_results["repo-a"] = PollResult(
+            events=[new_event],
+            cursor=CursorData(value="etag-1"),
+            has_new=True,
+        )
+        poller.process_error = RuntimeError("pipeline down")
+
+        with pytest.raises(RuntimeError, match="pipeline down"):
+            await poller.poll("repo-a")
+
+        # Cursor should still be primed (prime happens before process)
+        assert "repo-a" in poller.primed_sources
+        saved = await store.load("repo-a")
+        assert saved is not None
+        assert saved.value == "etag-1"
+
+    @pytest.mark.asyncio
+    async def test_process_error_on_warm_start_cursor_not_updated(self) -> None:
+        """If process() raises on warm start, cursor was NOT yet updated."""
+        store = MemoryCursorStore({"repo-a": CursorData(value="etag-old")})
+        poller = StubPoller(store)
+        await poller.initialize()
+
+        poller.fetch_results["repo-a"] = PollResult(
+            events=[_event(minutes_ago=0)],
+            cursor=CursorData(value="etag-new"),
+            has_new=True,
+        )
+        poller.process_error = RuntimeError("pipeline down")
+
+        with pytest.raises(RuntimeError, match="pipeline down"):
+            await poller.poll("repo-a")
+
+        # Cursor should NOT have been updated (process failed before persist)
+        saved = await store.load("repo-a")
+        assert saved is not None
+        assert saved.value == "etag-old"
+
+    @pytest.mark.asyncio
+    async def test_poll_without_initialize_treats_as_cold_start(self) -> None:
+        """Calling poll() before initialize() treats every source as cold start."""
+        store = MemoryCursorStore({"repo-a": CursorData(value="etag-1")})
+        poller = StubPoller(store)
+        # Deliberately skip initialize()
+
+        old_event = _event(minutes_ago=60)
+        poller.fetch_results["repo-a"] = PollResult(
+            events=[old_event],
+            cursor=CursorData(value="etag-2"),
+            has_new=True,
+        )
+
+        await poller.poll("repo-a")
+
+        # Historical event skipped (cold start behavior even though cursor exists)
+        assert len(poller.processed_events) == 0
+        # But source gets primed for next poll
+        assert "repo-a" in poller.primed_sources
+
+
+# ============================================================================
+# Fitness Function Tests
+# ============================================================================
+
+
+class TestHistoricalPollerFitness:
+    """Tests for the HistoricalPoller architectural fitness check."""
+
+    def test_valid_subclass_passes(self) -> None:
+        """A correctly implemented subclass should have no violations."""
+        from event_sourcing.fitness.historical_poller_check import (
+            check_historical_poller_structure,
+        )
+
+        violations = check_historical_poller_structure(StubPoller)
+        assert violations == []
+
+    def test_overriding_poll_is_violation(self) -> None:
+        """Overriding poll() defeats the cold-start fence - must be flagged."""
+        from event_sourcing.fitness.historical_poller_check import (
+            check_historical_poller_structure,
+        )
+
+        class BadPoller(HistoricalPoller):
+            async def fetch(self, source_key: str) -> PollResult:
+                return PollResult(events=[], cursor=CursorData(value=""), has_new=False)
+
+            async def process(self, source_key: str, events: list[PollEvent]) -> None:
+                pass
+
+            async def poll(self, source_key: str) -> None:  # type: ignore[override]
+                await super().poll(source_key)
+
+        violations = check_historical_poller_structure(BadPoller)
+        assert len(violations) == 1
+        assert "poll" in violations[0].message
+        assert violations[0].rule == "historical-poller-fence"
+
+    def test_overriding_prime_is_violation(self) -> None:
+        """Overriding _prime() bypasses cursor management - must be flagged."""
+        from event_sourcing.fitness.historical_poller_check import (
+            check_historical_poller_structure,
+        )
+
+        class SneakyPoller(HistoricalPoller):
+            async def fetch(self, source_key: str) -> PollResult:
+                return PollResult(events=[], cursor=CursorData(value=""), has_new=False)
+
+            async def process(self, source_key: str, events: list[PollEvent]) -> None:
+                pass
+
+            async def _prime(self, source_key: str, cursor: CursorData) -> None:
+                pass  # Silently swallows the prime
+
+        violations = check_historical_poller_structure(SneakyPoller)
+        assert len(violations) == 1
+        assert "_prime" in violations[0].message
+
+    def test_multiple_violations_reported(self) -> None:
+        """Multiple violations should all be reported."""
+        from event_sourcing.fitness.historical_poller_check import (
+            check_historical_poller_structure,
+        )
+
+        class TerriblePoller(HistoricalPoller):
+            async def fetch(self, source_key: str) -> PollResult:
+                return PollResult(events=[], cursor=CursorData(value=""), has_new=False)
+
+            async def process(self, source_key: str, events: list[PollEvent]) -> None:
+                pass
+
+            async def poll(self, source_key: str) -> None:  # type: ignore[override]
+                pass
+
+            async def _prime(self, source_key: str, cursor: CursorData) -> None:
+                pass
+
+            async def _persist_cursor(self, source_key: str, cursor: CursorData) -> None:
+                pass
+
+        violations = check_historical_poller_structure(TerriblePoller)
+        assert len(violations) == 3
+        violation_methods = {
+            v.message.split("overrides ")[1].split(".")[0] if "overrides" in v.message else ""
+            for v in violations
+        }
+        assert "poll()" in violation_methods

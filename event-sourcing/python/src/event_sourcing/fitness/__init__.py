@@ -14,6 +14,9 @@ Usage::
             assert not violations, f"{path}: {violations}"
 """
 
+from event_sourcing.fitness.historical_poller_check import (
+    check_historical_poller_structure,
+)
 from event_sourcing.fitness.projection_purity import (
     PROJECTION_ALLOWED_PREFIXES,
     check_projection_purity,
@@ -23,5 +26,6 @@ from event_sourcing.fitness.violations import Violation
 __all__ = [
     "PROJECTION_ALLOWED_PREFIXES",
     "Violation",
+    "check_historical_poller_structure",
     "check_projection_purity",
 ]
