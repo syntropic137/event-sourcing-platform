@@ -5,6 +5,8 @@ This module provides the core abstractions for checkpointed projections:
 - ProjectionCheckpoint: Immutable checkpoint tracking per-projection position
 - ProjectionResult: Explicit result type for event handlers
 - ProjectionCheckpointStore: Protocol for checkpoint persistence
+- ProjectionStore: Protocol for projection read-model data persistence
+- ProjectionReadStore: Read-only subset of ProjectionStore for query handlers
 - CheckpointedProjection: Abstract base class with mandatory checkpoint tracking
 - DispatchContext: Replay awareness context passed by the coordinator
 
@@ -16,7 +18,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
-from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +203,143 @@ class ProjectionCheckpointStore(Protocol):
 
         Returns:
             List of all stored checkpoints
+        """
+        ...
+
+
+@runtime_checkable
+class ProjectionStore(Protocol):
+    """Protocol for projection read-model data persistence.
+
+    Complements ``ProjectionCheckpointStore`` (position tracking) with
+    actual read-model data storage. Projections write to this store
+    in ``handle_event()``; query handlers read from it.
+
+    Implementations can use any backend: PostgreSQL, Redis, in-memory.
+    Per-projection namespacing via the ``projection`` parameter.
+
+    Note:
+        Any ``ProjectionStore`` implementation automatically satisfies
+        ``ProjectionReadStore`` via structural subtyping.
+    """
+
+    async def save(self, projection: str, key: str, data: dict[str, Any]) -> None:
+        """Save or update a projection record.
+
+        Args:
+            projection: Name of the projection (e.g., "workflow_summaries")
+            key: Unique identifier for the record (usually aggregate ID)
+            data: Dictionary of field values to store
+        """
+        ...
+
+    async def get(self, projection: str, key: str) -> dict[str, Any] | None:
+        """Get a single projection record by key.
+
+        Args:
+            projection: Name of the projection
+            key: Unique identifier for the record
+
+        Returns:
+            Dictionary of field values, or None if not found
+        """
+        ...
+
+    async def get_all(self, projection: str) -> list[dict[str, Any]]:
+        """Get all records for a projection.
+
+        Args:
+            projection: Name of the projection
+
+        Returns:
+            List of dictionaries, one per record
+        """
+        ...
+
+    async def delete(self, projection: str, key: str) -> None:
+        """Delete a projection record.
+
+        Args:
+            projection: Name of the projection
+            key: Unique identifier for the record
+        """
+        ...
+
+    async def delete_all(self, projection: str) -> None:
+        """Delete all records for a projection (used for rebuilds).
+
+        Args:
+            projection: Name of the projection
+        """
+        ...
+
+    async def query(
+        self,
+        projection: str,
+        filters: dict[str, Any] | None = None,
+        order_by: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Query projection records with optional filtering.
+
+        Args:
+            projection: Name of the projection
+            filters: Dictionary of field=value filters (exact match)
+            order_by: Field name to sort by (prefix with - for descending)
+            limit: Maximum number of records to return
+            offset: Number of records to skip
+
+        Returns:
+            List of matching dictionaries
+        """
+        ...
+
+    async def get_by_prefix(
+        self, projection: str, prefix: str
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """Get all records whose key starts with the given prefix.
+
+        Args:
+            projection: Name of the projection
+            prefix: The key prefix to match against
+
+        Returns:
+            List of (key, data) tuples for matching records
+        """
+        ...
+
+
+@runtime_checkable
+class ProjectionReadStore(Protocol):
+    """Read-only subset of ``ProjectionStore`` for query handlers.
+
+    Query handlers that only read projection data should depend on
+    this protocol, not the full ``ProjectionStore``. Any ``ProjectionStore``
+    implementation automatically satisfies this protocol via structural
+    subtyping.
+    """
+
+    async def get(self, projection: str, key: str) -> dict[str, Any] | None:
+        """Get a single projection record by key.
+
+        Args:
+            projection: Name of the projection
+            key: Unique identifier for the record
+
+        Returns:
+            Dictionary of field values, or None if not found
+        """
+        ...
+
+    async def get_all(self, projection: str) -> list[dict[str, Any]]:
+        """Get all records for a projection.
+
+        Args:
+            projection: Name of the projection
+
+        Returns:
+            List of dictionaries, one per record
         """
         ...
 
