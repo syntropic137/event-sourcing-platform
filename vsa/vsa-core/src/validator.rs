@@ -179,6 +179,7 @@ mod tests {
             projection_allowed_prefixes: None,
             cross_context_scan_paths: Vec::new(),
             exceptions: Vec::new(),
+            layer_separation: None,
         }
     }
 

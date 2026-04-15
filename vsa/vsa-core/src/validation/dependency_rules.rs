@@ -643,6 +643,7 @@ mod tests {
             projection_allowed_prefixes: None,
             cross_context_scan_paths: Vec::new(),
             exceptions: Vec::new(),
+            layer_separation: None,
         };
         let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
         (temp_dir, ctx)
@@ -1008,6 +1009,7 @@ mod tests {
             projection_allowed_prefixes: None,
             cross_context_scan_paths: Vec::new(),
             exceptions: Vec::new(),
+            layer_separation: None,
         };
         config.validation.exclude_from_isolation =
             vec!["list_repos".to_string()];
@@ -1057,6 +1059,7 @@ mod tests {
             projection_allowed_prefixes: None,
             cross_context_scan_paths: Vec::new(),
             exceptions: Vec::new(),
+            layer_separation: None,
         };
         // Exclude list_repos but NOT other_slice
         config.validation.exclude_from_isolation =
@@ -1116,5 +1119,389 @@ mod tests {
         // but our validation now checks if target is a real slice directory
         let result = SliceIsolationRule::extract_slice_name("slices.conftest");
         assert_eq!(result, Some("conftest".to_string()));
+    }
+}
+
+// ============================================================================
+// VSA206: Layer Separation Rule
+// ============================================================================
+
+/// Rule: Domain/slice code must not import from configurable forbidden packages.
+///
+/// Enforces hexagonal architecture boundaries by preventing domain and slice code
+/// from importing adapter-layer or API-layer packages directly. TYPE_CHECKING
+/// imports are automatically exempt (the import parser already filters them).
+///
+/// Configured via `layer_separation` in vsa.yaml:
+/// ```yaml
+/// layer_separation:
+///   forbidden_domain_imports: ["syn_adapters", "syn_api"]
+///   forbidden_adapter_imports: ["syn_api"]
+/// ```
+pub struct LayerSeparationRule;
+
+impl ValidationRule for LayerSeparationRule {
+    fn name(&self) -> &str {
+        "layer-separation"
+    }
+
+    fn code(&self) -> &str {
+        "VSA206"
+    }
+
+    fn validate(
+        &self,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+    ) -> Result<()> {
+        let config = match &ctx.config.layer_separation {
+            Some(c) => c,
+            None => return Ok(()), // No config = rule is a no-op
+        };
+
+        if config.forbidden_domain_imports.is_empty() && config.forbidden_adapter_imports.is_empty()
+        {
+            return Ok(());
+        }
+
+        let scanner = Scanner::new(ctx.config.clone(), ctx.root.clone());
+        let contexts = scanner.scan_contexts()?;
+
+        // Check domain and slice code against forbidden_domain_imports
+        if !config.forbidden_domain_imports.is_empty() {
+            for context in &contexts {
+                self.check_layer_files(
+                    ctx,
+                    report,
+                    &context.path.join("domain"),
+                    &config.forbidden_domain_imports,
+                    "Domain",
+                )?;
+                self.check_layer_files(
+                    ctx,
+                    report,
+                    &context.path.join("slices"),
+                    &config.forbidden_domain_imports,
+                    "Slice",
+                )?;
+            }
+        }
+
+        // Check adapter/infrastructure code against forbidden_adapter_imports
+        if !config.forbidden_adapter_imports.is_empty() {
+            for context in &contexts {
+                self.check_layer_files(
+                    ctx,
+                    report,
+                    &context.path.join("infrastructure"),
+                    &config.forbidden_adapter_imports,
+                    "Infrastructure",
+                )?;
+            }
+
+            // Also check cross_context_scan_paths (adapter packages outside context root)
+            for scan_path in &ctx.config.cross_context_scan_paths {
+                let abs_path = ctx.root.join(scan_path);
+                if abs_path.exists() {
+                    self.check_layer_files(
+                        ctx,
+                        report,
+                        &abs_path,
+                        &config.forbidden_adapter_imports,
+                        "Adapter",
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl LayerSeparationRule {
+    fn check_layer_files(
+        &self,
+        ctx: &ValidationContext,
+        report: &mut EnhancedValidationReport,
+        dir: &std::path::Path,
+        forbidden: &[String],
+        layer_name: &str,
+    ) -> Result<()> {
+        if !dir.exists() {
+            return Ok(());
+        }
+
+        for entry in walkdir::WalkDir::new(dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .filter(|e| !is_test_or_conftest(e.path()))
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map_or(false, |ext| ext == "py" || ext == "ts" || ext == "rs")
+            })
+        {
+            let file_path = entry.path();
+
+            // Skip __init__.py (public API definitions)
+            if file_path
+                .file_name()
+                .map_or(false, |n| n == "__init__.py")
+            {
+                continue;
+            }
+
+            let imports = match parse_imports(file_path) {
+                Ok(i) => i,
+                Err(_) => continue,
+            };
+
+            let rel_path = file_path
+                .strip_prefix(&ctx.root)
+                .unwrap_or(file_path)
+                .to_string_lossy()
+                .to_string();
+
+            // Check exception budget for this file
+            let budget = ctx
+                .config
+                .exceptions
+                .iter()
+                .find(|e| e.rule == "VSA206" && rel_path.ends_with(&e.file))
+                .map(|e| e.budget)
+                .unwrap_or(0);
+
+            let mut violation_count = 0usize;
+
+            for import in &imports {
+                let module = import.module.replace("::", ".").replace('/', ".");
+                for pkg in forbidden {
+                    if module.starts_with(pkg) {
+                        violation_count += 1;
+                        if violation_count > budget {
+                            report.errors.push(ValidationIssue {
+                                path: file_path.to_path_buf(),
+                                code: self.code().to_string(),
+                                severity: Severity::Error,
+                                message: format!(
+                                    "{} file '{}' imports forbidden package '{}': '{}' (line {})",
+                                    layer_name,
+                                    rel_path,
+                                    pkg,
+                                    import.module,
+                                    import.line_number,
+                                ),
+                                suggestions: vec![
+                                    Suggestion::manual(
+                                        "Import from the framework (event_sourcing) instead",
+                                    ),
+                                    Suggestion::manual(
+                                        "Define a port interface in the domain layer",
+                                    ),
+                                ],
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod layer_separation_tests {
+    use super::*;
+    use crate::config::*;
+    use tempfile::TempDir;
+
+    fn make_config(temp_dir: &TempDir) -> VsaConfig {
+        VsaConfig {
+            version: 2,
+            architecture: ArchitectureType::VerticalSlice,
+            root: temp_dir.path().to_path_buf(),
+            language: "python".to_string(),
+            domain: Some(DomainConfig::default()),
+            slices: Some(SlicesConfig::default()),
+            infrastructure: None,
+            framework: None,
+            contexts: std::collections::HashMap::new(),
+            validation: ValidationConfig::default(),
+            patterns: PatternsConfig::default(),
+            projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
+            layer_separation: None,
+        }
+    }
+
+    #[test]
+    fn test_no_config_is_noop() {
+        let temp_dir = TempDir::new().unwrap();
+        let ctx_path = temp_dir.path().join("myctx");
+        std::fs::create_dir_all(ctx_path.join("domain")).unwrap();
+        std::fs::create_dir_all(ctx_path.join("slices/my_slice")).unwrap();
+
+        std::fs::write(
+            ctx_path.join("slices/my_slice/handler.py"),
+            "from syn_adapters.projection_stores.protocol import ProjectionStoreProtocol\n",
+        )
+        .unwrap();
+
+        let config = make_config(&temp_dir);
+        let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
+        let rule = LayerSeparationRule;
+        let mut report = EnhancedValidationReport::default();
+
+        rule.validate(&ctx, &mut report).unwrap();
+        assert_eq!(report.errors.len(), 0, "No config means no violations");
+    }
+
+    #[test]
+    fn test_forbidden_domain_import_detected() {
+        let temp_dir = TempDir::new().unwrap();
+        let ctx_path = temp_dir.path().join("myctx");
+        std::fs::create_dir_all(ctx_path.join("domain")).unwrap();
+        std::fs::create_dir_all(ctx_path.join("slices/my_slice")).unwrap();
+
+        // Domain file importing from forbidden package
+        std::fs::write(
+            ctx_path.join("domain/handler.py"),
+            "from syn_adapters.projection_stores.protocol import ProjectionStoreProtocol\n",
+        )
+        .unwrap();
+
+        let mut config = make_config(&temp_dir);
+        config.layer_separation = Some(crate::config::LayerSeparationConfig {
+            forbidden_domain_imports: vec!["syn_adapters".to_string()],
+            forbidden_adapter_imports: Vec::new(),
+        });
+        let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
+        let rule = LayerSeparationRule;
+        let mut report = EnhancedValidationReport::default();
+
+        rule.validate(&ctx, &mut report).unwrap();
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].code, "VSA206");
+        assert!(report.errors[0].message.contains("syn_adapters"));
+    }
+
+    #[test]
+    fn test_forbidden_slice_import_detected() {
+        let temp_dir = TempDir::new().unwrap();
+        let ctx_path = temp_dir.path().join("myctx");
+        std::fs::create_dir_all(ctx_path.join("domain")).unwrap();
+        std::fs::create_dir_all(ctx_path.join("slices/cost")).unwrap();
+
+        // Slice file importing from forbidden package
+        std::fs::write(
+            ctx_path.join("slices/cost/handler.py"),
+            "from syn_adapters.projection_stores.protocol import ProjectionStoreProtocol\n",
+        )
+        .unwrap();
+
+        let mut config = make_config(&temp_dir);
+        config.layer_separation = Some(crate::config::LayerSeparationConfig {
+            forbidden_domain_imports: vec!["syn_adapters".to_string()],
+            forbidden_adapter_imports: Vec::new(),
+        });
+        let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
+        let rule = LayerSeparationRule;
+        let mut report = EnhancedValidationReport::default();
+
+        rule.validate(&ctx, &mut report).unwrap();
+        assert_eq!(report.errors.len(), 1);
+        assert_eq!(report.errors[0].code, "VSA206");
+    }
+
+    #[test]
+    fn test_allowed_framework_import_passes() {
+        let temp_dir = TempDir::new().unwrap();
+        let ctx_path = temp_dir.path().join("myctx");
+        std::fs::create_dir_all(ctx_path.join("domain")).unwrap();
+        std::fs::create_dir_all(ctx_path.join("slices/cost")).unwrap();
+
+        // Domain file importing from allowed framework package
+        std::fs::write(
+            ctx_path.join("domain/handler.py"),
+            "from event_sourcing import ProjectionReadStore\n",
+        )
+        .unwrap();
+
+        let mut config = make_config(&temp_dir);
+        config.layer_separation = Some(crate::config::LayerSeparationConfig {
+            forbidden_domain_imports: vec!["syn_adapters".to_string()],
+            forbidden_adapter_imports: Vec::new(),
+        });
+        let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
+        let rule = LayerSeparationRule;
+        let mut report = EnhancedValidationReport::default();
+
+        rule.validate(&ctx, &mut report).unwrap();
+        assert_eq!(report.errors.len(), 0, "Framework imports should be allowed");
+    }
+
+    #[test]
+    fn test_exception_budget_respected() {
+        let temp_dir = TempDir::new().unwrap();
+        let ctx_path = temp_dir.path().join("myctx");
+        std::fs::create_dir_all(ctx_path.join("domain")).unwrap();
+        std::fs::create_dir_all(ctx_path.join("slices/cost")).unwrap();
+
+        std::fs::write(
+            ctx_path.join("slices/cost/handler.py"),
+            "from syn_adapters.projection_stores.protocol import ProjectionStoreProtocol\n",
+        )
+        .unwrap();
+
+        let mut config = make_config(&temp_dir);
+        config.layer_separation = Some(crate::config::LayerSeparationConfig {
+            forbidden_domain_imports: vec!["syn_adapters".to_string()],
+            forbidden_adapter_imports: Vec::new(),
+        });
+        config.exceptions = vec![ExceptionBudget {
+            file: "slices/cost/handler.py".to_string(),
+            rule: "VSA206".to_string(),
+            budget: 1,
+            issue: Some("#197".to_string()),
+        }];
+        let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
+        let rule = LayerSeparationRule;
+        let mut report = EnhancedValidationReport::default();
+
+        rule.validate(&ctx, &mut report).unwrap();
+        assert_eq!(
+            report.errors.len(),
+            0,
+            "Violation within budget should not be reported"
+        );
+    }
+
+    #[test]
+    fn test_test_files_exempt() {
+        let temp_dir = TempDir::new().unwrap();
+        let ctx_path = temp_dir.path().join("myctx");
+        std::fs::create_dir_all(ctx_path.join("domain")).unwrap();
+        std::fs::create_dir_all(ctx_path.join("slices/cost")).unwrap();
+
+        std::fs::write(
+            ctx_path.join("slices/cost/test_handler.py"),
+            "from syn_adapters.projection_stores.protocol import ProjectionStoreProtocol\n",
+        )
+        .unwrap();
+
+        let mut config = make_config(&temp_dir);
+        config.layer_separation = Some(crate::config::LayerSeparationConfig {
+            forbidden_domain_imports: vec!["syn_adapters".to_string()],
+            forbidden_adapter_imports: Vec::new(),
+        });
+        let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
+        let rule = LayerSeparationRule;
+        let mut report = EnhancedValidationReport::default();
+
+        rule.validate(&ctx, &mut report).unwrap();
+        assert_eq!(report.errors.len(), 0, "Test files should be exempt");
     }
 }

@@ -90,6 +90,8 @@ impl ValidationRuleSet {
             // Cross-context boundary rules
             Box::new(CrossContextPublicApiRule),      // VSA204
             Box::new(ContextPublicApiExistsRule),     // VSA205
+            // Layer separation rules
+            Box::new(super::dependency_rules::LayerSeparationRule),  // VSA206
             // Slice isolation rules (legacy)
             Box::new(NoCrossSliceImportsRule),
             Box::new(ThinAdapterRule),
