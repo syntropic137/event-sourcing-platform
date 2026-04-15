@@ -1263,21 +1263,21 @@ impl LayerSeparationRule {
                 .to_string_lossy()
                 .to_string();
 
-            // Check exception budget for this file
-            let budget = ctx
+            // Check exception budget for this file (sum all matching entries)
+            let budget: usize = ctx
                 .config
                 .exceptions
                 .iter()
-                .find(|e| e.rule == "VSA206" && rel_path.ends_with(&e.file))
+                .filter(|e| e.rule == "VSA206" && rel_path.ends_with(&e.file))
                 .map(|e| e.budget)
-                .unwrap_or(0);
+                .sum();
 
             let mut violation_count = 0usize;
 
             for import in &imports {
                 let module = import.module.replace("::", ".").replace('/', ".");
                 for pkg in forbidden {
-                    if module.starts_with(pkg) {
+                    if module == *pkg || module.starts_with(&format!("{pkg}.")) {
                         violation_count += 1;
                         if violation_count > budget {
                             report.errors.push(ValidationIssue {
@@ -1503,5 +1503,36 @@ mod layer_separation_tests {
 
         rule.validate(&ctx, &mut report).unwrap();
         assert_eq!(report.errors.len(), 0, "Test files should be exempt");
+    }
+
+    #[test]
+    fn test_module_boundary_no_false_positive() {
+        let temp_dir = TempDir::new().unwrap();
+        let ctx_path = temp_dir.path().join("myctx");
+        std::fs::create_dir_all(ctx_path.join("domain")).unwrap();
+        std::fs::create_dir_all(ctx_path.join("slices/cost")).unwrap();
+
+        // "syn_adapters_extra" should NOT match forbidden "syn_adapters"
+        std::fs::write(
+            ctx_path.join("domain/handler.py"),
+            "from syn_adapters_extra.utils import helper\n",
+        )
+        .unwrap();
+
+        let mut config = make_config(&temp_dir);
+        config.layer_separation = Some(crate::config::LayerSeparationConfig {
+            forbidden_domain_imports: vec!["syn_adapters".to_string()],
+            forbidden_adapter_imports: Vec::new(),
+        });
+        let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
+        let rule = LayerSeparationRule;
+        let mut report = EnhancedValidationReport::default();
+
+        rule.validate(&ctx, &mut report).unwrap();
+        assert_eq!(
+            report.errors.len(),
+            0,
+            "Package prefix match should respect module boundaries"
+        );
     }
 }
