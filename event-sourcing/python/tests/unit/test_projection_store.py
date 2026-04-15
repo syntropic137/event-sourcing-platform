@@ -6,7 +6,6 @@ import pytest
 
 from event_sourcing.core.checkpoint import ProjectionReadStore, ProjectionStore
 
-
 # ============================================================================
 # Inline test implementation (mirrors the pattern in test_checkpoint.py)
 # ============================================================================

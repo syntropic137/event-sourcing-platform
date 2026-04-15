@@ -58,7 +58,11 @@ from event_sourcing.decorators.events import (
     get_event_type_registry,
     resolve_event_type,
 )
-from event_sourcing.stores import MemoryCheckpointStore, MemoryProjectionStore, PostgresCheckpointStore
+from event_sourcing.stores import (
+    MemoryCheckpointStore,
+    MemoryProjectionStore,
+    PostgresCheckpointStore,
+)
 from event_sourcing.subscriptions import SubscriptionCoordinator
 
 __version__ = "0.1.0"
