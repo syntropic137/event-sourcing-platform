@@ -446,6 +446,18 @@ class TestEdgeCases:
         assert saved is not None
         assert saved.value == "etag-2"
 
+    def test_naive_datetime_rejected(self) -> None:
+        """PollEvent rejects naive (timezone-unaware) datetimes."""
+        from datetime import datetime as dt
+
+        with pytest.raises(ValueError, match="timezone-aware"):
+            PollEvent(created_at=dt(2026, 1, 1, 12, 0, 0), data={})  # noqa: DTZ001
+
+    def test_aware_datetime_accepted(self) -> None:
+        """PollEvent accepts timezone-aware datetimes."""
+        event = PollEvent(created_at=datetime.now(UTC), data={})
+        assert event.created_at.tzinfo is not None
+
 
 # ============================================================================
 # Exception Safety Tests
@@ -517,25 +529,20 @@ class TestExceptionSafety:
         assert saved.value == "etag-old"
 
     @pytest.mark.asyncio
-    async def test_poll_without_initialize_treats_as_cold_start(self) -> None:
-        """Calling poll() before initialize() treats every source as cold start."""
+    async def test_poll_without_initialize_raises(self) -> None:
+        """Calling poll() before initialize() raises RuntimeError."""
         store = MemoryCursorStore({"repo-a": CursorData(value="etag-1")})
         poller = StubPoller(store)
         # Deliberately skip initialize()
 
-        old_event = _event(minutes_ago=60)
         poller.fetch_results["repo-a"] = PollResult(
-            events=[old_event],
+            events=[_event(minutes_ago=60)],
             cursor=CursorData(value="etag-2"),
             has_new=True,
         )
 
-        await poller.poll("repo-a")
-
-        # Historical event skipped (cold start behavior even though cursor exists)
-        assert len(poller.processed_events) == 0
-        # But source gets primed for next poll
-        assert "repo-a" in poller.primed_sources
+        with pytest.raises(RuntimeError, match="before initialize"):
+            await poller.poll("repo-a")
 
 
 # ============================================================================
@@ -568,7 +575,7 @@ class TestHistoricalPollerFitness:
             async def process(self, source_key: str, events: list[PollEvent]) -> None:
                 pass
 
-            async def poll(self, source_key: str) -> None:  # type: ignore[override]
+            async def poll(self, source_key: str) -> None:  # type: ignore[override]  # intentional for test
                 await super().poll(source_key)
 
         violations = check_historical_poller_structure(BadPoller)
@@ -589,7 +596,7 @@ class TestHistoricalPollerFitness:
             async def process(self, source_key: str, events: list[PollEvent]) -> None:
                 pass
 
-            async def _prime(self, source_key: str, cursor: CursorData) -> None:
+            async def _prime(self, source_key: str, cursor: CursorData) -> None:  # type: ignore[override]  # intentional for test
                 pass  # Silently swallows the prime
 
         violations = check_historical_poller_structure(SneakyPoller)
@@ -609,13 +616,13 @@ class TestHistoricalPollerFitness:
             async def process(self, source_key: str, events: list[PollEvent]) -> None:
                 pass
 
-            async def poll(self, source_key: str) -> None:  # type: ignore[override]
+            async def poll(self, source_key: str) -> None:  # type: ignore[override]  # intentional for test
                 pass
 
-            async def _prime(self, source_key: str, cursor: CursorData) -> None:
+            async def _prime(self, source_key: str, cursor: CursorData) -> None:  # type: ignore[override]  # intentional for test
                 pass
 
-            async def _persist_cursor(self, source_key: str, cursor: CursorData) -> None:
+            async def _persist_cursor(self, source_key: str, cursor: CursorData) -> None:  # type: ignore[override]  # intentional for test
                 pass
 
         violations = check_historical_poller_structure(TerriblePoller)

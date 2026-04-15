@@ -44,7 +44,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, final, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,14 @@ class PollEvent:
 
     created_at: datetime
     data: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        if self.created_at.tzinfo is None:
+            msg = (
+                "PollEvent.created_at must be timezone-aware (UTC). "
+                "Got naive datetime. Use datetime.now(UTC) or similar."
+            )
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +178,7 @@ class HistoricalPoller(ABC):
         self._cursor_store = cursor_store
         self._primed_sources: set[str] = set()
         self._started_at: datetime = datetime.now(UTC)
+        self._initialized: bool = False
 
     async def initialize(self) -> None:
         """Load persisted cursors from the store.
@@ -179,6 +188,7 @@ class HistoricalPoller(ABC):
         """
         cursors = await self._cursor_store.load_all()
         self._primed_sources = set(cursors.keys())
+        self._initialized = True
         if self._primed_sources:
             logger.info(
                 "HistoricalPoller initialized with %d primed source(s): %s",
@@ -217,11 +227,14 @@ class HistoricalPoller(ABC):
         """
         ...
 
+    @final
     async def poll(self, source_key: str) -> None:
         """Poll a source for new events with cold-start safety.
 
         This is a template method -- **not meant to be overridden**.
         Subclasses implement ``fetch()`` and ``process()`` instead.
+        Enforced at runtime via ``@final`` and statically by the
+        ``check_historical_poller_structure()`` fitness function.
 
         The cold-start fence works as follows:
 
@@ -235,14 +248,26 @@ class HistoricalPoller(ABC):
              (genuinely new, happened after the system came online).
         3. The cursor is always persisted, so subsequent polls resume
            from the correct position regardless of cold/warm start.
+
+        Raises:
+            RuntimeError: If ``initialize()`` has not been called.
         """
+        if not self._initialized:
+            msg = (
+                f"{type(self).__name__}.poll() called before initialize(). "
+                f"Call initialize() first to load persisted cursors."
+            )
+            raise RuntimeError(msg)
+
         result = await self.fetch(source_key)
 
         if not result.has_new:
             return
 
         if source_key in self._primed_sources:
-            # Warm start: process all events, update cursor
+            # Warm start: process events, then update cursor.
+            # Ordering matters: if process() crashes, the old cursor
+            # remains and events will be re-fetched on next poll (safe).
             if result.events:
                 await self.process(source_key, result.events)
             await self._persist_cursor(source_key, result.cursor)
@@ -252,7 +277,11 @@ class HistoricalPoller(ABC):
         new_events = [e for e in result.events if e.created_at >= self._started_at]
         skipped = len(result.events) - len(new_events)
 
-        # Always prime the cursor (even if no new events to process)
+        # Prime cursor BEFORE process(). Trade-off: if process() crashes,
+        # these events are lost (cursor advanced past them). The alternative
+        # (prime after process) risks the restart storm if prime fails --
+        # events would be re-fetched and re-processed on every restart.
+        # Losing a few events on crash is cheaper than a billing flood.
         await self._prime(source_key, result.cursor)
 
         if new_events:
@@ -270,11 +299,13 @@ class HistoricalPoller(ABC):
                 skipped,
             )
 
+    @final
     async def _prime(self, source_key: str, cursor: CursorData) -> None:
         """Persist cursor and mark source as primed."""
         await self._cursor_store.save(source_key, cursor)
         self._primed_sources.add(source_key)
 
+    @final
     async def _persist_cursor(self, source_key: str, cursor: CursorData) -> None:
         """Persist cursor for a primed source."""
         await self._cursor_store.save(source_key, cursor)
