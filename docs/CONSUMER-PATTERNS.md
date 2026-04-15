@@ -1,7 +1,7 @@
 # Event Consumer Patterns
 
-This guide defines the two types of event consumers in ESP and the rules
-for each. Every event consumer must be exactly one of these types.
+This guide defines the three types of event consumers in ESP and the
+rules for each. Every event consumer must be exactly one of these types.
 
 ## Projection (Read Model)
 
@@ -70,6 +70,74 @@ called 0 times. Send 1 live event. Assert `process_pending()` called
 
 ---
 
+## HistoricalPoller (External Source Ingestion)
+
+A HistoricalPoller fetches events from external sources (APIs, message
+queues, RSS feeds) and feeds them into the application pipeline. The
+core problem: external event APIs (e.g. GitHub Events API) return
+**historical** events alongside new ones. On a fresh start with no
+persisted cursor, re-processing the entire history would trigger
+duplicate side effects.
+
+**Base class:** `HistoricalPoller`
+
+**Cold-start fence:** On first poll with no cursor, events with
+`created_at < started_at` are filtered out. Only events created after
+the poller's start time are processed. The cursor is persisted so
+subsequent polls resume correctly (warm start).
+
+**Template method:** `poll()` is concrete and non-overridable.
+Subclasses implement `fetch()` and `process()` only. This is a
+poka-yoke: the safe behavior is the default, and processing historical
+events requires an explicit cursor.
+
+| Method | Override? | Purpose |
+|--------|-----------|---------|
+| `fetch()` | Required | Retrieve events from the external source |
+| `process()` | Required | Feed events into the application pipeline |
+| `poll()` | Never | Template method enforcing the cold-start fence |
+| `initialize()` | Never | Load persisted cursors from the store |
+
+**Rules:**
+- Source must provide reliable `created_at` timestamps (UTC)
+- `CursorStore` must be durable (Postgres, filesystem) -- in-memory
+  only for tests
+- `poll()` must NOT be overridden (fitness function enforces this)
+- `process()` should be idempotent where possible
+
+**When to use:** Polling external APIs (GitHub Events, GitLab webhooks,
+Jira, RSS), consuming message queues with historical replay, or any
+scenario where the source may return events from before the system
+started.
+
+**How it differs from other patterns:**
+- `CheckpointedProjection` consumes **internal** event store streams
+- `ProcessManager` consumes **internal** events with side effects
+- `HistoricalPoller` ingests **external** event sources with cold-start
+  safety
+
+**Test:**
+```python
+poller = StubPoller(MemoryCursorStore())
+await poller.initialize()
+
+# Configure historical events (before startup)
+poller.fetch_results["source-a"] = PollResult(
+    events=[old_event, new_event],  # old < started_at, new >= started_at
+    cursor=CursorData(value="cursor-1"),
+    has_new=True,
+)
+await poller.poll("source-a")
+
+# Only new_event was processed, old_event was filtered
+assert len(poller.processed_events) == 1
+```
+
+**Fitness check:** `check_historical_poller_structure()` validates that
+subclasses don't override `poll()`, `_prime()`, or `_persist_cursor()`.
+
+---
+
 ## Decision Table
 
 | Scenario | Pattern | Example |
@@ -80,6 +148,9 @@ called 0 times. Send 1 live event. Assert `process_pending()` called
 | Send notification on event | ProcessManager | Email, Slack, webhook notification |
 | Call external API on event | ProcessManager | GitHub status update, billing |
 | Multi-step orchestration | ProcessManager | Phase-by-phase workflow execution |
+| Poll external API for events | HistoricalPoller | GitHub Events API, GitLab webhooks |
+| Ingest message queue history | HistoricalPoller | Kafka consumer with offset reset |
+| Sync external source on startup | HistoricalPoller | RSS feed, third-party webhook log |
 
 ---
 

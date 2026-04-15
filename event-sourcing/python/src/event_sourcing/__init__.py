@@ -31,6 +31,13 @@ from event_sourcing.core.event import (
     GenericDomainEvent,
 )
 from event_sourcing.core.expected_version import ExpectedVersion
+from event_sourcing.core.historical_poller import (
+    CursorData,
+    CursorStore,
+    HistoricalPoller,
+    PollEvent,
+    PollResult,
+)
 from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.core.projection import (
     AutoDispatchProjection,
@@ -96,6 +103,12 @@ __all__ = [
     "ProjectionStore",
     # Process Manager (To-Do List pattern)
     "ProcessManager",
+    # Historical Poller (Cold-Start-Safe External Ingestion)
+    "HistoricalPoller",
+    "CursorStore",
+    "CursorData",
+    "PollEvent",
+    "PollResult",
     # Checkpoint Stores
     "PostgresCheckpointStore",
     "MemoryCheckpointStore",
