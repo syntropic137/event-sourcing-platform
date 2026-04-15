@@ -224,6 +224,9 @@ mod tests {
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
             projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
+            layer_separation: None,
         }
     }
 
@@ -263,6 +266,9 @@ mod tests {
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
             projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
+            layer_separation: None,
         }
     }
 

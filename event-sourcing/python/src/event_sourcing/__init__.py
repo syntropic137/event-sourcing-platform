@@ -13,7 +13,7 @@ from event_sourcing.client import (
     MemoryEventStoreClient,
 )
 from event_sourcing.core.aggregate import AggregateRoot, BaseAggregate
-from event_sourcing.core.checkpoint import DispatchContext
+from event_sourcing.core.checkpoint import DispatchContext, ProjectionReadStore, ProjectionStore
 from event_sourcing.core.command import Command, CommandBus, CommandHandler, InMemoryCommandBus
 from event_sourcing.core.errors import (
     AggregateNotFoundError,
@@ -58,7 +58,11 @@ from event_sourcing.decorators.events import (
     get_event_type_registry,
     resolve_event_type,
 )
-from event_sourcing.stores import MemoryCheckpointStore, PostgresCheckpointStore
+from event_sourcing.stores import (
+    MemoryCheckpointStore,
+    MemoryProjectionStore,
+    PostgresCheckpointStore,
+)
 from event_sourcing.subscriptions import SubscriptionCoordinator
 
 __version__ = "0.1.0"
@@ -87,12 +91,16 @@ __all__ = [
     "DispatchContext",
     "ProjectionCheckpoint",
     "ProjectionCheckpointStore",
+    "ProjectionReadStore",
     "ProjectionResult",
+    "ProjectionStore",
     # Process Manager (To-Do List pattern)
     "ProcessManager",
     # Checkpoint Stores
     "PostgresCheckpointStore",
     "MemoryCheckpointStore",
+    # Projection Stores
+    "MemoryProjectionStore",
     # Subscription Coordinator
     "SubscriptionCoordinator",
     # Repository

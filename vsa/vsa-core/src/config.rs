@@ -63,6 +63,28 @@ pub struct VsaConfig {
     /// Exception budgets for grandfathered violations
     #[serde(default)]
     pub exceptions: Vec<ExceptionBudget>,
+
+    /// Layer separation enforcement configuration
+    #[serde(default)]
+    pub layer_separation: Option<LayerSeparationConfig>,
+}
+
+/// Configuration for layer separation enforcement (VSA206).
+///
+/// Defines which packages are forbidden from being imported by domain/slice
+/// code and adapter code. TYPE_CHECKING imports are automatically exempt
+/// (the import parser already filters them out).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LayerSeparationConfig {
+    /// Packages that domain and slice code must not import at runtime.
+    /// Example: ["syn_adapters", "syn_api"]
+    #[serde(default)]
+    pub forbidden_domain_imports: Vec<String>,
+
+    /// Packages that adapter code must not import at runtime.
+    /// Example: ["syn_api"]
+    #[serde(default)]
+    pub forbidden_adapter_imports: Vec<String>,
 }
 
 /// Exception budget for a specific file+rule combination
@@ -1232,6 +1254,7 @@ mod tests {
             projection_allowed_prefixes: None,
             cross_context_scan_paths: Vec::new(),
             exceptions: Vec::new(),
+            layer_separation: None,
         };
 
         assert!(config.validate().is_ok());
@@ -1255,6 +1278,7 @@ mod tests {
             projection_allowed_prefixes: None,
             cross_context_scan_paths: Vec::new(),
             exceptions: Vec::new(),
+            layer_separation: None,
         };
 
         assert!(config.validate().is_ok());
@@ -1279,6 +1303,7 @@ mod tests {
             projection_allowed_prefixes: None,
             cross_context_scan_paths: Vec::new(),
             exceptions: Vec::new(),
+            layer_separation: None,
         };
 
         assert!(config.validate().is_err());
@@ -1301,6 +1326,7 @@ mod tests {
             projection_allowed_prefixes: None,
             cross_context_scan_paths: Vec::new(),
             exceptions: Vec::new(),
+            layer_separation: None,
         };
 
         assert!(config.validate().is_err());
@@ -1323,6 +1349,7 @@ mod tests {
             projection_allowed_prefixes: None,
             cross_context_scan_paths: Vec::new(),
             exceptions: Vec::new(),
+            layer_separation: None,
         };
 
         assert!(config.validate().is_err());
