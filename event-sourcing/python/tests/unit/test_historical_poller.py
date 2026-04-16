@@ -47,6 +47,7 @@ class StubPoller(HistoricalPoller):
         super().__init__(cursor_store)
         self.fetch_results: dict[str, PollResult] = {}
         self.processed_events: list[tuple[str, list[PollEvent]]] = []
+        self.process_replay_flags: list[bool] = []
         self.fetch_calls: list[str] = []
         self.fetch_error: Exception | None = None
         self.process_error: Exception | None = None
@@ -57,8 +58,14 @@ class StubPoller(HistoricalPoller):
             raise self.fetch_error
         return self.fetch_results[source_key]
 
-    async def process(self, source_key: str, events: list[PollEvent]) -> None:
+    async def process(
+        self,
+        source_key: str,
+        events: list[PollEvent],
+        is_replay: bool = False,
+    ) -> None:
         self.processed_events.append((source_key, list(events)))
+        self.process_replay_flags.append(is_replay)
         if self.process_error is not None:
             raise self.process_error
 
@@ -338,6 +345,91 @@ class TestColdStart:
 
 
 # ============================================================================
+# is_replay Propagation Tests (ADR-060 Layer 4)
+# ============================================================================
+
+
+class TestIsReplayPropagation:
+    """Verify ESP signals cold-start replay vs warm-start to subclasses.
+
+    See ADR-060 Section 9 Layer 4: the original ``source_primed=False``
+    safety net was dead code because ``_prime()`` runs before ``process()``.
+    The fix passes ``is_replay`` directly from ``poll()`` to ``process()``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cold_start_passes_is_replay_true(self) -> None:
+        """Cold-start path must call process(..., is_replay=True)."""
+        poller = StubPoller(MemoryCursorStore())
+        await poller.initialize()
+
+        # Event after startup so it survives the timestamp fence
+        new_event = _event(minutes_ago=-1)
+        poller.fetch_results["repo-a"] = PollResult(
+            events=[new_event],
+            cursor=CursorData(value="etag-1"),
+            has_new=True,
+        )
+
+        await poller.poll("repo-a")
+
+        assert poller.process_replay_flags == [True]
+
+    @pytest.mark.asyncio
+    async def test_warm_start_passes_is_replay_false(self) -> None:
+        """Warm-start path must call process(..., is_replay=False)."""
+        store = MemoryCursorStore({"repo-a": CursorData(value="etag-old")})
+        poller = StubPoller(store)
+        await poller.initialize()
+
+        poller.fetch_results["repo-a"] = PollResult(
+            events=[_event(minutes_ago=0)],
+            cursor=CursorData(value="etag-new"),
+            has_new=True,
+        )
+
+        await poller.poll("repo-a")
+
+        assert poller.process_replay_flags == [False]
+
+    @pytest.mark.asyncio
+    async def test_subclass_without_is_replay_kwarg_still_works(self) -> None:
+        """Liskov: existing subclasses with old (no-kwarg) signature still work.
+
+        The default value ``is_replay=False`` means subclasses that don't
+        accept the kwarg won't break -- ESP only passes ``is_replay=True``
+        as a kwarg, never positionally.
+        """
+
+        class LegacyPoller(HistoricalPoller):
+            def __init__(self, cursor_store: CursorStore) -> None:
+                super().__init__(cursor_store)
+                self.processed: list[list[PollEvent]] = []
+
+            async def fetch(self, source_key: str) -> PollResult:
+                return PollResult(
+                    events=[_event(minutes_ago=0)],
+                    cursor=CursorData(value="etag-1"),
+                    has_new=True,
+                )
+
+            async def process(  # type: ignore[override]  # legacy signature without is_replay
+                self,
+                source_key: str,
+                events: list[PollEvent],
+            ) -> None:
+                self.processed.append(list(events))
+
+        store = MemoryCursorStore({"repo-a": CursorData(value="etag-old")})
+        poller = LegacyPoller(store)
+        await poller.initialize()
+        await poller.poll("repo-a")
+
+        # Warm path passes no kwarg, so legacy subclasses keep working.
+        assert len(poller.processed) == 1
+
+
+# ============================================================================
 # Multiple Sources Tests
 # ============================================================================
 
@@ -572,7 +664,12 @@ class TestHistoricalPollerFitness:
             async def fetch(self, source_key: str) -> PollResult:
                 return PollResult(events=[], cursor=CursorData(value=""), has_new=False)
 
-            async def process(self, source_key: str, events: list[PollEvent]) -> None:
+            async def process(
+                self,
+                source_key: str,
+                events: list[PollEvent],
+                is_replay: bool = False,
+            ) -> None:
                 pass
 
             async def poll(self, source_key: str) -> None:  # type: ignore[override]  # intentional for test
@@ -593,7 +690,12 @@ class TestHistoricalPollerFitness:
             async def fetch(self, source_key: str) -> PollResult:
                 return PollResult(events=[], cursor=CursorData(value=""), has_new=False)
 
-            async def process(self, source_key: str, events: list[PollEvent]) -> None:
+            async def process(
+                self,
+                source_key: str,
+                events: list[PollEvent],
+                is_replay: bool = False,
+            ) -> None:
                 pass
 
             async def _prime(self, source_key: str, cursor: CursorData) -> None:  # type: ignore[override]  # intentional for test
@@ -613,7 +715,12 @@ class TestHistoricalPollerFitness:
             async def fetch(self, source_key: str) -> PollResult:
                 return PollResult(events=[], cursor=CursorData(value=""), has_new=False)
 
-            async def process(self, source_key: str, events: list[PollEvent]) -> None:
+            async def process(
+                self,
+                source_key: str,
+                events: list[PollEvent],
+                is_replay: bool = False,
+            ) -> None:
                 pass
 
             async def poll(self, source_key: str) -> None:  # type: ignore[override]  # intentional for test

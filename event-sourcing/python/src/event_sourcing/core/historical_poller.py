@@ -214,7 +214,12 @@ class HistoricalPoller(ABC):
         ...
 
     @abstractmethod
-    async def process(self, source_key: str, events: list[PollEvent]) -> None:
+    async def process(
+        self,
+        source_key: str,
+        events: list[PollEvent],
+        is_replay: bool = False,
+    ) -> None:
         """Process fetched events through the application pipeline.
 
         Called only for events that pass the cold-start fence. On warm
@@ -224,6 +229,15 @@ class HistoricalPoller(ABC):
         Args:
             source_key: Identifies the source (e.g. "owner/repo").
             events: Events to process, ordered oldest-first.
+            is_replay: True when this batch is being replayed during the
+                cold-start path (events that survived the timestamp fence
+                on the very first poll for this source). Subclasses may
+                use this signal to mark events as un-primed so downstream
+                consumers skip side-effecting work like trigger evaluation.
+                False on the warm-start (steady-state) path.
+
+                Defaults to False so existing subclasses remain Liskov-safe
+                without modification.
         """
         ...
 
@@ -286,12 +300,12 @@ class HistoricalPoller(ABC):
 
         if new_events:
             logger.info(
-                "Cold start for %s: processing %d new event(s), skipping %d historical",
+                "Cold start for %s: processing %d new event(s) as replay, skipping %d historical",
                 source_key,
                 len(new_events),
                 skipped,
             )
-            await self.process(source_key, new_events)
+            await self.process(source_key, new_events, is_replay=True)
         elif result.events:
             logger.info(
                 "Cold start for %s: skipped %d historical event(s), cursor primed",
