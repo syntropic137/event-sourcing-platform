@@ -17,6 +17,24 @@ reason = "rustls-webpki is a dev-only transitive dep (testcontainers → bollard
 id = "GHSA-pwjx-qhcg-rvj4"
 reason = "Duplicate advisory for RUSTSEC-2026-0049 (rustls-webpki). Dev-only."
 
+# Rust: testcontainers → bollard → rustls → rustls-webpki (dev-only dep, additional advisories)
+# Same root cause as RUSTSEC-2026-0049. Awaiting bollard upgrade to rustls 0.23+.
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0098"
+reason = "rustls-webpki is a dev-only transitive dep (testcontainers -> bollard -> rustls). Awaiting bollard upgrade to rustls 0.23+."
+
+[[IgnoredVulns]]
+id = "GHSA-965h-392x-2mh5"
+reason = "Duplicate advisory for RUSTSEC-2026-0098 (rustls-webpki). Dev-only."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0099"
+reason = "rustls-webpki is a dev-only transitive dep (testcontainers -> bollard -> rustls). Awaiting bollard upgrade to rustls 0.23+."
+
+[[IgnoredVulns]]
+id = "GHSA-xgp8-3hg3-c2mh"
+reason = "Duplicate advisory for RUSTSEC-2026-0099 (rustls-webpki). Dev-only."
+
 # Rust: testcontainers → bollard → rsa (dev-only dep)
 # RUSTSEC-2023-0071 has no fix — the rsa crate has a known Marvin Attack weakness.
 # Only affects test infrastructure Docker communication, not production.
