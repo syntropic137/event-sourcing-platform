@@ -29,7 +29,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "commander": "^11.1.0"
+    "commander": "^14.0.3"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
