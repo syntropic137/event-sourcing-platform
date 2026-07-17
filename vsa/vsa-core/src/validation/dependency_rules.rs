@@ -106,31 +106,28 @@ impl DomainPurityRule {
     fn is_forbidden_import(module: &str) -> bool {
         let normalized = module.replace("::", "/").replace('.', "/");
 
-        // Check for forbidden layers in import path
-        // Per ADR-019: Events should be in domain/events/ (domain cohesion)
-        // Context-root events/ is an old pattern and should not be used
-        // Logic: Allow domain/events/, forbid context-root events/
-        let has_forbidden_events = normalized.contains("/events/")
-            && !normalized.contains("/domain/events/")
-            || normalized.starts_with("events/") && !normalized.starts_with("domain/events/")
-            || (normalized.starts_with("events")
-                && !normalized.starts_with("domain/events")
-                && !normalized.contains('/'));
+        // Rust crate-relative prefixes (crate::, super::, self::) are not layers.
+        // Strip them and any empty segments, then match a forbidden layer as ANY
+        // path segment. This catches `use crate::infrastructure` (normalized to
+        // `crate/infrastructure`), which the old `/layer/`-or-leading-`layer`
+        // substring logic silently allowed, so the dependency-direction gate now
+        // bites on Rust crate-relative imports as well as path- and dotted-style.
+        let segments: Vec<&str> = normalized
+            .split('/')
+            .filter(|s| !s.is_empty() && !matches!(*s, "crate" | "super" | "self"))
+            .collect();
 
-        has_forbidden_events
-            || normalized.contains("/ports/")
-            || normalized.contains("/application/")
-            || normalized.contains("/infrastructure/")
-            || normalized.contains("/slices/")
-            || normalized.starts_with("ports/")
-            || normalized.starts_with("application/")
-            || normalized.starts_with("infrastructure/")
-            || normalized.starts_with("slices/")
-            // Also check for module names without path separators (same-level imports)
-            || normalized.starts_with("ports")
-            || normalized.starts_with("application")
-            || normalized.starts_with("infrastructure")
-            || normalized.starts_with("slices")
+        // Forbidden non-domain layers for the domain layer.
+        const FORBIDDEN_LAYERS: [&str; 4] = ["ports", "application", "infrastructure", "slices"];
+        if segments.iter().any(|s| FORBIDDEN_LAYERS.contains(s)) {
+            return true;
+        }
+
+        // Per ADR-019: domain events live only in domain/events/. Any other
+        // `events` segment (context-root events/, etc.) is a forbidden location.
+        let has_events = segments.iter().any(|s| *s == "events");
+        let events_under_domain = segments.windows(2).any(|w| w == ["domain", "events"]);
+        has_events && !events_under_domain
     }
 }
 
