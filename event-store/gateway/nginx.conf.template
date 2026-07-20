@@ -22,6 +22,24 @@ events {
 }
 
 http {
+    # Docker's embedded DNS. Required so `set $upstream ...` below is
+    # re-resolved periodically instead of nginx caching the upstream
+    # container's IP for the life of the worker process - otherwise a
+    # recreated event-store container (new IP) leaves the gateway serving
+    # 502s until nginx itself restarts.
+    resolver 127.0.0.11 valid=10s;
+
+    # eventstore-bin/tonic has no request size limit of its own; nginx's
+    # 1m default would reject legitimate large Append batches that the
+    # direct (pre-gateway) endpoint accepted. Let the upstream enforce
+    # limits instead.
+    client_max_body_size 0;
+
+    # Subscribe is a long-lived server-streaming RPC that can sit idle
+    # (no events) far longer than nginx's 60s grpc_read_timeout default.
+    # Keep idle subscriptions alive rather than nginx killing them.
+    grpc_read_timeout 24h;
+
     # ------------------------------------------------------------------
     # PORT 80 — Docker network only (no auth). Do not publish this port.
     # ------------------------------------------------------------------
@@ -31,7 +49,8 @@ http {
         server_name _;
 
         location / {
-            grpc_pass grpc://${ESP_UPSTREAM};
+            set $upstream ${ESP_UPSTREAM};
+            grpc_pass grpc://$upstream;
             error_page 502 = /error502grpc;
         }
 
@@ -55,7 +74,8 @@ http {
         include /etc/nginx/auth/auth.conf;
 
         location / {
-            grpc_pass grpc://${ESP_UPSTREAM};
+            set $upstream ${ESP_UPSTREAM};
+            grpc_pass grpc://$upstream;
             error_page 502 = /error502grpc;
         }
 

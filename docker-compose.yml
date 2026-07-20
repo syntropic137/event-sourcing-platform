@@ -34,7 +34,13 @@ services:
     environment:
       ESP_UPSTREAM: "event-store:50051"
       ESP_GATEWAY_USER: ${ESP_GATEWAY_USER:-admin}
-      ESP_GATEWAY_PASSWORD: "${ESP_GATEWAY_PASSWORD:?ESP_GATEWAY_PASSWORD required - generate one with openssl rand -hex 32}"
+      # Intentionally NOT required here (unlike the Proxmox/AWS Ansible
+      # deploy paths, where it's a hard failure - see render_config.py).
+      # Root docker-compose.yml is also used for local/dev runs; leaving
+      # this unset disables Basic Auth with a loud startup warning
+      # (docker-entrypoint.sh), matching ADR-024's documented "unset = off"
+      # behavior. Set it for anything reachable outside your own machine.
+      ESP_GATEWAY_PASSWORD: ${ESP_GATEWAY_PASSWORD:-}
     restart: unless-stopped
     depends_on:
       - event-store

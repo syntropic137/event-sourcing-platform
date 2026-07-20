@@ -29,17 +29,27 @@ for the prior-art pattern this follows.
 docker compose up gateway
 ```
 
-Verify:
+Verify (port 80 is Docker-internal only — not published to the host, so it's
+only reachable as `gateway:80` from another container on the same network;
+port 8081 is what `docker-compose.yml` publishes as `${GRPC_PORT:-50051}` on
+the host):
 
 ```bash
-# Unauthenticated internal port (works)
-grpcurl -plaintext localhost:80 list  # from inside the Docker network
+# Unauthenticated internal port (works) — run from another container on the
+# same Docker network, e.g.:
+docker run --rm --network event-sourcing-platform_eventstore-network \
+  fullstorydev/grpcurl -plaintext gateway:80 list
 
-# External port without credentials (fails when ESP_GATEWAY_PASSWORD is set)
-grpcurl -plaintext -H 'authorization: ' localhost:8081 list  # 401
+# External published port, without credentials (fails when
+# ESP_GATEWAY_PASSWORD is set — expect a 401/Unauthorized)
+grpcurl -plaintext -H 'authorization: ' localhost:50051 list
 
-# External port with credentials
-grpcurl -plaintext -H "authorization: Basic $(echo -n admin:$ESP_GATEWAY_PASSWORD | base64)" localhost:8081 list
+# External published port, with credentials
+# Use `tr -d '\n'` after base64, not `-w0` — `-w0` is GNU-only and isn't
+# available on macOS/BSD base64; a wrapped/newline-containing token breaks
+# the authorization header.
+TOKEN=$(echo -n "admin:$ESP_GATEWAY_PASSWORD" | base64 | tr -d '\n')
+grpcurl -plaintext -H "authorization: Basic $TOKEN" localhost:50051 list
 ```
 
 ## Known limitation

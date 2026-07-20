@@ -422,8 +422,10 @@ After Terraform creates the VM:
    grpcurl -plaintext 192.168.0.100:50051 list
 
    # With credentials — should succeed
-   grpcurl -plaintext -H "authorization: Basic $(echo -n admin:$ESP_GATEWAY_PASSWORD | base64)" \
-     192.168.0.100:50051 list
+   # Use `tr -d '\n'` after base64, not `-w0` (GNU-only, not on macOS/BSD
+   # base64) — a wrapped/newline-containing token breaks the auth header.
+   TOKEN=$(echo -n "admin:$ESP_GATEWAY_PASSWORD" | base64 | tr -d '\n')
+   grpcurl -plaintext -H "authorization: Basic $TOKEN" 192.168.0.100:50051 list
    ```
    Note: the example TS/Python/Rust SDK clients don't yet support injecting a Basic Auth header — `grpcurl` is currently the only verified way to exercise the gateway-protected port. Adding credential support to the SDKs is tracked as a follow-up.
 
