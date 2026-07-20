@@ -28,8 +28,22 @@ services:
     container_name: event-store-gateway
     ports:
       - "{{ eventstore_grpc_port }}:8081"
-    env_file:
-      - .env
+    # Explicit environment, NOT `env_file: .env` (unlike event-store above):
+    # .env also carries DATABASE_URL/POSTGRES_PASSWORD. Gateway is the one
+    # network-facing container in this stack; a gateway compromise (e.g. an
+    # nginx CVE) should not hand over direct database credentials it never
+    # needed in the first place. `to_json` gives safe YAML/JSON string
+    # escaping for values that may contain quotes, `$`, `#`, etc.
+    environment:
+      ESP_UPSTREAM: "event-store:{{ eventstore_grpc_port }}"
+      # `$` must be doubled to `$$` BEFORE to_json: Compose interpolates
+      # ${VAR}/$VAR across the ENTIRE compose file text (not just
+      # env_file-loaded values) - a raw `$` here would still get expanded
+      # by Compose itself even though to_json already made the value valid
+      # YAML/JSON. Verified: `docker compose config` on an unescaped test
+      # value expanded a literal "$HOME" to the render host's actual $HOME.
+      ESP_GATEWAY_USER: {{ esp_gateway_user | replace('$', '$$') | to_json }}
+      ESP_GATEWAY_PASSWORD: {{ esp_gateway_password | replace('$', '$$') | to_json }}
     restart: unless-stopped
     depends_on:
       - event-store

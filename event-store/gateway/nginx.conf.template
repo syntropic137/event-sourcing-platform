@@ -59,7 +59,7 @@ http {
             default_type application/grpc;
             add_header grpc-status 14;
             add_header grpc-message "upstream unavailable";
-            return 204;
+            return 200;
         }
     }
 
@@ -84,7 +84,7 @@ http {
             default_type application/grpc;
             add_header grpc-status 14;
             add_header grpc-message "upstream unavailable";
-            return 204;
+            return 200;
         }
     }
 }

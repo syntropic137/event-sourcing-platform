@@ -2,6 +2,26 @@
 # Main task file for event-store role
 # Deploys Event Store using Docker Compose
 
+- name: Assert gateway password is set and not the role default (ADR-024)
+  # render_config.py already guards this for the Proxmox/AWS render
+  # pipeline, but this role is reusable and can be invoked directly (or
+  # with stale/hand-written group_vars that predate the gateway) -
+  # bypassing that Python-layer check entirely. eventstore-bin has no auth
+  # of its own; the gateway is the only publicly reachable port in this
+  # deployment, so the role itself must also refuse to deploy it with the
+  # well-known "changeme" default or an empty password.
+  ansible.builtin.assert:
+    that:
+      - esp_gateway_password is defined
+      - esp_gateway_password | length > 0
+      - esp_gateway_password != "changeme"
+    fail_msg: >-
+      esp_gateway_password is unset or left as the default "changeme"
+      (ADR-024). The gateway is the only publicly reachable port in this
+      deployment and must not use a predictable credential. Set
+      ESP_GATEWAY_PASSWORD before running this role.
+  tags: [always]
+
 - name: Include base system setup tasks
   ansible.builtin.include_tasks: base-system.yml
   tags: [base, system]
