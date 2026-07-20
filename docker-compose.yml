@@ -11,10 +11,16 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       BACKEND: ${BACKEND:-postgres}
       GRPC_PORT: ${GRPC_PORT:-50051}
+      # eventstore-bin actually reads BIND_ADDR, not GRPC_PORT (see
+      # event-store/eventstore-bin/src/main.rs) - wire it explicitly so a
+      # non-default GRPC_PORT (e.g. running multiple environments per host)
+      # takes effect, instead of GRPC_PORT silently doing nothing while
+      # the container keeps listening on the 50051 default.
+      BIND_ADDR: "0.0.0.0:${GRPC_PORT:-50051}"
       RUST_LOG: ${RUST_LOG:-info}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "grpcurl", "-plaintext", "localhost:50051", "list"]
+      test: ["CMD", "grpcurl", "-plaintext", "localhost:${GRPC_PORT:-50051}", "list"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -32,7 +38,7 @@ services:
     ports:
       - "${GRPC_PORT:-50051}:8081"
     environment:
-      ESP_UPSTREAM: "event-store:50051"
+      ESP_UPSTREAM: "event-store:${GRPC_PORT:-50051}"
       ESP_GATEWAY_USER: ${ESP_GATEWAY_USER:-admin}
       # Intentionally NOT required here (unlike the Proxmox/AWS Ansible
       # deploy paths, where it's a hard failure - see render_config.py).

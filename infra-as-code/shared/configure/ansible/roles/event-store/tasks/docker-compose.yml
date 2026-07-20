@@ -124,7 +124,7 @@
   ansible.builtin.command:
     cmd: >-
       docker exec event-store
-      bash -c "</dev/tcp/127.0.0.1/50051"
+      bash -c "</dev/tcp/127.0.0.1/{{ eventstore_grpc_port }}"
   register: eventstore_ready
   until: eventstore_ready.rc == 0
   retries: 12

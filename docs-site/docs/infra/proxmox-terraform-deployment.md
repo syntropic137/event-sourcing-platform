@@ -917,5 +917,5 @@ If the Proxmox console shows "Starting serial terminal interface 00" and gets st
 
 - [Architecture Decisions](./architecture-decisions.md) - Core principles and design decisions
 - [Infrastructure as Code Structure](./infra-as-code-structure.md)
-- [ADR-024: nginx Gateway Two-Port Authentication Model](../../../docs/adrs/ADR-024-nginx-gateway-two-port-grpc-auth.md) - why the gateway exists and what it does/doesn't protect against
-- [`event-store/gateway/README.md`](../../../event-store/gateway/README.md) - gateway config reference and manual verification commands
+- [ADR-024: nginx Gateway Two-Port Authentication Model](https://github.com/syntropic137/event-sourcing-platform/blob/main/docs/adrs/ADR-024-nginx-gateway-two-port-grpc-auth.md) - why the gateway exists and what it does/doesn't protect against (repo link, not a docs-site page - `docs/adrs/` isn't published here)
+- [`event-store/gateway/README.md`](https://github.com/syntropic137/event-sourcing-platform/blob/main/event-store/gateway/README.md) - gateway config reference and manual verification commands
