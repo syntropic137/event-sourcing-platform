@@ -68,6 +68,7 @@ echo "📝 Generating proxmox/provision/config/local.yml..."
 # become invalid/misparsed YAML. Standard YAML single-quoted scalar
 # escaping is doubling embedded single quotes.
 ESP_GATEWAY_PASSWORD_YAML=${ESP_GATEWAY_PASSWORD//\'/\'\'}
+ESP_GATEWAY_USER_YAML=${ESP_GATEWAY_USER//\'/\'\'}
 
 cat > proxmox/provision/config/local.yml << EOF
 # Proxmox local environment configuration for the event store deployment
@@ -145,7 +146,7 @@ ansible:
   # Gateway configuration (ADR-024) - eventstore-bin has no auth of its own;
   # the nginx gateway enforces Basic Auth on the published gRPC port.
   gateway:
-    user: ${ESP_GATEWAY_USER:-admin}
+    user: '${ESP_GATEWAY_USER_YAML:-admin}'
     password: '${ESP_GATEWAY_PASSWORD_YAML:-changeme}'
 
   # Service configuration

@@ -97,7 +97,11 @@
     dest: /opt/eventstore/docker-compose.yml
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
-    mode: "0644"
+    # 0600, not the previous 0644 (world-readable): this file now embeds
+    # the gateway's plaintext Basic Auth password directly (moved here
+    # from .env in a prior round, to stop sharing DB credentials with the
+    # gateway container) - it needs the same protection .env already has.
+    mode: "0600"
 
 - name: Create .env file from template
   ansible.builtin.template:

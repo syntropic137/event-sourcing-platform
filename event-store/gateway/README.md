@@ -34,22 +34,36 @@ only reachable as `gateway:80` from another container on the same network;
 port 8081 is what `docker-compose.yml` publishes as `${GRPC_PORT:-50051}` on
 the host):
 
+`eventstore-bin` does not enable gRPC server reflection, so `grpcurl ...
+list` without a proto always fails with "server does not support the
+reflection API" — that's a reflection gap, not an auth result, and it fails
+identically whether or not you're authenticated. Pass `-proto` (verified
+working commands, run from the repo root):
+
 ```bash
 # Unauthenticated internal port (works) — run from another container on the
 # same Docker network, e.g.:
 docker run --rm --network event-sourcing-platform_eventstore-network \
-  fullstorydev/grpcurl -plaintext gateway:80 list
+  -v "$(pwd)/event-store/eventstore-proto/proto:/proto" \
+  fullstorydev/grpcurl \
+  -plaintext -import-path /proto -proto eventstore/v1/eventstore.proto \
+  gateway:80 list
 
 # External published port, without credentials (fails when
-# ESP_GATEWAY_PASSWORD is set — expect a 401/Unauthorized)
+# ESP_GATEWAY_PASSWORD is set — expect a 401/Unauthorized, this one doesn't
+# need -proto since it never gets past the auth check)
 grpcurl -plaintext -H 'authorization: ' localhost:50051 list
 
-# External published port, with credentials
+# External published port, with credentials (succeeds)
 # Use `tr -d '\n'` after base64, not `-w0` — `-w0` is GNU-only and isn't
 # available on macOS/BSD base64; a wrapped/newline-containing token breaks
 # the authorization header.
 TOKEN=$(echo -n "admin:$ESP_GATEWAY_PASSWORD" | base64 | tr -d '\n')
-grpcurl -plaintext -H "authorization: Basic $TOKEN" localhost:50051 list
+grpcurl -plaintext \
+  -import-path event-store/eventstore-proto/proto \
+  -proto eventstore/v1/eventstore.proto \
+  -H "authorization: Basic $TOKEN" \
+  localhost:50051 list
 ```
 
 ## Known limitation
