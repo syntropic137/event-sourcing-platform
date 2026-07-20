@@ -2,11 +2,27 @@ services:
   event-store:
     image: event-sourcing-platform-event-store:latest
     container_name: event-store
-    ports:
-      - "{{ eventstore_grpc_port }}:50051"
+    # No host port published (ADR-024): eventstore-bin has no authn/authz of
+    # its own. `gateway` is the only service in this stack allowed to
+    # publish a port.
     env_file:
       - .env
     restart: unless-stopped
+    networks:
+      - eventstore-network
+
+  # nginx gateway: the event store's trust boundary. See ADR-024 and
+  # event-store/gateway/README.md.
+  gateway:
+    image: event-sourcing-platform-gateway:latest
+    container_name: event-store-gateway
+    ports:
+      - "{{ eventstore_grpc_port }}:8081"
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      - event-store
     networks:
       - eventstore-network
 

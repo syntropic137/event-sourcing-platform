@@ -4,8 +4,9 @@ services:
       context: .
       dockerfile: ./event-store/Dockerfile
     container_name: event-store
-    ports:
-      - "${GRPC_PORT:-50051}:50051"
+    # No host port published here on purpose (ADR-024): eventstore-bin has
+    # no authn/authz of its own. The `gateway` service is the only
+    # component permitted to reach the outside world.
     environment:
       DATABASE_URL: ${DATABASE_URL}
       BACKEND: ${BACKEND:-postgres}
@@ -18,6 +19,25 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    networks:
+      - eventstore-network
+
+  # nginx gateway: the event store's trust boundary. See ADR-024 and
+  # event-store/gateway/README.md. This is the only service in this file
+  # permitted to publish a port to the host.
+  gateway:
+    build:
+      context: ./event-store/gateway
+    container_name: event-store-gateway
+    ports:
+      - "${GRPC_PORT:-50051}:8081"
+    environment:
+      ESP_UPSTREAM: "event-store:50051"
+      ESP_GATEWAY_USER: ${ESP_GATEWAY_USER:-admin}
+      ESP_GATEWAY_PASSWORD: "${ESP_GATEWAY_PASSWORD:?ESP_GATEWAY_PASSWORD required - generate one with openssl rand -hex 32}"
+    restart: unless-stopped
+    depends_on:
+      - event-store
     networks:
       - eventstore-network
 

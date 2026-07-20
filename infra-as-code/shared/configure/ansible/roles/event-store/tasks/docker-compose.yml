@@ -49,6 +49,48 @@
     path: /tmp/event-store-amd64.tar.gz
     state: absent
 
+- name: Check if Gateway Docker image exists on local machine
+  delegate_to: localhost
+  become: false
+  ansible.builtin.stat:
+    path: /tmp/gateway-amd64.tar.gz
+  register: local_gateway_image
+
+- name: Fail if Gateway Docker image not built
+  ansible.builtin.fail:
+    msg: |
+      Gateway Docker image not found at /tmp/gateway-amd64.tar.gz
+
+      This is the event store's auth boundary (ADR-024) - it must be
+      deployed alongside event-store, never skipped.
+
+      Please build both images first:
+        cd infra-as-code && make docker-build-and-save
+  when: not local_gateway_image.stat.exists
+
+- name: Transfer Gateway image to VM
+  ansible.builtin.copy:
+    src: /tmp/gateway-amd64.tar.gz
+    dest: /tmp/gateway-amd64.tar.gz
+    mode: "0644"
+  register: gateway_image_transfer
+
+- name: Load Gateway image on VM
+  ansible.builtin.shell:
+    cmd: gunzip -c /tmp/gateway-amd64.tar.gz | docker load
+  when: gateway_image_transfer.changed
+  register: gateway_image_load
+
+- name: Display gateway image load result
+  ansible.builtin.debug:
+    var: gateway_image_load.stdout_lines
+  when: gateway_image_transfer.changed
+
+- name: Clean up transferred gateway image file
+  ansible.builtin.file:
+    path: /tmp/gateway-amd64.tar.gz
+    state: absent
+
 - name: Create docker-compose.yml from template
   ansible.builtin.template:
     src: docker-compose.yml.j2

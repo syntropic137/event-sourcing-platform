@@ -1,0 +1,70 @@
+# Event Store gRPC Gateway
+# See: event-store/gateway/README.md, docs/adrs/ADR-024-nginx-gateway-two-port-grpc-auth.md
+#
+# Two server blocks, mirroring the two-port model used elsewhere in the
+# Syntropic137 ecosystem (see ADR-024 for the prior-art reference):
+#
+#   Port 80   — Docker-internal only, NOT published to the host. Used by
+#               same-network services and health checks. No auth: network
+#               isolation is the security boundary here.
+#   Port 8081 — External / published access. HTTP Basic Auth required
+#               whenever ESP_GATEWAY_PASSWORD is set. This is the only
+#               port that should ever be exposed beyond the Docker network.
+#
+# docker-entrypoint.sh generates /etc/nginx/auth/htpasswd and renders this
+# template (envsubst) into /etc/nginx/nginx.conf before nginx starts.
+
+user nginx;
+worker_processes auto;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    # ------------------------------------------------------------------
+    # PORT 80 — Docker network only (no auth). Do not publish this port.
+    # ------------------------------------------------------------------
+    server {
+        listen 80;
+        http2 on;
+        server_name _;
+
+        location / {
+            grpc_pass grpc://${ESP_UPSTREAM};
+            error_page 502 = /error502grpc;
+        }
+
+        location = /error502grpc {
+            internal;
+            default_type application/grpc;
+            add_header grpc-status 14;
+            add_header grpc-message "upstream unavailable";
+            return 204;
+        }
+    }
+
+    # ------------------------------------------------------------------
+    # PORT 8081 — External access. Basic Auth enforced when configured.
+    # ------------------------------------------------------------------
+    server {
+        listen 8081;
+        http2 on;
+        server_name _;
+
+        include /etc/nginx/auth/auth.conf;
+
+        location / {
+            grpc_pass grpc://${ESP_UPSTREAM};
+            error_page 502 = /error502grpc;
+        }
+
+        location = /error502grpc {
+            internal;
+            default_type application/grpc;
+            add_header grpc-status 14;
+            add_header grpc-message "upstream unavailable";
+            return 204;
+        }
+    }
+}

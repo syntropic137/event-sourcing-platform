@@ -244,6 +244,7 @@ ansible_python_interpreter=/usr/bin/python3
 
     postgres_cfg = ansible_cfg.get("postgres", {})
     eventstore_cfg = ansible_cfg.get("eventstore", {})
+    gateway_cfg = ansible_cfg.get("gateway", {})
     service_cfg = ansible_cfg.get("service", {})
 
     ansible_vars = {
@@ -258,6 +259,9 @@ ansible_python_interpreter=/usr/bin/python3
         "eventstore_grpc_port": eventstore_cfg.get("grpc_port", 50051),
         "eventstore_backend": eventstore_cfg.get("backend", "postgres"),
         "binary_url": eventstore_cfg.get("binary_url", ""),
+        "# Gateway configuration (ADR-024)": None,
+        "esp_gateway_user": gateway_cfg.get("user", "admin"),
+        "esp_gateway_password": gateway_cfg.get("password", "changeme"),
         "# Service configuration": None,
         "service_user": service_cfg.get("user", "eventstore"),
         "service_group": service_cfg.get("group", "eventstore"),

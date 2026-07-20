@@ -556,6 +556,7 @@ vsa validate --config vsa.yaml
 | 2026-01-28 | 2.1.0 | **Updated ADR-015: Added Given-When-Then scenario testing (TypeScript + Python)** |
 || 2026-02-02 | 2.2.0 | **Added ADR-020: Bounded Context & Aggregate Convention (aggregate_<name>/ folders)** |
 | 2026-04-07 | 2.3.0 | **Added ADR-023: Event Type Registry (auto-populated by @event, resolves concrete types from wire format)** |
+| 2026-07-20 | 2.4.0 | **Added ADR-024: nginx gateway two-port auth model for the event store's gRPC service (eventstore-bin has no authn/authz of its own)** |
 
 ---
 

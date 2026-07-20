@@ -37,6 +37,7 @@ terraform_required_vars=(
 # Check required Ansible variables
 ansible_required_vars=(
     "POSTGRES_PASSWORD"
+    "ESP_GATEWAY_PASSWORD"
 )
 
 missing_vars=()
@@ -131,7 +132,13 @@ ansible:
     backend: ${EVENT_STORE_BACKEND:-postgres}
     binary_url: ${EVENT_STORE_BINARY_URL:-}
     rust_log: ${RUST_LOG:-info}
-  
+
+  # Gateway configuration (ADR-024) - eventstore-bin has no auth of its own;
+  # the nginx gateway enforces Basic Auth on the published gRPC port.
+  gateway:
+    user: ${ESP_GATEWAY_USER:-admin}
+    password: ${ESP_GATEWAY_PASSWORD:-changeme}
+
   # Service configuration
   service:
     user: eventstore
