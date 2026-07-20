@@ -8,6 +8,16 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    # Overrides the image's baked-in HEALTHCHECK (hardcoded to port 50051 -
+    # see event-store/Dockerfile) so a non-default eventstore_grpc_port
+    # doesn't leave Docker permanently reporting this container unhealthy
+    # even though it's actually fine on its configured port.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "</dev/tcp/localhost/{{ eventstore_grpc_port }}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     networks:
       - eventstore-network
 
