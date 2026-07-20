@@ -30,6 +30,14 @@ postgres:
   database_url_secret_arn: arn:aws:secretsmanager:us-west-2:123456789012:secret:event-store/prod/database
   extra_env: {}
 
+# Gateway configuration (ADR-024) - eventstore-bin has no auth of its own;
+# the nginx gateway enforces Basic Auth using this credential. Same
+# Secrets Manager pattern as postgres.database_url_secret_arn above - do
+# not put a plaintext password here.
+gateway:
+  secret_arn: arn:aws:secretsmanager:us-west-2:123456789012:secret:event-store/prod/gateway
+  user: admin
+
 metadata:
   environment: prod
   owner: platform-team

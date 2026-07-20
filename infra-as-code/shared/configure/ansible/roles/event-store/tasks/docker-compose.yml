@@ -113,17 +113,35 @@
     state: present
   register: compose_result
 
-- name: Wait for Event Store to be ready
+- name: Wait for Event Store's own gRPC port to accept connections
+  # Checks the event-store container directly, not the published host port
+  # (which now points at `gateway`, ADR-024). eventstore-bin only starts
+  # listening after its backend connection succeeds (see
+  # event-store/eventstore-bin/src/main.rs), so this is a meaningful
+  # readiness signal - unlike probing the gateway's port, which binds and
+  # accepts connections immediately regardless of whether the upstream
+  # event-store is actually reachable.
+  ansible.builtin.command:
+    cmd: >-
+      docker exec event-store
+      bash -c "</dev/tcp/127.0.0.1/50051"
+  register: eventstore_ready
+  until: eventstore_ready.rc == 0
+  retries: 12
+  delay: 5
+  changed_when: false
+
+- name: Wait for gateway to accept connections
   ansible.builtin.wait_for:
     host: localhost
     port: "{{ eventstore_grpc_port }}"
-    delay: 5
-    timeout: 60
+    delay: 2
+    timeout: 30
     state: started
 
 - name: Display Event Store status
   ansible.builtin.debug:
-    msg: "Event Store is running on port {{ eventstore_grpc_port }}"
+    msg: "Event Store is running; gateway published on port {{ eventstore_grpc_port }} (ADR-024, Basic Auth enforced)"
 
 - name: Show running containers
   ansible.builtin.command:
