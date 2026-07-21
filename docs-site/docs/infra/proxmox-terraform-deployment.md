@@ -416,16 +416,21 @@ After Terraform creates the VM:
    ```bash
    curl http://192.168.0.100:8080/health
    ```
-7. **Verify the gRPC gateway requires auth** (ADR-024 — `eventstore-bin` itself has no auth; the `gateway` service in front of it is the trust boundary):
+7. **Verify the gRPC gateway requires auth** (ADR-024 — `eventstore-bin` itself has no auth; the `gateway` service in front of it is the trust boundary). `eventstore-bin` doesn't enable gRPC server reflection, so pass `-proto` (from the repo root) or `list` fails with "server does not support the reflection API" regardless of auth:
    ```bash
-   # Without credentials — should fail
+   # Without credentials — should fail with 401/Unauthorized (doesn't need
+   # -proto, since it never gets past the auth check)
    grpcurl -plaintext 192.168.0.100:50051 list
 
    # With credentials — should succeed
    # Use `tr -d '\n'` after base64, not `-w0` (GNU-only, not on macOS/BSD
    # base64) — a wrapped/newline-containing token breaks the auth header.
    TOKEN=$(echo -n "admin:$ESP_GATEWAY_PASSWORD" | base64 | tr -d '\n')
-   grpcurl -plaintext -H "authorization: Basic $TOKEN" 192.168.0.100:50051 list
+   grpcurl -plaintext \
+     -import-path event-store/eventstore-proto/proto \
+     -proto eventstore/v1/eventstore.proto \
+     -H "authorization: Basic $TOKEN" \
+     192.168.0.100:50051 list
    ```
    Note: the example TS/Python/Rust SDK clients don't yet support injecting a Basic Auth header — `grpcurl` is currently the only verified way to exercise the gateway-protected port. Adding credential support to the SDKs is tracked as a follow-up.
 
