@@ -610,12 +610,12 @@ class TestAutoDispatchProjection:
 
 
 # ============================================================================
-# SubscriptionCoordinator _get_minimum_position Tests
+# SubscriptionCoordinator track planning Tests
 # ============================================================================
 
 
-class TestCoordinatorGetMinimumPosition:
-    """Tests for SubscriptionCoordinator._get_minimum_position edge cases."""
+class TestCoordinatorPlanTracks:
+    """Tests for SubscriptionCoordinator._plan_tracks edge cases."""
 
     @pytest.mark.asyncio
     async def test_all_version_mismatched_projections_get_cleared(self) -> None:
@@ -663,12 +663,20 @@ class TestCoordinatorGetMinimumPosition:
             projections=[proj_a, proj_b],
         )
 
-        min_pos = await coordinator._get_minimum_position()
+        tracks = await coordinator._plan_tracks(live_boundary_nonce=100)
 
-        assert min_pos == 0
         assert proj_a.cleared is True
         assert proj_b.cleared is True
 
         # Checkpoints should be deleted
         assert await store.get_checkpoint("proj_a") is None
         assert await store.get_checkpoint("proj_b") is None
+
+        # Both rebuild from 0, together on the replay track. Nothing is left
+        # on the live track, but it still exists to hold the live tail.
+        by_name = {track.name: track for track in tracks}
+        assert sorted(by_name) == ["live", "replay"]
+        assert by_name["replay"].from_position == 0
+        assert sorted(by_name["replay"].projections) == ["proj_a", "proj_b"]
+        assert by_name["replay"].is_catching_up is True
+        assert by_name["live"].projections == {}

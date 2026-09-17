@@ -248,25 +248,35 @@ async def _await_nonce(projection: RecordingProjection, nonce: int) -> bool:
 
 
 class _Fixture:
-    """One rebuilding projection, one at head, and a running coordinator."""
+    """One projection that must replay, one at head, and a live coordinator.
 
-    def __init__(self) -> None:
+    `stored_version` is how the replay is provoked. Left at 1 it matches the
+    projection's declared version, so no rebuild is triggered and the
+    projection is simply behind - an interrupted replay, or one wedged by
+    failures. Set to 0 it is a version bump, which the coordinator clears and
+    replays from 0.
+    """
+
+    def __init__(self, stored_position: int = 0, stored_version: int = 0) -> None:
         self.store = BroadcastEventStore(HISTORY_SIZE)
         self.checkpoints = MemoryCheckpointStore()
-        self.rebuilding = BlockingProjection("rebuilding", version=2)
+        self.replaying = BlockingProjection("replaying", version=1)
         self.at_head = RecordingProjection("at_head", version=1)
+        self._stored_position = stored_position
+        self._stored_version = stored_version
         self.coordinator = SubscriptionCoordinator(
             event_store=self.store,
             checkpoint_store=self.checkpoints,
-            projections=[self.rebuilding, self.at_head],
+            projections=[self.replaying, self.at_head],
         )
         self._runner: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
-        # `rebuilding` was checkpointed under version 1 and now declares
-        # version 2, so the coordinator must clear it and replay from 0.
         await _checkpoint_at(
-            self.checkpoints, "rebuilding", position=self.store.head_nonce, version=1
+            self.checkpoints,
+            "replaying",
+            position=self._stored_position,
+            version=self._stored_version,
         )
         # `at_head` is fully caught up and its version is unchanged.
         await _checkpoint_at(self.checkpoints, "at_head", position=self.store.head_nonce, version=1)
@@ -274,7 +284,7 @@ class _Fixture:
         await self.store.wait_until_subscribed()
 
     async def stop(self) -> None:
-        self.rebuilding.released.set()
+        self.replaying.released.set()
         await self.coordinator.stop()
         if self._runner is not None:
             self._runner.cancel()
@@ -291,12 +301,12 @@ class TestRebuildDoesNotStarveProjectionsAtHead:
         parked inside the rebuilding projection's first historical event, so
         the live event never reaches the projection that is already at head.
         """
-        f = _Fixture()
+        f = _Fixture(stored_position=HISTORY_SIZE, stored_version=0)
         await f.start()
         try:
             # Let the rebuild actually begin, so we measure starvation by a
             # replay in flight rather than a race with startup.
-            assert await _await_started(f.rebuilding), "the rebuild never started"
+            assert await _await_started(f.replaying), "the rebuild never started"
 
             live_nonce = f.store.head_nonce + 1
             f.store.publish(_envelope(live_nonce))
@@ -305,17 +315,17 @@ class TestRebuildDoesNotStarveProjectionsAtHead:
                 f"projection at head never received live event {live_nonce} while "
                 f"'rebuilding' replayed from 0 - it is starved behind the rebuild. "
                 f"at_head handled={f.at_head.handled_nonces}, "
-                f"rebuilding handled={f.rebuilding.handled_nonces}, "
+                f"rebuilding handled={f.replaying.handled_nonces}, "
                 f"subscriptions opened from={f.store.subscribed_from}"
             )
 
             # The rebuild must still be mid-replay, which is what makes the
             # assertion above about concurrency and not about a rebuild that
             # happened to be quick.
-            assert f.rebuilding.handled_nonces == [], (
+            assert f.replaying.handled_nonces == [], (
                 "the rebuild completed; the test no longer proves concurrency"
             )
-            assert f.rebuilding.cleared is True, "a version bump must clear the rebuilt projection"
+            assert f.replaying.cleared is True, "a version bump must clear the rebuilt projection"
         finally:
             await f.stop()
 
@@ -326,10 +336,10 @@ class TestRebuildDoesNotStarveProjectionsAtHead:
         tail from head cannot share one cursor, so asserting the opened
         positions catches a "fix" that merely reorders dispatch.
         """
-        f = _Fixture()
+        f = _Fixture(stored_position=HISTORY_SIZE, stored_version=0)
         await f.start()
         try:
-            assert await _await_started(f.rebuilding), "the rebuild never started"
+            assert await _await_started(f.replaying), "the rebuild never started"
 
             assert sorted(f.store.subscribed_from) == [0, HISTORY_SIZE + 1], (
                 f"expected one subscription replaying from 0 and one tailing from "
@@ -348,10 +358,10 @@ class TestRebuildDoesNotStarveProjectionsAtHead:
         prevent. So the replay track's context must stay in catch-up while the
         at-head track's context reports live.
         """
-        f = _Fixture()
+        f = _Fixture(stored_position=HISTORY_SIZE, stored_version=0)
         await f.start()
         try:
-            assert await _await_started(f.rebuilding), "the rebuild never started"
+            assert await _await_started(f.replaying), "the rebuild never started"
 
             live_nonce = f.store.head_nonce + 1
             f.store.publish(_envelope(live_nonce))
@@ -367,14 +377,51 @@ class TestRebuildDoesNotStarveProjectionsAtHead:
 
             replay_contexts = {
                 nonce: ctx
-                for nonce, ctx in f.rebuilding.contexts.items()
+                for nonce, ctx in f.replaying.contexts.items()
                 if nonce <= f.store.head_nonce
             }
             assert replay_contexts, "the rebuild replayed nothing"
-            assert all(ctx is not None and ctx.is_catching_up for ctx in replay_contexts.values()), (
+            assert all(
+                ctx is not None and ctx.is_catching_up for ctx in replay_contexts.values()
+            ), (
                 f"the rebuild replayed historical events with is_catching_up=False, so "
                 f"ProcessManager side effects would fire during replay (ADR-025): "
                 f"{replay_contexts}"
+            )
+        finally:
+            await f.stop()
+
+    async def test_a_projection_left_behind_replays_separately_too(self) -> None:
+        """Behind is behind, whether or not a rebuild was just triggered.
+
+        This is what keeps the fix alive across a reconnect. A replay that is
+        interrupted partway has a perfectly valid checkpoint at a low
+        position, so on the next attempt nothing is "rebuilding" any more -
+        and a coordinator that grouped on "did we just clear this one" would
+        put it straight back on the shared subscription and starve everyone
+        again. The backoff reconnect makes that likely during a long replay,
+        so grouping is on position instead.
+        """
+        resumed_at = 10
+        f = _Fixture(stored_position=resumed_at, stored_version=1)
+        await f.start()
+        try:
+            assert await _await_started(f.replaying), "the interrupted replay never resumed"
+
+            live_nonce = f.store.head_nonce + 1
+            f.store.publish(_envelope(live_nonce))
+
+            assert await _await_nonce(f.at_head, live_nonce), (
+                f"projection at head never received live event {live_nonce} while a "
+                f"projection behind at {resumed_at} caught up - it is starved behind "
+                f"it. subscriptions opened from={f.store.subscribed_from}"
+            )
+            assert f.replaying.cleared is False, (
+                "no version bump, so nothing should have been cleared"
+            )
+            assert sorted(f.store.subscribed_from) == [resumed_at + 1, HISTORY_SIZE + 1], (
+                f"expected a replay resuming at {resumed_at + 1} and a tail from "
+                f"{HISTORY_SIZE + 1}, got {f.store.subscribed_from}"
             )
         finally:
             await f.stop()
