@@ -61,7 +61,42 @@ src/contexts/orders/
 - ✅ Loose coupling between features
 - ✅ Easy to test in isolation
 
-## Anatomy of a Vertical Slice
+## The three kinds of slice
+
+Not every slice has a command in it. In the event-modelling tradition this
+architecture comes from, a slice is **the smallest unit of work you can hand to
+one developer, running from the trigger all the way down to persistence** — and
+that unit takes three shapes:
+
+| Kind | Shape | Has a command? |
+|---|---|---|
+| **State change** | trigger → command → event(s) | yes |
+| **State view** | events → projection → read model | **no** |
+| **Automation / translation** | event in → process → event out | **no** |
+
+The "Anatomy" section below walks through a **state-change** slice, which is the
+most common and the easiest to show. It is not the only kind, and reading it as
+the definition is the usual mistake.
+
+**Why it matters in practice:** an orientation screen, a dashboard, or any
+read-model surface is a **state-view slice**. It has no command anywhere in it.
+If your working definition of a slice is "one command, end to end", those
+surfaces have no shape to be built in — and they are often the ones users
+actually look at. Likewise a process manager reacting to one stream and emitting
+into another is an **automation slice**, with no UI and no user command.
+
+`vsa` already classifies `Query` artifacts alongside `Command`, `Event`,
+`IntegrationEvent` and `Handler`, so the validator understands the read side; it
+is this page that has been describing only one of the three.
+
+**Source.** The three-kind taxonomy comes from event modeling (Adam Dymitruk)
+and from Martin Dilger's *Understanding Eventsourcing*, which builds on it —
+attributed here from the author's own description of the book (SE-Radio 720) and
+eventmodeling.org, not from verbatim book text. The shape is well attested; the
+exact wording above is paraphrase. This is a different tradition from Jimmy
+Bogard's Vertical Slice Architecture, where "slice" means a feature folder.
+
+## Anatomy of a state-change slice
 
 Each slice contains everything needed for one operation:
 
