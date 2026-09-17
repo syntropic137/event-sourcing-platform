@@ -12,8 +12,11 @@ every projection, so it cannot fetch event N+1 - live or historical - until
 event N has been handed to every projection, the slowly rebuilding ones
 included.
 
-These tests pin the fix: the rebuild replays on its own track, and the
-projections at head keep consuming live events while it runs.
+These tests pin the fix: each rebuild replays on its own track, and the
+projections at head keep consuming live events while it runs. Per rebuild,
+not per "the rebuilds" - the incident was two version bumps at once, so a
+single shared replay track would leave that pair pacing each other. The
+number of replay tracks is bounded, because each one is a connection.
 """
 
 from __future__ import annotations
@@ -32,7 +35,10 @@ from event_sourcing.core.checkpoint import (
 )
 from event_sourcing.core.event import DomainEvent, EventEnvelope, EventMetadata
 from event_sourcing.stores.memory_checkpoint import MemoryCheckpointStore
-from event_sourcing.subscriptions.coordinator import SubscriptionCoordinator
+from event_sourcing.subscriptions.coordinator import (
+    DEFAULT_REPLAY_CONCURRENCY,
+    SubscriptionCoordinator,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -81,6 +87,11 @@ class BroadcastEventStore:
         self._listeners: list[asyncio.Queue[EventEnvelope[DomainEvent]]] = []
         self._subscription_opened = asyncio.Event()
         self.subscribed_from: list[int] = []
+        self.open_subscriptions = 0
+        # High-water mark of simultaneously open subscriptions. Each one is a
+        # connection the event store has to hold, so this is the number the
+        # isolation fix is allowed to spend.
+        self.max_open_subscriptions = 0
 
     @property
     def head_nonce(self) -> int:
@@ -127,25 +138,30 @@ class BroadcastEventStore:
 
     async def subscribe(self, from_global_nonce: int) -> AsyncIterator[EventEnvelope[DomainEvent]]:
         self.subscribed_from.append(from_global_nonce)
+        self.open_subscriptions += 1
+        self.max_open_subscriptions = max(self.max_open_subscriptions, self.open_subscriptions)
         self._subscription_opened.set()
         queue: asyncio.Queue[EventEnvelope[DomainEvent]] = asyncio.Queue()
         # Register before snapshotting history so nothing published
         # concurrently is lost; `highest` then drops the duplicate.
         self._listeners.append(queue)
-        history = list(self._events)
-        highest = 0
-        for envelope in history:
-            nonce = envelope.metadata.global_nonce or 0
-            if nonce >= from_global_nonce:
-                highest = max(highest, nonce)
+        try:
+            history = list(self._events)
+            highest = 0
+            for envelope in history:
+                nonce = envelope.metadata.global_nonce or 0
+                if nonce >= from_global_nonce:
+                    highest = max(highest, nonce)
+                    yield envelope
+            while True:
+                envelope = await queue.get()
+                nonce = envelope.metadata.global_nonce or 0
+                if nonce <= highest:
+                    continue
+                highest = nonce
                 yield envelope
-        while True:
-            envelope = await queue.get()
-            nonce = envelope.metadata.global_nonce or 0
-            if nonce <= highest:
-                continue
-            highest = nonce
-            yield envelope
+        finally:
+            self.open_subscriptions -= 1
 
 
 class RecordingProjection:
@@ -248,43 +264,61 @@ async def _await_nonce(projection: RecordingProjection, nonce: int) -> bool:
 
 
 class _Fixture:
-    """One projection that must replay, one at head, and a live coordinator.
+    """`rebuild_count` projections that must replay, one at head, a live coordinator.
 
     `stored_version` is how the replay is provoked. Left at 1 it matches the
     projection's declared version, so no rebuild is triggered and the
     projection is simply behind - an interrupted replay, or one wedged by
     failures. Set to 0 it is a version bump, which the coordinator clears and
     replays from 0.
+
+    Every rebuild starts blocked. A test releases the ones it wants to make
+    progress, so which projection holds up which is chosen by the test rather
+    than by timing.
     """
 
-    def __init__(self, stored_position: int = 0, stored_version: int = 0) -> None:
+    def __init__(
+        self,
+        stored_position: int = 0,
+        stored_version: int = 0,
+        rebuild_count: int = 1,
+        replay_concurrency: int = DEFAULT_REPLAY_CONCURRENCY,
+    ) -> None:
         self.store = BroadcastEventStore(HISTORY_SIZE)
         self.checkpoints = MemoryCheckpointStore()
-        self.replaying = BlockingProjection("replaying", version=1)
+        self.rebuilding = [
+            BlockingProjection(f"replaying-{index}", version=1) for index in range(rebuild_count)
+        ]
+        # The single-rebuild tests read this one.
+        self.replaying = self.rebuilding[0]
         self.at_head = RecordingProjection("at_head", version=1)
+        self.replay_concurrency = replay_concurrency
         self._stored_position = stored_position
         self._stored_version = stored_version
         self.coordinator = SubscriptionCoordinator(
             event_store=self.store,
             checkpoint_store=self.checkpoints,
-            projections=[self.replaying, self.at_head],
+            projections=[*self.rebuilding, self.at_head],
+            replay_concurrency=replay_concurrency,
         )
         self._runner: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
-        await _checkpoint_at(
-            self.checkpoints,
-            "replaying",
-            position=self._stored_position,
-            version=self._stored_version,
-        )
+        for projection in self.rebuilding:
+            await _checkpoint_at(
+                self.checkpoints,
+                projection.get_name(),
+                position=self._stored_position,
+                version=self._stored_version,
+            )
         # `at_head` is fully caught up and its version is unchanged.
         await _checkpoint_at(self.checkpoints, "at_head", position=self.store.head_nonce, version=1)
         self._runner = asyncio.create_task(self.coordinator.start())
         await self.store.wait_until_subscribed()
 
     async def stop(self) -> None:
-        self.replaying.released.set()
+        for projection in self.rebuilding:
+            projection.released.set()
         await self.coordinator.stop()
         if self._runner is not None:
             self._runner.cancel()
@@ -425,6 +459,121 @@ class TestRebuildDoesNotStarveProjectionsAtHead:
             )
         finally:
             await f.stop()
+
+
+class TestConcurrentRebuildsDoNotStarveEachOther:
+    """Two rebuilds at once - the shape of the incident - must not pace each other.
+
+    #1318 was two simultaneous version bumps, ``session_summaries`` v5 and
+    ``artifact_summaries`` v6. Giving "the rebuilds" one shared track fixes
+    the 23 projections at head and leaves that pair exactly as they were:
+    one cursor, one sequential dispatch loop, so the slower of the two sets
+    the pace for the other and a wedged one stops it outright.
+    """
+
+    async def test_a_blocked_rebuild_does_not_hold_up_another_rebuild(self) -> None:
+        """One rebuild parked on its first event must not stop the other replaying.
+
+        With both rebuilds sharing a replay track this times out: the shared
+        cursor cannot hand out event 1 until the blocked projection has taken
+        it, so the second rebuild never sees a single historical event.
+        """
+        f = _Fixture(
+            stored_position=HISTORY_SIZE,
+            stored_version=0,
+            rebuild_count=2,
+            replay_concurrency=2,
+        )
+        blocked, progressing = f.rebuilding
+        # Only `blocked` stays parked; the other is free to replay at will.
+        progressing.released.set()
+        await f.start()
+        try:
+            assert await _await_started(blocked), "the blocked rebuild never started"
+
+            assert await _await_nonce(progressing, HISTORY_SIZE), (
+                f"the second rebuild never reached the historical head "
+                f"({HISTORY_SIZE}) while the first was blocked on its first event - "
+                f"the two rebuilds share a cursor. "
+                f"progressing handled={progressing.handled_nonces[-5:]}, "
+                f"subscriptions opened from={f.store.subscribed_from}"
+            )
+
+            live_nonce = f.store.head_nonce + 1
+            f.store.publish(_envelope(live_nonce))
+            assert await _await_nonce(f.at_head, live_nonce), (
+                f"projection at head never received live event {live_nonce} while two "
+                f"projections rebuilt. at_head handled={f.at_head.handled_nonces}, "
+                f"subscriptions opened from={f.store.subscribed_from}"
+            )
+
+            # The blocked rebuild must still be parked before its first
+            # checkpoint, which is what makes the assertions above about
+            # isolation rather than about a rebuild that happened to finish.
+            assert blocked.handled_nonces == [], (
+                "the blocked rebuild made progress; the test no longer proves isolation"
+            )
+            assert await self._checkpoint_position(f, blocked) is None, (
+                "the blocked rebuild checkpointed; it was supposed to be parked "
+                "before its first checkpoint"
+            )
+
+            assert f.store.max_open_subscriptions <= 1 + f.replay_concurrency, (
+                f"opened {f.store.max_open_subscriptions} concurrent subscriptions for "
+                f"1 live track and replay_concurrency={f.replay_concurrency}"
+            )
+        finally:
+            await f.stop()
+
+    async def test_rebuilds_beyond_the_configured_bound_share_rather_than_add_streams(
+        self,
+    ) -> None:
+        """Isolation is bounded, because every subscription is a connection.
+
+        A version bump applied across the whole read model would otherwise open
+        one stream per rebuilding projection - 25 of them here, against a pool
+        sized for a handful. The two-track shape could not do that, and not
+        being able to do it is the property the split must keep: past the
+        bound the rebuilds share a track and pace each other, which is the
+        behaviour they had before this fix, rather than exhausting the pool.
+        """
+        replay_concurrency = 2
+        f = _Fixture(
+            stored_position=HISTORY_SIZE,
+            stored_version=0,
+            rebuild_count=5,
+            replay_concurrency=replay_concurrency,
+        )
+        for projection in f.rebuilding:
+            projection.released.set()
+        await f.start()
+        try:
+            for projection in f.rebuilding:
+                assert await _await_started(projection), (
+                    f"rebuild {projection.get_name()} never started, so this test "
+                    f"has not yet seen every subscription it is counting"
+                )
+
+            live_nonce = f.store.head_nonce + 1
+            f.store.publish(_envelope(live_nonce))
+            assert await _await_nonce(f.at_head, live_nonce), (
+                "at-head projection never saw the live event, so the live "
+                "subscription is not open and the count below is incomplete"
+            )
+
+            assert f.store.max_open_subscriptions == 1 + replay_concurrency, (
+                f"expected {1 + replay_concurrency} concurrent subscriptions "
+                f"(1 live + {replay_concurrency} replay) for 5 rebuilding "
+                f"projections, got {f.store.max_open_subscriptions} from "
+                f"{f.store.subscribed_from}"
+            )
+        finally:
+            await f.stop()
+
+    @staticmethod
+    async def _checkpoint_position(f: _Fixture, projection: BlockingProjection) -> int | None:
+        checkpoint = await f.checkpoints.get_checkpoint(projection.get_name())
+        return None if checkpoint is None else checkpoint.global_position
 
 
 async def _await_started(projection: BlockingProjection) -> bool:

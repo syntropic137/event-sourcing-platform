@@ -17,7 +17,7 @@ import logging
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Protocol, TypedDict
+from typing import TYPE_CHECKING, NamedTuple, Protocol, TypedDict
 
 from event_sourcing.core.checkpoint import (
     CheckpointedProjection,
@@ -52,6 +52,15 @@ class ProjectionStatus(TypedDict):
 
 logger = logging.getLogger(__name__)
 
+# How many replay tracks may be open at once, on top of the always-present
+# live track. Each track is one event-store subscription and so one
+# connection, which is why isolating rebuilds has to be bounded rather than
+# one-per-projection: a version bump applied across a whole read model would
+# otherwise open a stream per rebuilding projection and exhaust the pool.
+# Four covers the realistic case - #1318 was two simultaneous version bumps -
+# while leaving a 25-projection deployment well inside a default pool.
+DEFAULT_REPLAY_CONCURRENCY = 4
+
 
 @dataclass
 class _SubscriptionTrack:
@@ -64,13 +73,18 @@ class _SubscriptionTrack:
     already at head from seeing anything new for the whole replay (#1318).
     Splitting projections across tracks by position is what removes that.
 
+    The same pacing applies between two rebuilds, so a rebuild gets a track
+    to itself rather than a shared "replay" track - #1318 was two version
+    bumps at once. Past ``replay_concurrency`` rebuilds they share again,
+    because a track costs a connection; see ``_plan_tracks``.
+
     ``is_catching_up`` belongs to the track for the same reason. The at-head
     track is live from its first event while a replay track is still in
     history, and ProcessManager side effects are gated on this flag
     (ADR-025) - one shared flag would fire them during a replay.
 
     Attributes:
-        name: Identifier used in logs ("live", "replay").
+        name: Identifier used in logs ("live", "replay-0", "replay-1", ...).
         from_position: Inclusive global_nonce the subscription starts at.
         projections: The projections this track feeds, by name.
         is_catching_up: True while this track is replaying historical events.
@@ -80,6 +94,14 @@ class _SubscriptionTrack:
     from_position: int
     projections: dict[str, CheckpointedProjection]
     is_catching_up: bool
+
+
+class _BehindProjection(NamedTuple):
+    """A projection that still needs history, and where it needs it from."""
+
+    name: str
+    projection: CheckpointedProjection
+    resume_from: int
 
 
 class EventStoreSubscriber(Protocol):
@@ -125,13 +147,16 @@ class SubscriptionCoordinator:
     behind the head of the stream each one is, opens one subscription per
     track, and routes events to the projections on that track based on their
     subscribed types. In steady state every projection is at head and there
-    is exactly one track; a projection that has to replay history gets its
-    own, so it cannot hold up the rest (#1318).
+    is exactly one track; a projection that has to replay history gets one to
+    itself, so it can hold up neither the projections at head nor another
+    rebuild (#1318). At most ``replay_concurrency`` of those exist at once,
+    so the number of connections stays bounded however many projections are
+    rebuilding.
 
     Key features:
-    1. One subscription per track (one in steady state)
+    1. One subscription per track (one in steady state, at most 1 + replay_concurrency)
     2. Per-projection checkpointing (independent progress)
-    3. A replay never starves projections already at head
+    3. A replay never starves projections already at head, or another replay
     4. Event type filtering (performance)
     5. Proper error handling (no silent failures)
     6. Structured logging (observability)
@@ -162,6 +187,7 @@ class SubscriptionCoordinator:
         event_store: EventStoreSubscriber,
         checkpoint_store: ProjectionCheckpointStore,
         projections: list[CheckpointedProjection],
+        replay_concurrency: int = DEFAULT_REPLAY_CONCURRENCY,
     ) -> None:
         """
         Initialize the subscription coordinator.
@@ -170,9 +196,19 @@ class SubscriptionCoordinator:
             event_store: Event store client with subscribe() method
             checkpoint_store: Store for checkpoint persistence
             projections: List of projections to manage
+            replay_concurrency: How many rebuilds may replay independently.
+                One event-store connection each, so size it against the pool.
+
+        Raises:
+            ValueError: If replay_concurrency is below 1, which would leave a
+                behind projection with no track to replay on.
         """
+        if replay_concurrency < 1:
+            raise ValueError(f"replay_concurrency must be at least 1, got {replay_concurrency}")
+
         self._event_store = event_store
         self._checkpoint_store = checkpoint_store
+        self._replay_concurrency = replay_concurrency
         self._running = False
         self._last_error: Exception | None = None
         self._live_boundary_nonce: int = 0
@@ -373,13 +409,23 @@ class SubscriptionCoordinator:
         A projection that needs nothing at or below ``live_boundary_nonce`` is
         at head and can take live events straight away. One that still needs
         history - never run, version bumped and cleared, or left behind by a
-        failure - has to replay first, and it replays on its own track so the
-        at-head projections keep consuming while it does (#1318).
+        failure - has to replay first, and it replays on a track of its own so
+        the at-head projections keep consuming while it does (#1318).
 
         Grouping on position rather than on "was a rebuild triggered" is what
         makes this hold across a reconnect: a rebuild interrupted halfway has
-        a valid checkpoint at a low position, and it must stay on the replay
+        a valid checkpoint at a low position, and it must stay on a replay
         track rather than drag the whole plan back to where it got to.
+
+        A track per rebuild, not one track for "the rebuilds": two rebuilds
+        sharing a cursor pace each other exactly as a rebuild and a live
+        projection do, and #1318 was two version bumps in the same deploy.
+        The count is capped at ``replay_concurrency`` because each track is a
+        connection held for the length of a replay, and a version bump rolled
+        out across a whole read model would otherwise open one per projection.
+        Past the cap the rebuilds are spread evenly over the tracks available
+        and the ones sharing a track pace each other - the behaviour they had
+        before the split, which is the safe direction to degrade in.
 
         Args:
             live_boundary_nonce: Head snapshot separating history from live
@@ -387,19 +433,18 @@ class SubscriptionCoordinator:
         Returns:
             The tracks to subscribe, at-head track first. It is always
             present, even when empty, so the coordinator always holds one
-            subscription on the live tail.
+            subscription on the live tail. At most ``replay_concurrency``
+            replay tracks follow it.
         """
         at_head: dict[str, CheckpointedProjection] = {}
-        behind: dict[str, CheckpointedProjection] = {}
-        behind_positions: list[int] = []
+        behind: list[_BehindProjection] = []
 
         for name, projection in self._projections.items():
             resume_from = await self._resume_position(name, projection)
             if resume_from > live_boundary_nonce:
                 at_head[name] = projection
             else:
-                behind[name] = projection
-                behind_positions.append(resume_from)
+                behind.append(_BehindProjection(name, projection, resume_from))
 
         tracks = [
             _SubscriptionTrack(
@@ -412,13 +457,21 @@ class SubscriptionCoordinator:
             )
         ]
 
-        if behind:
-            from_position = min(behind_positions)
+        track_count = min(len(behind), self._replay_concurrency)
+        groups: list[list[_BehindProjection]] = [[] for _ in range(track_count)]
+        for index, entry in enumerate(behind):
+            groups[index % track_count].append(entry)
+
+        for index, group in enumerate(groups):
+            # A track can only start where its furthest-behind member needs
+            # it to; members already past that skip the redelivered events on
+            # their checkpoint.
+            from_position = min(entry.resume_from for entry in group)
             tracks.append(
                 _SubscriptionTrack(
-                    name="replay",
+                    name=f"replay-{index}",
                     from_position=from_position,
-                    projections=behind,
+                    projections={entry.name: entry.projection for entry in group},
                     is_catching_up=from_position <= live_boundary_nonce,
                 )
             )
@@ -482,6 +535,12 @@ class SubscriptionCoordinator:
         Dispatch an event to the projections on one track.
 
         Tracks that track's own catch-up/live transition based on global_nonce.
+
+        Delivery to the track's projections is sequential, and stays that way:
+        they share one cursor, so it cannot advance until the slowest of them
+        has taken this event whatever order they are handed it in. Isolation
+        comes from which projections share a track, decided in
+        ``_plan_tracks``, and not from this loop.
 
         Args:
             track: The track the event arrived on

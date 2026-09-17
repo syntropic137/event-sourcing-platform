@@ -672,11 +672,55 @@ class TestCoordinatorPlanTracks:
         assert await store.get_checkpoint("proj_a") is None
         assert await store.get_checkpoint("proj_b") is None
 
-        # Both rebuild from 0, together on the replay track. Nothing is left
-        # on the live track, but it still exists to hold the live tail.
+        # Both rebuild from 0, and on a track each: sharing one would put them
+        # on one cursor, where the slower sets the pace for the other. Nothing
+        # is left on the live track, but it still exists to hold the live tail.
         by_name = {track.name: track for track in tracks}
-        assert sorted(by_name) == ["live", "replay"]
-        assert by_name["replay"].from_position == 0
-        assert sorted(by_name["replay"].projections) == ["proj_a", "proj_b"]
-        assert by_name["replay"].is_catching_up is True
+        assert sorted(by_name) == ["live", "replay-0", "replay-1"]
+        replay_tracks = [by_name["replay-0"], by_name["replay-1"]]
+        assert [sorted(track.projections) for track in replay_tracks] == [["proj_a"], ["proj_b"]]
+        assert all(track.from_position == 0 for track in replay_tracks)
+        assert all(track.is_catching_up is True for track in replay_tracks)
         assert by_name["live"].projections == {}
+
+    @pytest.mark.asyncio
+    async def test_rebuilds_past_the_replay_bound_share_tracks(self) -> None:
+        """Replay isolation stops at replay_concurrency, because tracks cost connections."""
+        from event_sourcing.subscriptions.coordinator import SubscriptionCoordinator
+
+        store = InMemoryCheckpointStore()
+        projections = [TestProjection(f"proj_{index}") for index in range(5)]
+        coordinator = SubscriptionCoordinator(
+            event_store=None,  # type: ignore[arg-type]
+            checkpoint_store=store,
+            projections=list(projections),
+            replay_concurrency=2,
+        )
+
+        # No checkpoints at all, so every projection has to replay from 0.
+        tracks = await coordinator._plan_tracks(live_boundary_nonce=100)
+
+        by_name = {track.name: track for track in tracks}
+        assert sorted(by_name) == ["live", "replay-0", "replay-1"]
+        # Every projection is planned exactly once, spread over the tracks
+        # available rather than dropped or given a stream of its own.
+        replayed = [
+            name
+            for track_name in ("replay-0", "replay-1")
+            for name in by_name[track_name].projections
+        ]
+        assert sorted(replayed) == [f"proj_{index}" for index in range(5)]
+        assert all(len(by_name[name].projections) >= 2 for name in ("replay-0", "replay-1"))
+
+    @pytest.mark.asyncio
+    async def test_replay_concurrency_below_one_is_rejected(self) -> None:
+        """A bound of 0 would leave a behind projection with no track to replay on."""
+        from event_sourcing.subscriptions.coordinator import SubscriptionCoordinator
+
+        with pytest.raises(ValueError, match="replay_concurrency"):
+            SubscriptionCoordinator(
+                event_store=None,  # type: ignore[arg-type]
+                checkpoint_store=InMemoryCheckpointStore(),
+                projections=[TestProjection("proj_a")],
+                replay_concurrency=0,
+            )
