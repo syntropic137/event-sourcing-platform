@@ -1,5 +1,15 @@
-# OSV Scanner configuration — accepted risk for vulnerabilities we cannot fix.
-# Each entry requires justification. Review periodically for upstream fixes.
+# OSV Scanner configuration — accepted risk, recorded per advisory.
+#
+# Each entry must say which of two things it is, because they need different
+# follow-up:
+#   NO FIX EXISTS  - nothing to upgrade to; revisit when upstream ships one.
+#   DEFERRED       - a fixed version exists, but taking it is a major upgrade we
+#                    have not done yet. These are debt, not permanent exemptions.
+#
+# Reviewed 2026-09-16 (Codex review of PR #305). Several reasons here previously
+# said "no fix" or "awaiting upstream" when a fix had already shipped; one of
+# them hid two HIGH image-size advisories that a patch release resolved. A
+# suppression reason goes stale silently - re-check the claim, not just the id.
 
 # Rust: testcontainers → bollard → rustls-pemfile (dev-only dep, deprecated crate)
 # No fix version exists. Only used in test infrastructure, not production.
@@ -8,20 +18,20 @@ id = "RUSTSEC-2025-0134"
 reason = "rustls-pemfile is a dev-only transitive dep (testcontainers → bollard). No fix available. Not in production."
 
 # Rust: testcontainers → bollard → rustls → rustls-webpki (dev-only dep)
-# Fix requires rustls 0.23+ which bollard hasn't adopted yet.
+# DEFERRED: current bollard uses rustls 0.23; we lock testcontainers 0.20.1 -> bollard 0.16.1.
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0049"
-reason = "rustls-webpki is a dev-only transitive dep (testcontainers → bollard → rustls). Awaiting bollard upgrade to rustls 0.23+."
+reason = "rustls-webpki is a dev-only transitive dep (testcontainers → bollard → rustls). DEFERRED: bollard adopted rustls 0.23 upstream; we are pinned to testcontainers 0.20.1 -> bollard 0.16.1. Clears on a testcontainers upgrade."
 
 [[IgnoredVulns]]
 id = "GHSA-pwjx-qhcg-rvj4"
 reason = "Duplicate advisory for RUSTSEC-2026-0049 (rustls-webpki). Dev-only."
 
 # Rust: testcontainers → bollard → rustls → rustls-webpki (dev-only dep, additional advisories)
-# Same root cause as RUSTSEC-2026-0049. Awaiting bollard upgrade to rustls 0.23+.
+# Same root cause as RUSTSEC-2026-0049: our testcontainers pin, not upstream.
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0098"
-reason = "rustls-webpki is a dev-only transitive dep (testcontainers -> bollard -> rustls). Awaiting bollard upgrade to rustls 0.23+."
+reason = "rustls-webpki is a dev-only transitive dep (testcontainers -> bollard -> rustls). DEFERRED: bollard adopted rustls 0.23 upstream; we are pinned to testcontainers 0.20.1 -> bollard 0.16.1. Clears on a testcontainers upgrade."
 
 [[IgnoredVulns]]
 id = "GHSA-965h-392x-2mh5"
@@ -29,27 +39,32 @@ reason = "Duplicate advisory for RUSTSEC-2026-0098 (rustls-webpki). Dev-only."
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0099"
-reason = "rustls-webpki is a dev-only transitive dep (testcontainers -> bollard -> rustls). Awaiting bollard upgrade to rustls 0.23+."
+reason = "rustls-webpki is a dev-only transitive dep (testcontainers -> bollard -> rustls). DEFERRED: bollard adopted rustls 0.23 upstream; we are pinned to testcontainers 0.20.1 -> bollard 0.16.1. Clears on a testcontainers upgrade."
 
 [[IgnoredVulns]]
 id = "GHSA-xgp8-3hg3-c2mh"
 reason = "Duplicate advisory for RUSTSEC-2026-0099 (rustls-webpki). Dev-only."
 
-# Rust: testcontainers → bollard → rsa (dev-only dep)
-# RUSTSEC-2023-0071 has no fix — the rsa crate has a known Marvin Attack weakness.
-# Only affects test infrastructure Docker communication, not production.
+# Rust: rsa 0.9.10, locked as a dependency of sqlx-mysql 0.8.6.
+# NO FIX EXISTS for the Marvin Attack (RUSTSEC-2023-0071).
+# NOT in the active build graph: `cargo tree -i rsa --workspace -e all` prints nothing.
+# It is in Cargo.lock (so OSV flags it) but compiled into nothing. Previously
+# mis-attributed to testcontainers -> bollard.
 [[IgnoredVulns]]
 id = "RUSTSEC-2023-0071"
-reason = "rsa crate Marvin Attack. Dev-only dep (testcontainers → bollard). No fix exists. Not in production."
+reason = "NO FIX EXISTS (Marvin Attack). rsa is locked via sqlx-mysql 0.8.6 but absent from the active build graph (cargo tree -i rsa: empty). Not compiled into any artifact."
 
-# Rust: sqlx-postgres 0.8.6 → rand 0.8.5, portpicker 0.1.1 → rand 0.8.5
+# Rust: sqlx-postgres 0.8.6 → rand 0.8.5 (PRODUCTION: eventstore-bin ->
+#   eventstore-backend-postgres -> sqlx), portpicker 0.1.1 → rand 0.8.5 (dev)
 # RUSTSEC-2026-0097: unsound with custom logger using rand::rng(). Severity: LOW.
 # Requires: log + thread_rng features enabled, custom logger calling rand::rng(), reseeding.
 # sqlx uses rand internally for connection jitter - does not meet trigger conditions.
-# sqlx-postgres 0.9.0 (alpha) has rand 0.9.x but is not stable. portpicker is dev-only.
+# DEFERRED: sqlx 0.9.0 is STABLE (since May 2026) and uses patched rand 0.10.1.
+# Taking it is a major sqlx upgrade. Accepted meanwhile only because the trigger
+# conditions are narrow - not because no fix exists.
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0097"
-reason = "rand 0.8.5 transitive dep via sqlx-postgres 0.8.6 + portpicker (dev). LOW severity, requires custom logger with rand::rng() reentrance. No stable sqlx release with rand 0.9.x."
+reason = "DEFERRED. rand 0.8.5 IS on a production path (eventstore-bin via sqlx-postgres 0.8.6). LOW severity; needs a custom logger calling rand::rng() reentrantly, which sqlx does not do. Fix: upgrade to stable sqlx 0.9.0 (rand 0.10.1)."
 
 [[IgnoredVulns]]
 id = "GHSA-cq8v-f236-94qc"
@@ -66,10 +81,11 @@ id = "GHSA-qj8w-gfj5-8c6v"
 reason = "serialize-javascript pinned at 6.x by webpack plugins. Awaiting upstream major bump."
 
 # npm: vsce 2.15.0 → xml2js 0.4.23
-# Fix requires xml2js 0.5.0 (major), vsce hasn't updated.
+# DEFERRED: `vsce` 2.15.0 is the DEPRECATED package. Its maintained successor is
+# `@vscode/vsce` (3.x). Evaluate migrating rather than waiting on the old package.
 [[IgnoredVulns]]
 id = "GHSA-776f-qx25-q3cc"
-reason = "xml2js pinned at 0.4.x by vsce (VS Code extension packager). Awaiting vsce update."
+reason = "xml2js pinned at 0.4.x by vsce (VS Code extension packager). Migrate from deprecated vsce to @vscode/vsce."
 
 # npm: Docusaurus 3.x → @docusaurus/utils → lodash 4.17.23
 # Lodash is pinned by Docusaurus internals. Docs-site-only dependency, not production.
@@ -82,7 +98,8 @@ id = "GHSA-r5fr-rjxr-66jc"
 reason = "lodash pinned at 4.17.x by Docusaurus 3.x. Docs-site-only, not in production."
 
 # Rust: testcontainers → reqwest → hickory-resolver → hickory-proto (dev-only dep)
-# Fix requires hickory-resolver 0.26 (major), which testcontainers/reqwest 0.12.28 pin `^0.25` against.
+# DEFERRED: testcontainers 0.28 uses reqwest 0.13, whose hickory integration is 0.26
+# (hickory-proto >=0.26.1 is patched). Clears on a testcontainers upgrade.
 # Only used in test infrastructure Docker DNS resolution, not production.
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0118"
@@ -101,43 +118,33 @@ id = "GHSA-q2qq-hmj6-3wpp"
 reason = "Duplicate advisory for RUSTSEC-2026-0119 (hickory-proto). Dev-only."
 
 # Rust: testcontainers → bollard → rustls 0.22.4 → rustls-webpki 0.102.8 (dev-only dep)
-# Same root cause as RUSTSEC-2026-0049/0098/0099: bollard hasn't adopted rustls 0.23+.
+# Same root cause as RUSTSEC-2026-0049/0098/0099: our testcontainers pin, not upstream.
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0104"
-reason = "rustls-webpki 0.102.8 is a dev-only transitive dep (testcontainers -> bollard -> rustls 0.22.4). Awaiting bollard upgrade to rustls 0.23+. Same root cause as RUSTSEC-2026-0049."
+reason = "rustls-webpki 0.102.8 is a dev-only transitive dep (testcontainers -> bollard -> rustls 0.22.4). DEFERRED: bollard adopted rustls 0.23 upstream; we are pinned to testcontainers 0.20.1 -> bollard 0.16.1. Clears on a testcontainers upgrade. Same root cause as RUSTSEC-2026-0049."
 
 [[IgnoredVulns]]
 id = "GHSA-82j2-j2ch-gfr8"
 reason = "Duplicate advisory for RUSTSEC-2026-0104 (rustls-webpki 0.102.8). Dev-only."
 
 # Rust: serial_test 3.4.0 → scc 2.4.0 (dev-only dep)
-# Fix requires scc 3.x (major), serial_test pins `^2`.
+# DEFERRED: serial_test 4.0.1 is available (scc >=3.8.4 is patched). Clears on a serial_test upgrade.
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0205"
 reason = "scc is a dev-only transitive dep (serial_test 3.4.0, pinned ^2). Fix needs scc 3.x (major). Not in production."
 
 # npm: vsce 2.15.0 → markdown-it 12.3.2 → linkify-it 3.0.3 (dev-only dep)
-# Fix requires markdown-it 14.x / linkify-it 5.x (major), vsce hasn't updated. Same family as
+# DEFERRED: same root cause - the deprecated `vsce` package; see `@vscode/vsce`. Same family as
 # the xml2js pin above (GHSA-776f-qx25-q3cc): vsce is the common root cause.
 [[IgnoredVulns]]
 id = "GHSA-6v5v-wf23-fmfq"
-reason = "markdown-it pinned at 12.x by vsce (VS Code extension packager). Fix needs markdown-it 14.x (major). Awaiting vsce update."
+reason = "markdown-it pinned at 12.x by vsce (VS Code extension packager). Fix needs markdown-it 14.x (major). Migrate from deprecated vsce to @vscode/vsce."
 
 [[IgnoredVulns]]
 id = "GHSA-22p9-wv53-3rq4"
-reason = "linkify-it pinned at 3.x by vsce -> markdown-it 12.3.2. Fix needs linkify-it 5.x (major). Awaiting vsce update."
+reason = "linkify-it pinned at 3.x by vsce -> markdown-it 12.3.2. Fix needs linkify-it 5.x (major). Migrate from deprecated vsce to @vscode/vsce."
 
 [[IgnoredVulns]]
 id = "GHSA-v245-v573-v5vm"
-reason = "Duplicate advisory for GHSA-22p9-wv53-3rq4 (linkify-it, pinned by vsce -> markdown-it). Awaiting vsce update."
+reason = "Duplicate advisory for GHSA-22p9-wv53-3rq4 (linkify-it, pinned by vsce -> markdown-it). Migrate from deprecated vsce to @vscode/vsce."
 
-# npm: Docusaurus 3.x → @docusaurus/mdx-loader → image-size 2.0.2 (build-time-only dep)
-# No fix version exists upstream for either advisory (DoS via malformed JXL/HEIF/ICNS image
-# parsing). Only processes our own trusted docs images at build time, not user-uploaded input.
-[[IgnoredVulns]]
-id = "GHSA-5p2g-fcmc-qvqq"
-reason = "image-size has no fix available. Docs-site build-time-only dep (@docusaurus/mdx-loader), processes trusted repo images only, not in production."
-
-[[IgnoredVulns]]
-id = "GHSA-w3rx-r6r6-pgpr"
-reason = "image-size has no fix available. Docs-site build-time-only dep (@docusaurus/mdx-loader), processes trusted repo images only, not in production."
