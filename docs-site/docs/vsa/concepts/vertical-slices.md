@@ -87,7 +87,7 @@ Two things are worth pinning down, because they are easy to get wrong:
   "event in → event out". The automated trigger reads a view and *issues a
   command*, which is what produces the resulting event. Describing them as
   command-free teaches the wrong structure — and this repository's own
-  [consumer patterns](../../CONSUMER-PATTERNS.md) show the same shape, with a
+  [consumer patterns](https://github.com/syntropic137/event-sourcing-platform/blob/main/docs/CONSUMER-PATTERNS.md) show the same shape, with a
   projection/to-do side and a processor side.
 
 In *Understanding Eventsourcing*, Martin Dilger describes the same four patterns
