@@ -984,6 +984,16 @@ pub struct PatternsConfig {
     /// Test pattern (e.g., "*.test.ts")
     #[serde(default = "default_test_pattern")]
     pub test: String,
+
+    /// Filename convention used for artifact-suffix detection.
+    ///
+    /// - `pascal_case` (default): PascalCase suffixes such as `FooCommand`,
+    ///   `BarEvent`, `BazAggregate` (the TypeScript/Python idiom). This keeps
+    ///   existing behavior unchanged.
+    /// - `snake_case`: snake_case stem suffixes such as `foo_command`,
+    ///   `bar_event`, `baz_aggregate` (the idiomatic Rust convention).
+    #[serde(default)]
+    pub filename_convention: FilenameConvention,
 }
 
 impl Default for PatternsConfig {
@@ -995,8 +1005,21 @@ impl Default for PatternsConfig {
             query: default_query_pattern(),
             integration_event: default_integration_event_pattern(),
             test: default_test_pattern(),
+            filename_convention: FilenameConvention::default(),
         }
     }
+}
+
+/// Filename convention for detecting domain artifacts (commands, events,
+/// aggregates, queries, ports) by their filename.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FilenameConvention {
+    /// PascalCase suffixes (`FooCommand.ts`): TypeScript/Python idiom. Default.
+    #[default]
+    PascalCase,
+    /// snake_case stem suffixes (`foo_command.rs`): idiomatic Rust convention.
+    SnakeCase,
 }
 
 /// Language-specific configuration

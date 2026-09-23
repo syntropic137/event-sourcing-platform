@@ -2,7 +2,7 @@
 //!
 //! Scans the domain/ folder to extract metadata about all domain components.
 
-use crate::config::{DomainConfig, EventVersioningConfig};
+use crate::config::{DomainConfig, EventVersioningConfig, FilenameConvention};
 use crate::domain::{DomainModel, Upcaster, ValueObject};
 use crate::error::{Result, VsaError};
 use crate::scanners::{
@@ -15,12 +15,24 @@ use std::path::{Path, PathBuf};
 pub struct DomainScanner {
     pub(crate) config: DomainConfig,
     pub(crate) root: PathBuf,
+    filename_convention: FilenameConvention,
 }
 
 impl DomainScanner {
-    /// Create a new domain scanner
+    /// Create a new domain scanner (pascal_case convention by default)
     pub fn new(config: DomainConfig, root: PathBuf) -> Self {
-        Self { config, root }
+        Self {
+            config,
+            root,
+            filename_convention: FilenameConvention::default(),
+        }
+    }
+
+    /// Set the filename convention threaded into the artifact sub-scanners so
+    /// snake_case Rust contexts (`*_command.rs`, `*_event.rs`, ...) are detected.
+    pub fn with_filename_convention(mut self, convention: FilenameConvention) -> Self {
+        self.filename_convention = convention;
+        self
     }
 
     /// Scan the domain folder and extract all metadata (monolithic mode)
@@ -67,7 +79,8 @@ impl DomainScanner {
         let mut model = DomainModel::new(domain_path.to_path_buf());
 
         // Scan aggregates
-        let aggregate_scanner = AggregateScanner::new(&self.config.aggregates, domain_path);
+        let aggregate_scanner = AggregateScanner::new(&self.config.aggregates, domain_path)
+            .with_filename_convention(self.filename_convention.clone());
         model.aggregates = aggregate_scanner.scan()?;
 
         // Tag aggregates with context
@@ -80,7 +93,8 @@ impl DomainScanner {
         // Scan commands
         let commands_path = domain_path.join(&self.config.commands.path);
         if commands_path.exists() {
-            let command_scanner = CommandScanner::new(&self.config.commands, &commands_path);
+            let command_scanner = CommandScanner::new(&self.config.commands, &commands_path)
+                .with_filename_convention(self.filename_convention.clone());
             model.commands = command_scanner.scan()?;
 
             // Tag commands with context
@@ -94,7 +108,8 @@ impl DomainScanner {
         // Scan queries
         let queries_path = domain_path.join(&self.config.queries.path);
         if queries_path.exists() {
-            let query_scanner = QueryScanner::new(&self.config.queries, &queries_path);
+            let query_scanner = QueryScanner::new(&self.config.queries, &queries_path)
+                .with_filename_convention(self.filename_convention.clone());
             model.queries = query_scanner.scan()?;
             // Note: Queries don't have context field yet, may add in future
         }
@@ -102,7 +117,8 @@ impl DomainScanner {
         // Scan events
         let events_path = domain_path.join(&self.config.events.path);
         if events_path.exists() {
-            let event_scanner = EventScanner::new(&self.config.events, &events_path);
+            let event_scanner = EventScanner::new(&self.config.events, &events_path)
+                .with_filename_convention(self.filename_convention.clone());
             model.events = event_scanner.scan()?;
 
             // Tag events with context
