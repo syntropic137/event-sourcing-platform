@@ -182,6 +182,60 @@ class SecurityPolicy:
    Consider moving to: orchestration/slices/ or sessions/slices/
 ```
 
+### Decision 7: Each Consuming Bounded Context Owns a Ubiquitous Language File
+
+**ESP supplies the machinery. It does NOT supply the vocabulary.**
+
+A bounded context is defined by the language that holds inside it. The
+decisions above make a context's STRUCTURE visible and checkable; none of them
+makes its MEANING visible. A context whose words are not written down has no
+boundary anyone can verify, so "bounded context" degrades into "directory".
+
+Every consuming repository therefore owns one vocabulary file per bounded
+context, at a path whose name says which context it speaks for:
+
+```
+docs/architecture/<bounded-context>-ubiquitous-language.md
+```
+
+The `<bounded-context>` segment MUST equal the context's directory name under
+the contexts root. The file name alone then identifies its context, so two
+vocabularies cannot be confused and an orphaned file is detectable.
+
+**This is not ESP's glossary.** ESP's own documentation covers event-sourcing
+mechanics: aggregate, projection, checkpoint, process manager. Those are the
+same everywhere. A bounded context's vocabulary covers domain meaning, which is
+different in every context and, deliberately, may differ BETWEEN contexts in
+the same repository. One consumer has `resume` meaning "continue an execution
+that did not finish" in one context and "un-pause a trigger rule" in another.
+Both are correct. That is what a boundary is for, and a single shared glossary
+would have to declare one of them wrong.
+
+**What each file should carry**, beyond the terms themselves:
+
+- **Words the context deliberately does NOT use.** A reserved or retired word
+  is as load-bearing as an adopted one; without this section a renamed concept
+  drifts back under its old name within months.
+- **Genuine uncertainty, marked as such, with an issue.** A vocabulary that
+  hides its gaps lies about how well the model is understood.
+
+**VSA Validation (proposed):**
+
+```
+❌ ERROR: bounded context 'billing' has no ubiquitous language file
+   Expected: docs/architecture/billing-ubiquitous-language.md
+❌ ERROR: docs/architecture/metrics-ubiquitous-language.md names no bounded context
+```
+
+Tracked as [event-sourcing-platform#311](https://github.com/syntropic137/event-sourcing-platform/issues/311).
+A reference implementation of the check, and five worked vocabularies, exist in
+the syntropic137 repository at `ci/fitness/code_quality/test_ubiquitous_language.py`
+and `docs/architecture/*-ubiquitous-language.md`. Until the check ships here,
+consumers should copy it rather than go without.
+
+A check that scans an empty context list passes for the wrong reason, so it
+must assert it found contexts before checking any of them.
+
 ## Consequences
 
 ### Positive
@@ -208,6 +262,7 @@ class SecurityPolicy:
 | Root in folder | Root in `aggregate_*` | "Move to aggregate_* folder" |
 | Entities co-located | Entity in same folder as root | "Move entity to aggregate folder" |
 | No cross-context imports | Import analysis | "Boundary violation" |
+| BC has a vocabulary | `docs/architecture/<bc>-ubiquitous-language.md` exists | "Bounded context has no ubiquitous language file" (proposed, #311) |
 
 ## Examples
 
