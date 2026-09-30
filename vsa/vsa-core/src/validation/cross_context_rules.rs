@@ -38,54 +38,131 @@ impl ValidationRule for ContextPublicApiExistsRule {
         let scanner = Scanner::new(ctx.config.clone(), ctx.root.clone());
         let contexts = scanner.scan_contexts()?;
 
+        let api = PublicApiConvention::for_language(&ctx.config.language);
+
         for context in &contexts {
-            let init_path = context.path.join("__init__.py");
-
-            if !init_path.exists() {
-                report.errors.push(ValidationIssue {
-                    path: context.path.clone(),
-                    code: self.code().to_string(),
-                    severity: Severity::Error,
-                    message: format!(
-                        "Context '{}' is missing __init__.py public API",
-                        context.name
-                    ),
-                    suggestions: vec![Suggestion::create_file(
-                        init_path,
-                        format!(
-                            "Create __init__.py with public exports for context '{}'",
-                            context.name
+            // Resolve the public-API file. Rust allows a fallback (lib.rs when
+            // mod.rs is absent); other languages have a single canonical file.
+            let api_path = match api.resolve_api_file(&context.path) {
+                Some(path) => path,
+                None => {
+                    let expected = api.primary_file;
+                    report.errors.push(ValidationIssue {
+                        path: context.path.clone(),
+                        code: self.code().to_string(),
+                        severity: Severity::Error,
+                        message: format!(
+                            "Context '{}' is missing {} public API",
+                            context.name, expected
                         ),
-                    )],
-                });
-                continue;
-            }
+                        suggestions: vec![Suggestion::create_file(
+                            context.path.join(expected),
+                            format!(
+                                "Create {} with public exports for context '{}'",
+                                expected, context.name
+                            ),
+                        )],
+                    });
+                    continue;
+                }
+            };
 
-            // Check that __init__.py has at least one export
-            let content = std::fs::read_to_string(&init_path).unwrap_or_default();
-            let has_exports = content.lines().any(|line| {
-                let trimmed = line.trim();
-                trimmed.starts_with("from ") && trimmed.contains(" import ")
-                    || trimmed.starts_with("__all__")
-            });
+            // Check that the public-API file has at least one export
+            let content = std::fs::read_to_string(&api_path).unwrap_or_default();
+            let has_exports = content.lines().any(|line| api.line_is_export(line.trim()));
 
             if !has_exports {
                 report.errors.push(ValidationIssue {
-                    path: init_path.clone(),
+                    path: api_path.clone(),
                     code: self.code().to_string(),
                     severity: Severity::Error,
                     message: format!(
-                        "Context '{}' __init__.py has no exports (needs 'from ... import' or '__all__')",
-                        context.name
+                        "Context '{}' {} has no exports ({})",
+                        context.name,
+                        api.primary_file,
+                        api.export_hint
                     ),
-                    suggestions: vec![Suggestion::manual(
-                        "Add public API exports to __init__.py (e.g., 'from .domain import ...' or '__all__ = [...]')"
-                    )],
+                    suggestions: vec![Suggestion::manual(api.export_suggestion)],
                 });
             }
         }
 
         Ok(())
+    }
+}
+
+/// Language-aware description of a bounded context's public-API file (VSA205).
+///
+/// Keeps every non-Rust language (Python, TypeScript, ...) on the historical
+/// `__init__.py` check for byte-for-byte backward compatibility, while adding
+/// Rust (`mod.rs`, falling back to `lib.rs`).
+struct PublicApiConvention {
+    /// Canonical public-API file name (also the one suggested when missing).
+    primary_file: &'static str,
+    /// Optional fallback file name accepted when the primary is absent (Rust).
+    fallback_file: Option<&'static str>,
+    /// Human-readable hint describing what counts as an export.
+    export_hint: &'static str,
+    /// Suggestion text emitted when the file exists but exports nothing.
+    export_suggestion: &'static str,
+    /// Which language's export syntax to look for.
+    language: ApiLanguage,
+}
+
+enum ApiLanguage {
+    Python,
+    Rust,
+}
+
+impl PublicApiConvention {
+    fn for_language(language: &str) -> Self {
+        match language {
+            "rust" => PublicApiConvention {
+                primary_file: "mod.rs",
+                fallback_file: Some("lib.rs"),
+                export_hint: "needs a 'pub ...' item",
+                export_suggestion:
+                    "Add public API exports to mod.rs (e.g., 'pub use ...' or 'pub mod ...')",
+                language: ApiLanguage::Rust,
+            },
+            // Python is the historical default and covers every non-Rust
+            // language (including TypeScript) to preserve byte-for-byte
+            // backward compatibility with the original __init__.py check.
+            _ => PublicApiConvention {
+                primary_file: "__init__.py",
+                fallback_file: None,
+                export_hint: "needs 'from ... import' or '__all__'",
+                export_suggestion:
+                    "Add public API exports to __init__.py (e.g., 'from .domain import ...' or '__all__ = [...]')",
+                language: ApiLanguage::Python,
+            },
+        }
+    }
+
+    /// Return the existing public-API file for this context, if any.
+    fn resolve_api_file(&self, context_path: &Path) -> Option<PathBuf> {
+        let primary = context_path.join(self.primary_file);
+        if primary.exists() {
+            return Some(primary);
+        }
+        if let Some(fallback) = self.fallback_file {
+            let fallback_path = context_path.join(fallback);
+            if fallback_path.exists() {
+                return Some(fallback_path);
+            }
+        }
+        None
+    }
+
+    /// Does a trimmed line declare a public export for this language?
+    fn line_is_export(&self, trimmed: &str) -> bool {
+        match self.language {
+            ApiLanguage::Python => {
+                (trimmed.starts_with("from ") && trimmed.contains(" import "))
+                    || trimmed.starts_with("__all__")
+            }
+            ApiLanguage::Rust => trimmed.starts_with("pub "),
+        }
     }
 }
 
@@ -490,6 +567,138 @@ mod tests {
         rule.validate(&ctx, &mut report).unwrap();
 
         assert_eq!(report.errors.len(), 0);
+    }
+
+    #[test]
+    fn test_vsa205_rust_context_with_mod_rs_passes() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = setup_context_structure(&temp_dir);
+
+        // Rust contexts expose their public API via mod.rs with `pub` items.
+        // A stray __init__.py must NOT be required (and must not false-positive).
+        std::fs::write(
+            root.join("github/mod.rs"),
+            "pub use self::domain::InstallationAggregate;\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("orchestration/mod.rs"), "pub mod domain;\n").unwrap();
+
+        let mut config = create_test_config(root.clone());
+        config.language = "rust".to_string();
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = ContextPublicApiExistsRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.errors.len(), 0);
+    }
+
+    #[test]
+    fn test_vsa205_rust_context_lib_rs_fallback_passes() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = setup_context_structure(&temp_dir);
+
+        // No mod.rs; lib.rs is the accepted fallback for Rust.
+        std::fs::write(root.join("github/lib.rs"), "pub mod domain;\n").unwrap();
+        std::fs::write(root.join("orchestration/lib.rs"), "pub use crate::foo;\n").unwrap();
+
+        let mut config = create_test_config(root.clone());
+        config.language = "rust".to_string();
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = ContextPublicApiExistsRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.errors.len(), 0);
+    }
+
+    #[test]
+    fn test_vsa205_rust_context_missing_mod_rs_errors() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = setup_context_structure(&temp_dir);
+
+        // No mod.rs / lib.rs at all -> one error per context, mentioning mod.rs.
+        let mut config = create_test_config(root.clone());
+        config.language = "rust".to_string();
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = ContextPublicApiExistsRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.errors.len(), 2);
+        assert!(report.errors.iter().all(|e| e.message.contains("mod.rs")));
+    }
+
+    #[test]
+    fn test_vsa205_rust_mod_rs_without_pub_errors() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = setup_context_structure(&temp_dir);
+
+        // mod.rs exists but declares no `pub` item -> "no exports" error.
+        std::fs::write(root.join("github/mod.rs"), "mod domain;\n").unwrap();
+        std::fs::write(root.join("orchestration/mod.rs"), "// private only\n").unwrap();
+
+        let mut config = create_test_config(root.clone());
+        config.language = "rust".to_string();
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = ContextPublicApiExistsRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        assert_eq!(report.errors.len(), 2);
+        assert!(report.errors.iter().all(|e| e.message.contains("no exports")));
+    }
+
+    #[test]
+    fn test_vsa205_typescript_keeps_original_init_py_behavior() {
+        // Backward compatibility: for every non-Rust language (including
+        // TypeScript) VSA205 keeps the original __init__.py check unchanged.
+        // An index.ts alone must NOT satisfy the rule; the context still
+        // errors on the missing __init__.py public API.
+        let temp_dir = TempDir::new().unwrap();
+        let root = setup_context_structure(&temp_dir);
+
+        std::fs::write(
+            root.join("github/index.ts"),
+            "export { InstallationAggregate } from './domain';\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("orchestration/index.ts"), "export * from './domain';\n").unwrap();
+
+        let mut config = create_test_config(root.clone());
+        config.language = "typescript".to_string();
+        let ctx = ValidationContext::new(config, root.clone());
+        let mut report = EnhancedValidationReport::default();
+
+        let rule = ContextPublicApiExistsRule;
+        rule.validate(&ctx, &mut report).unwrap();
+
+        // index.ts does not count: both contexts error on missing __init__.py.
+        assert_eq!(report.errors.len(), 2);
+        assert!(report.errors.iter().all(|e| e.code == "VSA205"));
+        assert!(report
+            .errors
+            .iter()
+            .all(|e| e.message.contains("__init__.py")));
+
+        // And the historical __init__.py path still passes for TypeScript.
+        std::fs::write(
+            root.join("github/__init__.py"),
+            "from .domain import InstallationAggregate\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("orchestration/__init__.py"),
+            "__all__ = ['Workflow']\n",
+        )
+        .unwrap();
+        let mut report2 = EnhancedValidationReport::default();
+        rule.validate(&ctx, &mut report2).unwrap();
+        assert_eq!(report2.errors.len(), 0);
     }
 
     // ========================================================================
