@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator
 
 from event_sourcing.core.checkpoint import (
     ProjectionCheckpoint,
@@ -44,7 +44,7 @@ class AsyncConnectionPool(Protocol):
     """Protocol for async connection pools (asyncpg-compatible)."""
 
     @asynccontextmanager
-    def acquire(self) -> AsyncIterator[AsyncConnection]: ...
+    def acquire(self) -> AsyncGenerator[AsyncConnection]: ...
 
 
 class PostgresCheckpointStore:
