@@ -1,9 +1,17 @@
 name: CI
 
 on:
+  # Only long-lived branches trigger on push. Feature and dependabot branches
+  # are validated by the pull_request run below, which tests the merge commit
+  # (strictly stronger evidence for merge safety than the raw head).
+  # Firing on both events previously ran the whole suite twice per commit.
   push:
-    branches: ["**"]
+    branches: [main, release]
+  # PRs into `release` are validated by release-gate.yml, which calls this
+  # workflow as `ci-check` and gates on it. Self-triggering here as well would
+  # run the identical suite a second time for the same SHA.
   pull_request:
+    branches-ignore: [release]
   workflow_call:
   workflow_dispatch:
 
