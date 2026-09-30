@@ -108,10 +108,10 @@ impl Manifest {
         let contexts = scanner.scan_contexts()?;
 
         // Create domain scanner for context classification (always needed for aggregate counting)
-        let domain_scanner = config
-            .domain
-            .as_ref()
-            .map(|domain_config| DomainScanner::new(domain_config.clone(), root.clone()));
+        let domain_scanner = config.domain.as_ref().map(|domain_config| {
+            DomainScanner::new(domain_config.clone(), root.clone())
+                .with_filename_convention(config.patterns.filename_convention.clone())
+        });
 
         let mut context_manifests = Vec::new();
 
@@ -161,7 +161,8 @@ impl Manifest {
         // Optionally scan domain model
         let domain = if include_domain && config.domain.is_some() {
             let domain_config = config.domain.as_ref().unwrap();
-            let domain_scanner = DomainScanner::new(domain_config.clone(), root.clone());
+            let domain_scanner = DomainScanner::new(domain_config.clone(), root.clone())
+                .with_filename_convention(config.patterns.filename_convention.clone());
 
             // Determine if we should use multi-context scanning
             let domain_model = if !contexts.is_empty() {
@@ -549,6 +550,7 @@ impl Manifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_manifest_serialization() {
@@ -737,6 +739,97 @@ mod tests {
             domain_manifest.relationships.event_to_handlers.get("TaskCreatedEvent"),
             Some(&vec!["TaskAggregate".to_string()])
         );
+    }
+
+    fn snake_case_rust_config(root: std::path::PathBuf) -> VsaConfig {
+        use crate::config::{DomainConfig, FilenameConvention, PatternsConfig};
+        use std::collections::HashMap;
+
+        let patterns = PatternsConfig {
+            filename_convention: FilenameConvention::SnakeCase,
+            ..PatternsConfig::default()
+        };
+
+        VsaConfig {
+            version: 2,
+            architecture: crate::config::ArchitectureType::HexagonalEventSourcedVsa,
+            root: root.clone(),
+            language: "rust".to_string(),
+            domain: Some(DomainConfig::default()),
+            slices: None,
+            infrastructure: None,
+            framework: None,
+            contexts: HashMap::new(),
+            validation: crate::config::ValidationConfig::default(),
+            patterns,
+            projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
+            layer_separation: None,
+        }
+    }
+
+    #[test]
+    fn test_manifest_include_domain_snake_case_rust_context() {
+        // Regression: `vsa manifest --include-domain` on a snake_case Rust
+        // bounded context must report nonzero command/event/aggregate counts.
+        // Before threading `filename_convention` into the scanners, these
+        // snake_case artifacts (`*_command.rs`, `*_event.rs`, `*_aggregate.rs`)
+        // were silently omitted because the scanners matched PascalCase only.
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        // A single bounded context `github` with a snake_case Rust domain.
+        let domain = root.join("github/domain");
+        std::fs::create_dir_all(domain.join("commands")).unwrap();
+        std::fs::create_dir_all(domain.join("events")).unwrap();
+        std::fs::create_dir_all(domain.join("queries")).unwrap();
+
+        std::fs::write(domain.join("workspace_aggregate.rs"), "pub struct Workspace;\n").unwrap();
+        std::fs::write(
+            domain.join("commands/create_workspace_command.rs"),
+            "pub struct CreateWorkspace { pub aggregate_id: String }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            domain.join("events/workspace_created_event.rs"),
+            "pub struct WorkspaceCreated;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            domain.join("queries/get_workspace_query.rs"),
+            "pub struct GetWorkspace;\n",
+        )
+        .unwrap();
+
+        let config = snake_case_rust_config(root.clone());
+        let manifest = Manifest::generate_with_options(&config, root.clone(), true).unwrap();
+
+        let domain_manifest = manifest.domain.expect("domain manifest should be present");
+        assert!(
+            !domain_manifest.commands.is_empty(),
+            "snake_case *_command.rs must be detected"
+        );
+        assert!(
+            !domain_manifest.events.is_empty(),
+            "snake_case *_event.rs must be detected"
+        );
+        assert!(
+            !domain_manifest.aggregates.is_empty(),
+            "snake_case *_aggregate.rs must be detected"
+        );
+
+        // Control: with the default pascal_case convention the same tree yields
+        // zero domain artifacts, proving the convention is what unblocks them.
+        let mut pascal_config = snake_case_rust_config(root.clone());
+        pascal_config.patterns.filename_convention =
+            crate::config::FilenameConvention::PascalCase;
+        let pascal_manifest =
+            Manifest::generate_with_options(&pascal_config, root, true).unwrap();
+        let pascal_domain = pascal_manifest.domain.expect("domain manifest present");
+        assert!(pascal_domain.commands.is_empty());
+        assert!(pascal_domain.events.is_empty());
+        assert!(pascal_domain.aggregates.is_empty());
     }
 
     #[test]

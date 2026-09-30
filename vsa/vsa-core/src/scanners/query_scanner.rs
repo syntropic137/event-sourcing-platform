@@ -2,9 +2,10 @@
 //!
 //! Scans for query files and extracts basic metadata.
 
-use crate::config::QueryConfig;
+use crate::config::{FilenameConvention, QueryConfig};
 use crate::domain::Query;
 use crate::error::Result;
+use crate::scanners::stem_matches_suffix;
 use std::fs;
 use std::path::Path;
 
@@ -13,12 +14,23 @@ pub struct QueryScanner<'a> {
     #[allow(dead_code)]
     config: &'a QueryConfig,
     root: &'a Path,
+    filename_convention: FilenameConvention,
 }
 
 impl<'a> QueryScanner<'a> {
-    /// Create a new query scanner
+    /// Create a new query scanner (pascal_case convention by default)
     pub fn new(config: &'a QueryConfig, root: &'a Path) -> Self {
-        Self { config, root }
+        Self {
+            config,
+            root,
+            filename_convention: FilenameConvention::default(),
+        }
+    }
+
+    /// Set the filename convention used to detect query files.
+    pub fn with_filename_convention(mut self, convention: FilenameConvention) -> Self {
+        self.filename_convention = convention;
+        self
     }
 
     /// Scan for queries
@@ -70,8 +82,9 @@ impl<'a> QueryScanner<'a> {
             .or_else(|| file_name.strip_suffix(".rs"))
             .unwrap_or(file_name);
 
-        // Check if it ends with "Query"
-        name_without_ext.ends_with("Query")
+        // Check for the "Query" suffix under the configured convention
+        // (`*Query` for pascal_case, `*_query` for snake_case).
+        stem_matches_suffix(name_without_ext, "Query", &self.filename_convention)
     }
 
     /// Parse query metadata from a file

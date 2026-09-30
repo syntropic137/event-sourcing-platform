@@ -55,6 +55,9 @@ class Repository(Protocol, Generic[TAggregate]):
 
         Returns:
             True if the aggregate exists
+
+        Raises:
+            EventStoreError: If the store cannot be reached. Never False.
         """
         ...
 
