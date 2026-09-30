@@ -110,6 +110,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
+      # vsa/Cargo.lock is gitignored, so the runner has no lockfile until a
+      # cargo command resolves one, and cargo audit needs a lockfile to read.
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+
       # audit-check is a JavaScript action, so defaults.run.working-directory
       # does not apply to it. Without this input it looks for ./Cargo.lock at
       # the repo root, where there is no Cargo workspace.
