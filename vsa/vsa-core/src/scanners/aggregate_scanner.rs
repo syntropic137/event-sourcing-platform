@@ -3,9 +3,10 @@
 //! Scans for aggregate files and extracts basic metadata.
 //! Also detects entities and value objects within aggregate folders (aggregate_*/).
 
-use crate::config::AggregateConfig;
+use crate::config::{AggregateConfig, FilenameConvention};
 use crate::domain::{Aggregate, AggregateEntity, AggregateValueObject};
 use crate::error::Result;
+use crate::scanners::stem_matches_suffix;
 use std::fs;
 use std::path::Path;
 
@@ -14,12 +15,23 @@ pub struct AggregateScanner<'a> {
     #[allow(dead_code)]
     config: &'a AggregateConfig,
     root: &'a Path,
+    filename_convention: FilenameConvention,
 }
 
 impl<'a> AggregateScanner<'a> {
-    /// Create a new aggregate scanner
+    /// Create a new aggregate scanner (pascal_case convention by default)
     pub fn new(config: &'a AggregateConfig, root: &'a Path) -> Self {
-        Self { config, root }
+        Self {
+            config,
+            root,
+            filename_convention: FilenameConvention::default(),
+        }
+    }
+
+    /// Set the filename convention used to detect aggregate files.
+    pub fn with_filename_convention(mut self, convention: FilenameConvention) -> Self {
+        self.filename_convention = convention;
+        self
     }
 
     /// Scan for aggregates
@@ -192,10 +204,11 @@ impl<'a> AggregateScanner<'a> {
         }))
     }
 
-    /// Check if a file name matches the aggregate pattern (*Aggregate.*)
+    /// Check if a file name matches the aggregate pattern under the configured
+    /// convention (`*Aggregate` for pascal_case, `*_aggregate` for snake_case).
     fn matches_pattern(&self, file_name: &str) -> bool {
         let name_without_ext = self.strip_extension(file_name);
-        name_without_ext.ends_with("Aggregate")
+        stem_matches_suffix(name_without_ext, "Aggregate", &self.filename_convention)
     }
 
     /// Check if file is a code file
