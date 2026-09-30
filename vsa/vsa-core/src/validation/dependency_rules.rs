@@ -1238,7 +1238,7 @@ impl LayerSeparationRule {
                 .config
                 .exceptions
                 .iter()
-                .filter(|e| e.rule == "VSA206" && rel_path.ends_with(&e.file))
+                .filter(|e| e.matches("VSA206", &rel_path))
                 .map(|e| e.budget)
                 .sum();
 

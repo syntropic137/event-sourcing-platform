@@ -396,7 +396,7 @@ fn report_violations(
         .config
         .exceptions
         .iter()
-        .filter(|e| e.rule == rule_code && file_str.ends_with(&e.file))
+        .filter(|e| e.matches(rule_code, &file_str))
         .map(|e| e.budget)
         .sum::<usize>();
 
