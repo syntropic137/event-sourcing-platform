@@ -112,6 +112,7 @@ CRUD+Events and full Event Sourcing are fundamentally different storage paradigm
 | ES SDK | Aggregates, commands, events, projections |
 | Replay Harness | Rehydrate aggregates from events |
 | Projection System | Build read models from event streams |
+| Process Manager | Event-driven side effects via To-Do List pattern |
 | Test Kit | Golden replays, invariants, projection verification |
 | Ops Tools | Checkpoints, DLQ, backfill, health checks |
 | Architecture Tool | VSA validation and enforcement |

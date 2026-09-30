@@ -2,9 +2,10 @@
 //!
 //! Scans for event files and extracts basic metadata including versions.
 
-use crate::config::EventConfig;
+use crate::config::{EventConfig, FilenameConvention};
 use crate::domain::{Event, EventVersion};
 use crate::error::Result;
+use crate::scanners::stem_matches_suffix;
 use std::fs;
 use std::path::Path;
 
@@ -12,12 +13,23 @@ use std::path::Path;
 pub struct EventScanner<'a> {
     config: &'a EventConfig,
     root: &'a Path,
+    filename_convention: FilenameConvention,
 }
 
 impl<'a> EventScanner<'a> {
-    /// Create a new event scanner
+    /// Create a new event scanner (pascal_case convention by default)
     pub fn new(config: &'a EventConfig, root: &'a Path) -> Self {
-        Self { config, root }
+        Self {
+            config,
+            root,
+            filename_convention: FilenameConvention::default(),
+        }
+    }
+
+    /// Set the filename convention used to detect event files.
+    pub fn with_filename_convention(mut self, convention: FilenameConvention) -> Self {
+        self.filename_convention = convention;
+        self
     }
 
     /// Scan for events
@@ -94,8 +106,9 @@ impl<'a> EventScanner<'a> {
             name_without_ext
         };
 
-        // Check if it ends with "Event"
-        base_name.ends_with("Event")
+        // Check for the "Event" suffix under the configured convention
+        // (`*Event` for pascal_case, `*_event` for snake_case).
+        stem_matches_suffix(base_name, "Event", &self.filename_convention)
     }
 
     /// Parse event metadata from a file

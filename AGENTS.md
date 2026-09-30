@@ -158,6 +158,26 @@ The TypeScript SDK (`event-sourcing/typescript/`) provides:
 5. **Concurrency Control**: `ConcurrencyConflictError` on stale aggregate saves
 6. **Event Bus**: Cross-context communication via integration events
 
+### Event Consumer Patterns (Python SDK)
+
+The Python SDK (`event-sourcing/python/`) provides two event consumer base classes:
+
+1. **CheckpointedProjection**: Read-only event consumer for building derived views.
+   Replay-safe: replaying all events produces the same state with zero side effects.
+   `SIDE_EFFECTS_ALLOWED = False` (enforced). Use for read models, dashboards, metrics.
+
+2. **ProcessManager**: Event consumer with side effects, implementing the Processor
+   To-Do List pattern (Dilger, Ch. 37). Two parts:
+   - `handle_event()` - writes to-do records (pure, replay-safe, always called)
+   - `process_pending()` - executes pending items (idempotent, live-only, never during replay)
+   `SIDE_EFFECTS_ALLOWED = True`. Use for workflow dispatch, notifications, external API calls.
+
+3. **DispatchContext**: Passed to `handle_event()` with `is_catching_up` flag.
+   The coordinator snapshots the head `global_nonce` before subscribing to
+   determine the catch-up/live boundary.
+
+See [CONSUMER-PATTERNS.md](docs/CONSUMER-PATTERNS.md) and [ADR-025](docs/adrs/ADR-025-process-manager-pattern.md).
+
 ### Vertical Slice Architecture (VSA)
 
 The VSA tool enforces:

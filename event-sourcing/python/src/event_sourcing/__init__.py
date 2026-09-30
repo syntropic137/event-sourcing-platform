@@ -13,6 +13,7 @@ from event_sourcing.client import (
     MemoryEventStoreClient,
 )
 from event_sourcing.core.aggregate import AggregateRoot, BaseAggregate
+from event_sourcing.core.checkpoint import DispatchContext, ProjectionReadStore, ProjectionStore
 from event_sourcing.core.command import Command, CommandBus, CommandHandler, InMemoryCommandBus
 from event_sourcing.core.errors import (
     AggregateNotFoundError,
@@ -30,6 +31,14 @@ from event_sourcing.core.event import (
     GenericDomainEvent,
 )
 from event_sourcing.core.expected_version import ExpectedVersion
+from event_sourcing.core.historical_poller import (
+    CursorData,
+    CursorStore,
+    HistoricalPoller,
+    PollEvent,
+    PollResult,
+)
+from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.core.projection import (
     AutoDispatchProjection,
     CheckpointedProjection,
@@ -56,7 +65,11 @@ from event_sourcing.decorators.events import (
     get_event_type_registry,
     resolve_event_type,
 )
-from event_sourcing.stores import MemoryCheckpointStore, PostgresCheckpointStore
+from event_sourcing.stores import (
+    MemoryCheckpointStore,
+    MemoryProjectionStore,
+    PostgresCheckpointStore,
+)
 from event_sourcing.subscriptions import SubscriptionCoordinator
 
 __version__ = "0.1.0"
@@ -82,12 +95,25 @@ __all__ = [
     # Projections (ADR-014 Checkpoint Architecture)
     "AutoDispatchProjection",
     "CheckpointedProjection",
+    "DispatchContext",
     "ProjectionCheckpoint",
     "ProjectionCheckpointStore",
+    "ProjectionReadStore",
     "ProjectionResult",
+    "ProjectionStore",
+    # Process Manager (To-Do List pattern)
+    "ProcessManager",
+    # Historical Poller (Cold-Start-Safe External Ingestion)
+    "HistoricalPoller",
+    "CursorStore",
+    "CursorData",
+    "PollEvent",
+    "PollResult",
     # Checkpoint Stores
     "PostgresCheckpointStore",
     "MemoryCheckpointStore",
+    # Projection Stores
+    "MemoryProjectionStore",
     # Subscription Coordinator
     "SubscriptionCoordinator",
     # Repository

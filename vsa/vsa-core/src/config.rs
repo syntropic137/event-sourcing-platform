@@ -49,6 +49,52 @@ pub struct VsaConfig {
     /// Pattern definitions
     #[serde(default)]
     pub patterns: PatternsConfig,
+
+    /// Additional allowed module prefixes for projection purity checks (VSA032).
+    /// Merged with the default whitelist (stdlib + event_sourcing).
+    /// Example: ["syn_domain", "syn_shared", "syn_adapters.projection_stores"]
+    #[serde(default)]
+    pub projection_allowed_prefixes: Option<Vec<String>>,
+
+    /// Additional scan paths for cross-context rule (outside context root)
+    #[serde(default)]
+    pub cross_context_scan_paths: Vec<PathBuf>,
+
+    /// Exception budgets for grandfathered violations
+    #[serde(default)]
+    pub exceptions: Vec<ExceptionBudget>,
+
+    /// Layer separation enforcement configuration
+    #[serde(default)]
+    pub layer_separation: Option<LayerSeparationConfig>,
+}
+
+/// Configuration for layer separation enforcement (VSA206).
+///
+/// Defines which packages are forbidden from being imported by domain/slice
+/// code and adapter code. TYPE_CHECKING imports are automatically exempt
+/// (the import parser already filters them out).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LayerSeparationConfig {
+    /// Packages that domain and slice code must not import at runtime.
+    /// Example: ["syn_adapters", "syn_api"]
+    #[serde(default)]
+    pub forbidden_domain_imports: Vec<String>,
+
+    /// Packages that adapter code must not import at runtime.
+    /// Example: ["syn_api"]
+    #[serde(default)]
+    pub forbidden_adapter_imports: Vec<String>,
+}
+
+/// Exception budget for a specific file+rule combination
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExceptionBudget {
+    pub file: String,
+    pub rule: String,
+    pub budget: usize,
+    #[serde(default)]
+    pub issue: Option<String>,
 }
 
 /// Architecture type
@@ -938,6 +984,16 @@ pub struct PatternsConfig {
     /// Test pattern (e.g., "*.test.ts")
     #[serde(default = "default_test_pattern")]
     pub test: String,
+
+    /// Filename convention used for artifact-suffix detection.
+    ///
+    /// - `pascal_case` (default): PascalCase suffixes such as `FooCommand`,
+    ///   `BarEvent`, `BazAggregate` (the TypeScript/Python idiom). This keeps
+    ///   existing behavior unchanged.
+    /// - `snake_case`: snake_case stem suffixes such as `foo_command`,
+    ///   `bar_event`, `baz_aggregate` (the idiomatic Rust convention).
+    #[serde(default)]
+    pub filename_convention: FilenameConvention,
 }
 
 impl Default for PatternsConfig {
@@ -949,8 +1005,21 @@ impl Default for PatternsConfig {
             query: default_query_pattern(),
             integration_event: default_integration_event_pattern(),
             test: default_test_pattern(),
+            filename_convention: FilenameConvention::default(),
         }
     }
+}
+
+/// Filename convention for detecting domain artifacts (commands, events,
+/// aggregates, queries, ports) by their filename.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FilenameConvention {
+    /// PascalCase suffixes (`FooCommand.ts`): TypeScript/Python idiom. Default.
+    #[default]
+    PascalCase,
+    /// snake_case stem suffixes (`foo_command.rs`): idiomatic Rust convention.
+    SnakeCase,
 }
 
 /// Language-specific configuration
@@ -1205,6 +1274,10 @@ mod tests {
             contexts: HashMap::new(),
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
+            projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
+            layer_separation: None,
         };
 
         assert!(config.validate().is_ok());
@@ -1225,6 +1298,10 @@ mod tests {
             contexts: HashMap::new(),
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
+            projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
+            layer_separation: None,
         };
 
         assert!(config.validate().is_ok());
@@ -1246,6 +1323,10 @@ mod tests {
             contexts: HashMap::new(),
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
+            projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
+            layer_separation: None,
         };
 
         assert!(config.validate().is_err());
@@ -1265,6 +1346,10 @@ mod tests {
             contexts: HashMap::new(),
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
+            projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
+            layer_separation: None,
         };
 
         assert!(config.validate().is_err());
@@ -1284,6 +1369,10 @@ mod tests {
             contexts: HashMap::new(),
             validation: ValidationConfig::default(),
             patterns: PatternsConfig::default(),
+            projection_allowed_prefixes: None,
+            cross_context_scan_paths: Vec::new(),
+            exceptions: Vec::new(),
+            layer_separation: None,
         };
 
         assert!(config.validate().is_err());

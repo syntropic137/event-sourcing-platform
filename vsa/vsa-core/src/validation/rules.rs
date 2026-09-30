@@ -35,10 +35,12 @@ impl ValidationRuleSet {
     /// Create a new rule set with default rules
     pub fn default_rules() -> Self {
         use super::{
-            ApplicationIsolationRule, ContextBoundariesRule, DomainPurityRule, EventsIsolationRule,
+            ApplicationIsolationRule, ContextBoundariesRule, ContextPublicApiExistsRule,
+            CrossContextPublicApiRule, DomainPurityRule, EventsIsolationRule,
             IntegrationEventNamingRule, IntegrationEventsLocationRule, NoCircularDependenciesRule,
             NoCrossSliceImportsRule, NoDuplicateIntegrationEventsRule, PortIsolationRule,
-            ProjectionEventSubscriptionRule, RequireAggregatesInDomainRootRule,
+            ProcessManagerStructureRule, ProjectionEventSubscriptionRule,
+            ProjectionPurityRule, RequireAggregatesInDomainRootRule,
             RequireBusesInInfrastructureRule, RequireCommandsInDomainRule,
             RequireEventsInDomainRule, RequireHandlerForQueryRule, RequirePortSuffixRule,
             RequirePortsInPortsFolderRule, RequireProjectionForQueryRule, RequireSharedFolderRule,
@@ -82,6 +84,14 @@ impl ValidationRuleSet {
             Box::new(PortIsolationRule), // VSA029: Port isolation (domain/events only)
             Box::new(ApplicationIsolationRule), // VSA030: Application isolation (no infra/slices)
             Box::new(SliceIsolationRule), // VSA031: Slice isolation (no cross-slice)
+            // Consumer pattern rules (ADR-025)
+            Box::new(ProjectionPurityRule),          // VSA032: Projection purity (whitelist)
+            Box::new(ProcessManagerStructureRule),    // VSA033: ProcessManager structure
+            // Cross-context boundary rules
+            Box::new(CrossContextPublicApiRule),      // VSA204
+            Box::new(ContextPublicApiExistsRule),     // VSA205
+            // Layer separation rules
+            Box::new(super::dependency_rules::LayerSeparationRule),  // VSA206
             // Slice isolation rules (legacy)
             Box::new(NoCrossSliceImportsRule),
             Box::new(ThinAdapterRule),
