@@ -141,6 +141,10 @@ id = "GHSA-6v5v-wf23-fmfq"
 reason = "markdown-it pinned at 12.x by vsce (VS Code extension packager). Fix needs markdown-it 14.x (major). Migrate from deprecated vsce to @vscode/vsce."
 
 [[IgnoredVulns]]
+id = "GHSA-253c-mchw-3w2r"
+reason = "markdown-it linkify ReDoS. Same root cause as GHSA-6v5v-wf23-fmfq: markdown-it pinned at 12.3.2 (the last 12.x) by vsce 2.15.0 -> markdown-it ^12.3.2. Fix needs markdown-it 14.3.1 (major). Build-time only (VS Code extension packaging), never parses untrusted input at runtime. Migrate from deprecated vsce to @vscode/vsce."
+
+[[IgnoredVulns]]
 id = "GHSA-22p9-wv53-3rq4"
 reason = "linkify-it pinned at 3.x by vsce -> markdown-it 12.3.2. Fix needs linkify-it 5.x (major). Migrate from deprecated vsce to @vscode/vsce."
 
