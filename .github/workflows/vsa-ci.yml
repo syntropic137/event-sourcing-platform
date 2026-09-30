@@ -8,7 +8,7 @@ on:
     branches: [main]
     paths: [vsa/**]
 
-# Least-privilege default — limits blast radius if a step is compromised.
+# Least-privilege default - limits blast radius if a step is compromised.
 permissions:
   contents: read
 
