@@ -38,13 +38,18 @@ jobs:
 
     steps:
       - name: Check PR body has release notes
+        # The PR body is attacker-controlled text. It MUST reach the shell as
+        # environment DATA, never via ${{ }} interpolation into the script
+        # body, which substitutes it before bash parses and therefore executes
+        # any backticks or $(...) it contains on the runner.
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          BODY_LENGTH=$(echo "${{ github.event.pull_request.body }}" | wc -c)
-          if [ "$BODY_LENGTH" -lt 20 ]; then
+          if [ "${#PR_BODY}" -lt 20 ]; then
             echo "❌ PR body must contain release notes (at least 20 characters)"
             exit 1
           fi
-          echo "✅ Release notes present ($BODY_LENGTH characters)"
+          echo "✅ Release notes present (${#PR_BODY} characters)"
 
   ci-check:
     name: Full CI Suite

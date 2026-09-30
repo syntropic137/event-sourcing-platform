@@ -70,11 +70,15 @@ jobs:
     steps:
       - name: Determine version
         id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version || 'dev' }}
         run: |
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            VERSION="${{ github.event.release.tag_name }}"
+          if [[ "$EVENT_NAME" == "release" ]]; then
+            VERSION="$RELEASE_TAG"
           else
-            VERSION="${{ inputs.version || 'dev' }}"
+            VERSION="$INPUT_VERSION"
           fi
           # Strip 'v' prefix for semver-only contexts
           SEMVER="${VERSION#v}"
@@ -231,6 +235,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create multi-arch manifest
+        env:
+          META_TAGS: ${{ needs.prepare.outputs.tags }}
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
 
@@ -238,7 +244,7 @@ jobs:
           TAG_ARGS=""
           while IFS= read -r tag; do
             [[ -n "$tag" ]] && TAG_ARGS="$TAG_ARGS --tag $tag"
-          done <<< "${{ needs.prepare.outputs.tags }}"
+          done <<< "$META_TAGS"
 
           # Build source list from digests
           SOURCES=""
@@ -251,9 +257,10 @@ jobs:
 
       - name: Inspect manifest
         id: inspect
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-          VERSION="${{ needs.prepare.outputs.version }}"
           DIGEST="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest}}' | jq -r '.digest')"
           echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
 
@@ -276,9 +283,10 @@ jobs:
       # Summary
       # -------------------------------------------------------------------
       - name: Write job summary
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          DIGEST: ${{ steps.inspect.outputs.digest }}
         run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
-          DIGEST="${{ steps.inspect.outputs.digest }}"
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
 
           echo "## Event Store Container: ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
