@@ -205,12 +205,16 @@ class GrpcEventStoreClient:
             raise EventStoreError(f"Failed to append events: {e}") from e
 
     async def stream_exists(self, stream_name: str) -> bool:
-        """Check if a stream exists."""
-        try:
-            events = await self.read_events(stream_name, from_version=0)
-            return len(events) > 0
-        except Exception:
-            return False
+        """Check if a stream exists.
+
+        An absent stream is not an error on the wire: the store answers
+        ReadStream with no events. So any failure here means the store could
+        not be asked, and it propagates as EventStoreError rather than
+        becoming False. "Cannot see" answered as "does not exist" lets every
+        existence check built on this pass while the store is down.
+        """
+        events = await self.read_events(stream_name, from_version=0)
+        return len(events) > 0
 
     @staticmethod
     def _extract_actual_version(rpc_error: grpc.RpcError) -> int:

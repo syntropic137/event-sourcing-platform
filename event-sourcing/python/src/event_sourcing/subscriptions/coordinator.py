@@ -2,7 +2,7 @@
 Subscription Coordinator for managing event delivery to projections.
 
 This module provides the SubscriptionCoordinator which:
-1. Maintains a single connection to the event store
+1. Groups projections into subscription tracks by how far behind they are
 2. Routes events to relevant projections based on type filtering
 3. Handles per-projection checkpointing
 4. Provides proper error handling (no silent failures)
@@ -15,8 +15,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Protocol, TypedDict
+from typing import TYPE_CHECKING, NamedTuple, Protocol, TypedDict
 
 from event_sourcing.core.checkpoint import (
     CheckpointedProjection,
@@ -50,6 +51,57 @@ class ProjectionStatus(TypedDict):
     checkpoint: CheckpointStatus
 
 logger = logging.getLogger(__name__)
+
+# How many replay tracks may be open at once, on top of the always-present
+# live track. Each track is one event-store subscription and so one
+# connection, which is why isolating rebuilds has to be bounded rather than
+# one-per-projection: a version bump applied across a whole read model would
+# otherwise open a stream per rebuilding projection and exhaust the pool.
+# Four covers the realistic case - #1318 was two simultaneous version bumps -
+# while leaving a 25-projection deployment well inside a default pool.
+DEFAULT_REPLAY_CONCURRENCY = 4
+
+
+@dataclass
+class _SubscriptionTrack:
+    """One event-store subscription and the projections fed from it.
+
+    Tracks exist because projections at different positions cannot share a
+    cursor. A subscription cannot hand out event N+1 until every projection
+    on it has taken event N, so the furthest-behind member sets the pace for
+    all of them: a projection replaying 13k events from 0 stops the ones
+    already at head from seeing anything new for the whole replay (#1318).
+    Splitting projections across tracks by position is what removes that.
+
+    The same pacing applies between two rebuilds, so a rebuild gets a track
+    to itself rather than a shared "replay" track - #1318 was two version
+    bumps at once. Past ``replay_concurrency`` rebuilds they share again,
+    because a track costs a connection; see ``_plan_tracks``.
+
+    ``is_catching_up`` belongs to the track for the same reason. The at-head
+    track is live from its first event while a replay track is still in
+    history, and ProcessManager side effects are gated on this flag
+    (ADR-025) - one shared flag would fire them during a replay.
+
+    Attributes:
+        name: Identifier used in logs ("live", "replay-0", "replay-1", ...).
+        from_position: Inclusive global_nonce the subscription starts at.
+        projections: The projections this track feeds, by name.
+        is_catching_up: True while this track is replaying historical events.
+    """
+
+    name: str
+    from_position: int
+    projections: dict[str, CheckpointedProjection]
+    is_catching_up: bool
+
+
+class _BehindProjection(NamedTuple):
+    """A projection that still needs history, and where it needs it from."""
+
+    name: str
+    projection: CheckpointedProjection
+    resume_from: int
 
 
 class EventStoreSubscriber(Protocol):
@@ -91,15 +143,23 @@ class SubscriptionCoordinator:
     """
     Coordinates event subscription across multiple projections.
 
-    The coordinator maintains a single subscription to the event store and
-    routes events to relevant projections based on their subscribed types.
+    The coordinator groups projections into subscription tracks by how far
+    behind the head of the stream each one is, opens one subscription per
+    track, and routes events to the projections on that track based on their
+    subscribed types. In steady state every projection is at head and there
+    is exactly one track; a projection that has to replay history gets one to
+    itself, so it can hold up neither the projections at head nor another
+    rebuild (#1318). At most ``replay_concurrency`` of those exist at once,
+    so the number of connections stays bounded however many projections are
+    rebuilding.
 
     Key features:
-    1. Single connection to event store (efficient)
+    1. One subscription per track (one in steady state, at most 1 + replay_concurrency)
     2. Per-projection checkpointing (independent progress)
-    3. Event type filtering (performance)
-    4. Proper error handling (no silent failures)
-    5. Structured logging (observability)
+    3. A replay never starves projections already at head, or another replay
+    4. Event type filtering (performance)
+    5. Proper error handling (no silent failures)
+    6. Structured logging (observability)
 
     Usage:
         # Create coordinator
@@ -127,6 +187,7 @@ class SubscriptionCoordinator:
         event_store: EventStoreSubscriber,
         checkpoint_store: ProjectionCheckpointStore,
         projections: list[CheckpointedProjection],
+        replay_concurrency: int = DEFAULT_REPLAY_CONCURRENCY,
     ) -> None:
         """
         Initialize the subscription coordinator.
@@ -135,13 +196,22 @@ class SubscriptionCoordinator:
             event_store: Event store client with subscribe() method
             checkpoint_store: Store for checkpoint persistence
             projections: List of projections to manage
+            replay_concurrency: How many rebuilds may replay independently.
+                One event-store connection each, so size it against the pool.
+
+        Raises:
+            ValueError: If replay_concurrency is below 1, which would leave a
+                behind projection with no track to replay on.
         """
+        if replay_concurrency < 1:
+            raise ValueError(f"replay_concurrency must be at least 1, got {replay_concurrency}")
+
         self._event_store = event_store
         self._checkpoint_store = checkpoint_store
+        self._replay_concurrency = replay_concurrency
         self._running = False
         self._last_error: Exception | None = None
         self._live_boundary_nonce: int = 0
-        self._is_catching_up: bool = True
 
         # Validate for duplicate projection names
         self._projections: dict[str, CheckpointedProjection] = {}
@@ -153,6 +223,17 @@ class SubscriptionCoordinator:
                     "Each projection must have a unique name."
                 )
             self._projections[name] = projection
+
+        # Until start() plans them against real checkpoints, everything shares
+        # one catching-up track. Each subscription attempt replaces this.
+        self._tracks: list[_SubscriptionTrack] = [
+            _SubscriptionTrack(
+                name="all",
+                from_position=0,
+                projections=self._projections,
+                is_catching_up=True,
+            )
+        ]
 
         logger.info(
             "Initialized subscription coordinator",
@@ -174,12 +255,19 @@ class SubscriptionCoordinator:
 
     @property
     def is_catching_up(self) -> bool:
-        """True while replaying historical events, False for live events."""
-        return self._is_catching_up
+        """True while any track is replaying historical events.
+
+        A rebuild running alongside projections at head reads as True: some
+        of the read model is still behind, which is what a caller asking this
+        wants to know.
+        """
+        return any(track.is_catching_up for track in self._tracks)
 
     @is_catching_up.setter
     def is_catching_up(self, value: bool) -> None:
-        self._is_catching_up = value
+        """Force every track's catch-up state (fitness harnesses, tests)."""
+        for track in self._tracks:
+            track.is_catching_up = value
 
     @property
     def live_boundary_nonce(self) -> int:
@@ -196,10 +284,11 @@ class SubscriptionCoordinator:
     ) -> None:
         """Dispatch a single event to all subscribed projections.
 
-        Public interface for testing and fitness tooling. Production
-        code uses start() which calls this internally.
+        Public interface for testing and fitness tooling. Production code
+        uses start(), which feeds each track from its own subscription.
         """
-        await self._dispatch_event(envelope)
+        for track in self._tracks:
+            await self._dispatch_to_track(track, envelope)
 
     async def start(self) -> None:
         """
@@ -241,49 +330,65 @@ class SubscriptionCoordinator:
         """
         Run a single subscription attempt.
 
-        Loads checkpoints, subscribes from the minimum position, and
-        dispatches events until the stream ends or self._running is False.
-        Clears _last_error on the first successful event dispatch.
+        Snapshots the head of the stream, plans the tracks, and runs one
+        subscription per track concurrently until the streams end or
+        self._running is False. Returns when every track has finished, so
+        start() re-plans on the next attempt; a reconnect mid-replay is
+        therefore re-grouped against the positions reached so far.
 
-        Before subscribing, snapshots the head global_nonce from the event
-        store. Events at or below that boundary are historical (catch-up);
-        events above it are live. This is re-queried on every subscription
-        loop start for durability.
+        The head is snapshotted BEFORE the checkpoints are read, so events
+        arriving while we plan cannot make a projection that is genuinely at
+        head look behind and strand it on a replay track.
         """
-        min_position = await self._get_minimum_position()
+        self._live_boundary_nonce = await self._read_head_nonce()
+        self._tracks = await self._plan_tracks(self._live_boundary_nonce)
 
-        # Snapshot the head global_nonce from the event store.
-        # This is the durable catch-up/live boundary: events with
-        # global_nonce <= this value were already in the store when we
-        # subscribed and are historical. Events above are live.
-        # Read backwards from the highest possible nonce to get the head event.
-        # from_global_nonce is inclusive: backwards reads return events with
-        # global_nonce <= from_global_nonce, so 0 would return nothing useful.
+        for track in self._tracks:
+            logger.info(
+                "Starting subscription track",
+                extra={
+                    "track": track.name,
+                    "from_position": track.from_position,
+                    "is_catching_up": track.is_catching_up,
+                    "live_boundary_nonce": self._live_boundary_nonce,
+                    "projection_count": len(track.projections),
+                    "projection_names": sorted(track.projections),
+                },
+            )
+
+        # A failure on any track cancels the others and propagates, so start()
+        # retries the whole plan with backoff rather than leaving the read
+        # model half-fed by a track nobody is watching.
+        async with asyncio.TaskGroup() as group:
+            for track in self._tracks:
+                group.create_task(self._run_track(track))
+
+    async def _run_track(self, track: _SubscriptionTrack) -> None:
+        """Feed one track from its own subscription until stopped."""
+        async for envelope in self._event_store.subscribe(from_global_nonce=track.from_position):
+            if not self._running:
+                break
+            self._last_error = None
+            await self._dispatch_to_track(track, envelope)
+
+    async def _read_head_nonce(self) -> int:
+        """
+        Snapshot the highest global_nonce currently in the event store.
+
+        This is the durable catch-up/live boundary: events at or below it were
+        already stored when we subscribed and are historical; events above it
+        are live.
+
+        Read backwards from the highest possible nonce to get the head event.
+        from_global_nonce is inclusive, so a backwards read returns events
+        with global_nonce <= from_global_nonce; 0 would return nothing useful.
+        """
         head_events, _is_end, _next = await self._event_store.read_all(
             from_global_nonce=sys.maxsize, max_count=1, forward=False,
         )
         if head_events and head_events[0].metadata.global_nonce is not None:
-            self._live_boundary_nonce = head_events[0].metadata.global_nonce
-        else:
-            self._live_boundary_nonce = 0
-
-        self._is_catching_up = min_position <= self._live_boundary_nonce
-
-        logger.info(
-            "Starting subscription",
-            extra={
-                "from_position": min_position,
-                "live_boundary_nonce": self._live_boundary_nonce,
-                "is_catching_up": self._is_catching_up,
-                "projection_count": len(self._projections),
-            },
-        )
-
-        async for envelope in self._event_store.subscribe(from_global_nonce=min_position):
-            if not self._running:
-                break
-            self._last_error = None
-            await self._dispatch_event(envelope)
+            return head_events[0].metadata.global_nonce
+        return 0
 
     async def stop(self) -> None:
         """Stop the subscription coordinator gracefully.
@@ -297,82 +402,168 @@ class SubscriptionCoordinator:
         logger.info("Stopping subscription coordinator")
         self._running = False
 
-    async def _get_minimum_position(self) -> int:
+    async def _plan_tracks(self, live_boundary_nonce: int) -> list[_SubscriptionTrack]:
         """
-        Get the minimum checkpoint position across all projections.
+        Split the projections into subscription tracks by position.
 
-        Checks ALL projections for version mismatches before returning,
-        so that multiple projections bumped simultaneously are all rebuilt.
+        A projection that needs nothing at or below ``live_boundary_nonce`` is
+        at head and can take live events straight away. One that still needs
+        history - never run, version bumped and cleared, or left behind by a
+        failure - has to replay first, and it replays on a track of its own so
+        the at-head projections keep consuming while it does (#1318).
 
-        Returns:
-            Position to start subscription from
-        """
-        min_pos: int | None = None
-        needs_full_replay = False
+        Grouping on position rather than on "was a rebuild triggered" is what
+        makes this hold across a reconnect: a rebuild interrupted halfway has
+        a valid checkpoint at a low position, and it must stay on a replay
+        track rather than drag the whole plan back to where it got to.
 
-        for name, projection in self._projections.items():
-            checkpoint = await self._checkpoint_store.get_checkpoint(name)
-
-            if checkpoint is None:
-                # Projection needs full replay
-                logger.info(
-                    "Projection has no checkpoint, starting from 0",
-                    extra={"projection_name": name},
-                )
-                needs_full_replay = True
-                continue
-
-            # Check version mismatch (needs rebuild)
-            if checkpoint.version != projection.get_version():
-                logger.warning(
-                    "Projection version mismatch, clearing data and checkpoint for rebuild",
-                    extra={
-                        "projection_name": name,
-                        "stored_version": checkpoint.version,
-                        "current_version": projection.get_version(),
-                    },
-                )
-                # Clear projection data before replay to avoid data corruption
-                await projection.clear_all_data()
-                await self._checkpoint_store.delete_checkpoint(name)
-                needs_full_replay = True
-                continue
-
-            if min_pos is None or checkpoint.global_position < min_pos:
-                min_pos = checkpoint.global_position
-
-        if needs_full_replay:
-            return 0
-
-        # Start from next position after minimum
-        return (min_pos or 0) + 1
-
-    async def _dispatch_event(self, envelope: EventEnvelope[DomainEvent]) -> None:
-        """
-        Dispatch an event to all relevant projections.
-
-        Tracks the catch-up/live transition based on global_nonce.
+        A track per rebuild, not one track for "the rebuilds": two rebuilds
+        sharing a cursor pace each other exactly as a rebuild and a live
+        projection do, and #1318 was two version bumps in the same deploy.
+        The count is capped at ``replay_concurrency`` because each track is a
+        connection held for the length of a replay, and a version bump rolled
+        out across a whole read model would otherwise open one per projection.
+        Past the cap the rebuilds are spread evenly over the tracks available
+        and the ones sharing a track pace each other - the behaviour they had
+        before the split, which is the safe direction to degrade in.
 
         Args:
+            live_boundary_nonce: Head snapshot separating history from live
+
+        Returns:
+            The tracks to subscribe, at-head track first. It is always
+            present, even when empty, so the coordinator always holds one
+            subscription on the live tail. At most ``replay_concurrency``
+            replay tracks follow it.
+        """
+        at_head: dict[str, CheckpointedProjection] = {}
+        behind: list[_BehindProjection] = []
+
+        for name, projection in self._projections.items():
+            resume_from = await self._resume_position(name, projection)
+            if resume_from > live_boundary_nonce:
+                at_head[name] = projection
+            else:
+                behind.append(_BehindProjection(name, projection, resume_from))
+
+        tracks = [
+            _SubscriptionTrack(
+                name="live",
+                from_position=live_boundary_nonce + 1,
+                projections=at_head,
+                # Starts above the boundary by construction, so every event it
+                # ever sees is live.
+                is_catching_up=False,
+            )
+        ]
+
+        track_count = min(len(behind), self._replay_concurrency)
+        groups: list[list[_BehindProjection]] = [[] for _ in range(track_count)]
+        for index, entry in enumerate(behind):
+            groups[index % track_count].append(entry)
+
+        for index, group in enumerate(groups):
+            # A track can only start where its furthest-behind member needs
+            # it to; members already past that skip the redelivered events on
+            # their checkpoint.
+            from_position = min(entry.resume_from for entry in group)
+            tracks.append(
+                _SubscriptionTrack(
+                    name=f"replay-{index}",
+                    from_position=from_position,
+                    projections={entry.name: entry.projection for entry in group},
+                    is_catching_up=from_position <= live_boundary_nonce,
+                )
+            )
+
+        return tracks
+
+    async def _resume_position(
+        self,
+        name: str,
+        projection: CheckpointedProjection,
+    ) -> int:
+        """
+        The first global_nonce this projection still needs.
+
+        Returns 0 - the whole stream - when the projection has no checkpoint,
+        or when its declared version has moved past the stored one. In the
+        version case the stored data and checkpoint are dropped first, so the
+        replay rebuilds from an empty read model.
+
+        Callers get a position and nothing else; whether a rebuild was
+        triggered, and what clearing it cost, stays in here.
+
+        Args:
+            name: Projection name
+            projection: The projection to locate in the stream
+
+        Returns:
+            Inclusive global_nonce to resume this projection from
+        """
+        checkpoint = await self._checkpoint_store.get_checkpoint(name)
+
+        if checkpoint is None:
+            logger.info(
+                "Projection has no checkpoint, replaying from 0",
+                extra={"projection_name": name},
+            )
+            return 0
+
+        if checkpoint.version != projection.get_version():
+            logger.warning(
+                "Projection version mismatch, clearing data and checkpoint for rebuild",
+                extra={
+                    "projection_name": name,
+                    "stored_version": checkpoint.version,
+                    "current_version": projection.get_version(),
+                },
+            )
+            # Clear projection data before replay to avoid data corruption
+            await projection.clear_all_data()
+            await self._checkpoint_store.delete_checkpoint(name)
+            return 0
+
+        return checkpoint.global_position + 1
+
+    async def _dispatch_to_track(
+        self,
+        track: _SubscriptionTrack,
+        envelope: EventEnvelope[DomainEvent],
+    ) -> None:
+        """
+        Dispatch an event to the projections on one track.
+
+        Tracks that track's own catch-up/live transition based on global_nonce.
+
+        Delivery to the track's projections is sequential, and stays that way:
+        they share one cursor, so it cannot advance until the slowest of them
+        has taken this event whatever order they are handed it in. Isolation
+        comes from which projections share a track, decided in
+        ``_plan_tracks``, and not from this loop.
+
+        Args:
+            track: The track the event arrived on
             envelope: Event envelope to dispatch
         """
         event_type = envelope.metadata.event_type or "Unknown"
         global_nonce = envelope.metadata.global_nonce or 0
 
-        # Transition: catch-up -> live when we pass the boundary nonce.
-        # Uses > (strictly greater): events at the boundary were already
-        # in the store when we subscribed, so they are historical.
-        if self._is_catching_up and global_nonce > self._live_boundary_nonce:
-            self._is_catching_up = False
+        # Transition: catch-up -> live when this track passes the boundary
+        # nonce. Uses > (strictly greater): events at the boundary were
+        # already in the store when we subscribed, so they are historical.
+        if track.is_catching_up and global_nonce > self._live_boundary_nonce:
+            track.is_catching_up = False
             logger.info(
-                "Coordinator transitioned to live mode",
+                "Subscription track transitioned to live mode",
                 extra={
+                    "track": track.name,
                     "global_nonce": global_nonce,
                     "live_boundary_nonce": self._live_boundary_nonce,
                 },
             )
 
-        for name, projection in self._projections.items():
+        for name, projection in track.projections.items():
             # Check if projection subscribes to this event type
             subscribed = projection.get_subscribed_event_types()
             if subscribed is not None and event_type not in subscribed:
@@ -386,10 +577,11 @@ class SubscriptionCoordinator:
                 continue  # Already processed
 
             # Dispatch to projection
-            await self._dispatch_to_projection(projection, envelope)
+            await self._dispatch_to_projection(track, projection, envelope)
 
     async def _dispatch_to_projection(
         self,
+        track: _SubscriptionTrack,
         projection: CheckpointedProjection,
         envelope: EventEnvelope[DomainEvent],
     ) -> None:
@@ -397,6 +589,7 @@ class SubscriptionCoordinator:
         Dispatch an event to a single projection with error handling.
 
         Args:
+            track: The track the event arrived on, source of catch-up state
             projection: Target projection
             envelope: Event envelope to dispatch
         """
@@ -405,7 +598,7 @@ class SubscriptionCoordinator:
         global_nonce = envelope.metadata.global_nonce or 0
 
         context = DispatchContext(
-            is_catching_up=self._is_catching_up,
+            is_catching_up=track.is_catching_up,
             global_nonce=global_nonce,
             live_boundary_nonce=self._live_boundary_nonce,
         )
@@ -439,9 +632,11 @@ class SubscriptionCoordinator:
                 # for atomicity with data updates
 
                 # ProcessManager: run the processor side for live events only.
-                # The key invariant: process_pending() is NEVER called
-                # while is_catching_up is True.
-                if not self._is_catching_up and isinstance(projection, ProcessManager):
+                # The key invariant: process_pending() is NEVER called while
+                # this track's is_catching_up is True. Read off the track, not
+                # the coordinator: a sibling track reaching live must not
+                # unlock side effects for a replay still in history.
+                if not track.is_catching_up and isinstance(projection, ProcessManager):
                     try:
                         processed = await projection.process_pending()
                         if processed > 0:
