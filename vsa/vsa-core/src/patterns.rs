@@ -129,6 +129,7 @@ mod tests {
             query: "*Query".to_string(),
             integration_event: "*IntegrationEvent".to_string(),
             test: "*.test".to_string(),
+            filename_convention: crate::config::FilenameConvention::default(),
         };
         PatternMatcher::new(config, "ts".to_string())
     }

@@ -62,7 +62,12 @@ class EventStoreClient(Protocol):
             stream_name: The stream identifier
 
         Returns:
-            True if the stream exists
+            True if the stream exists, False if it has no events
+
+        Raises:
+            EventStoreError: If the store cannot be reached or refuses the
+                read. Never reported as False: a caller must be able to tell
+                "no such stream" from "could not look".
         """
         ...
 
