@@ -63,7 +63,7 @@ src/contexts/orders/
 
 ## Not every slice is a command
 
-This page's **Anatomy** section below walks through one shape — a slice driven by
+This page's **Anatomy** section below walks through one shape - a slice driven by
 a command. Reading it as *the* definition is the usual mistake, and it leaves
 common surfaces with no shape to be built in.
 
@@ -74,32 +74,32 @@ The event-modelling tradition (Adam Dymitruk) documents **four** patterns:
 | Pattern | Flow |
 |---|---|
 | **Command** | UI / trigger → **command** → event(s) |
-| **View** | event(s) → projection → read model — **no command** |
+| **View** | event(s) → projection → read model - **no command** |
 | **Automation** | event(s) → view → automated trigger → **command** → event(s) |
 | **Translation** | same shape as automation, across a system boundary |
 
 Two things are worth pinning down, because they are easy to get wrong:
 
 - **A view pattern has no command at all.** An orientation screen, a dashboard,
-  any read-model surface — these are frequently the surfaces users actually look
+  any read-model surface - these are frequently the surfaces users actually look
   at, and a definition of "slice" that requires a command cannot describe them.
 - **Automation and translation DO contain a command.** They are not
   "event in → event out". The automated trigger reads a view and *issues a
   command*, which is what produces the resulting event. Describing them as
-  command-free teaches the wrong structure — and this repository's own
+  command-free teaches the wrong structure - and this repository's own
   [consumer patterns](https://github.com/syntropic137/event-sourcing-platform/blob/main/docs/CONSUMER-PATTERNS.md) show the same shape, with a
   projection/to-do side and a processor side.
 
 In *Understanding Eventsourcing*, Martin Dilger describes the same four patterns
-while noting that there are "basically just two types of slices" — state change
-and state view — with automation treated as a further process step rather than a
+while noting that there are "basically just two types of slices" - state change
+and state view - with automation treated as a further process step rather than a
 third slice type.
 
 ### What a slice is
 
 > "The smallest possible work that can be handed over to a developer… from the
 > top of the architecture all the way down to the persistence level."
-> — [Event Modeling Cheat Sheet](https://eventmodeling.org/posts/event-modeling-cheatsheet/)
+> -- [Event Modeling Cheat Sheet](https://eventmodeling.org/posts/event-modeling-cheatsheet/)
 
 That definition covers all four patterns, not only the command one.
 
@@ -107,7 +107,7 @@ That definition covers all four patterns, not only the command one.
 
 `vsa` is ahead of this page. `FileType::Query` is not merely declared: the
 `SliceScanner` classifies query files and infers query slices, and
-`query_slice_rules` validates their projections and handlers — rules registered
+`query_slice_rules` validates their projections and handlers - rules registered
 in the default validator. (The legacy `validate_feature()` path checks commands,
 handlers and tests but not queries; read-side validation comes through the
 enhanced scanner rules.)
@@ -121,7 +121,7 @@ unit and takes one of four shapes.
 
 They are compatible in practice and are not the same idea. Where this page says
 "vertical slice" without qualification it means the Bogard sense; where it needs
-the finer granularity — as the validator does — it means the Event Modeling
+the finer granularity - as the validator does - it means the Event Modeling
 sense. Knowing which one is meant is the point of this section.
 
 ## Anatomy of a state-change slice
