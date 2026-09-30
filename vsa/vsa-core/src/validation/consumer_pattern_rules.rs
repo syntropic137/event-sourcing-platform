@@ -144,8 +144,7 @@ impl ValidationRule for ProjectionPurityRule {
                     }
 
                     if !is_allowed_import(&import.module, &allowed) {
-                        let relative_path =
-                            file_path.strip_prefix(&ctx.root).unwrap_or(file_path);
+                        let relative_path = file_path.strip_prefix(&ctx.root).unwrap_or(file_path);
 
                         report.errors.push(ValidationIssue {
                             path: file_path.to_path_buf(),
@@ -183,11 +182,7 @@ impl ValidationRule for ProjectionPurityRule {
 impl ProjectionPurityRule {
     /// Check if a file is a projection file based on naming conventions.
     fn is_projection_file(path: &std::path::Path) -> bool {
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
 
         // Direct name match
         if file_name.contains("projection") {
@@ -196,11 +191,8 @@ impl ProjectionPurityRule {
 
         // Check parent directory name
         if let Some(parent) = path.parent() {
-            let parent_name = parent
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_lowercase();
+            let parent_name =
+                parent.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
             if parent_name.contains("projection") {
                 return true;
             }
@@ -366,9 +358,7 @@ mod tests {
         use std::path::Path;
 
         // Match by file name
-        assert!(ProjectionPurityRule::is_projection_file(Path::new(
-            "slices/orders/projection.py"
-        )));
+        assert!(ProjectionPurityRule::is_projection_file(Path::new("slices/orders/projection.py")));
         assert!(ProjectionPurityRule::is_projection_file(Path::new(
             "slices/orders/OrderSummaryProjection.py"
         )));
@@ -382,12 +372,8 @@ mod tests {
         )));
 
         // No match
-        assert!(!ProjectionPurityRule::is_projection_file(Path::new(
-            "slices/orders/handler.py"
-        )));
-        assert!(!ProjectionPurityRule::is_projection_file(Path::new(
-            "slices/orders/aggregate.py"
-        )));
+        assert!(!ProjectionPurityRule::is_projection_file(Path::new("slices/orders/handler.py")));
+        assert!(!ProjectionPurityRule::is_projection_file(Path::new("slices/orders/aggregate.py")));
     }
 
     #[test]

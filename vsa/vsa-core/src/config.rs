@@ -98,21 +98,16 @@ pub struct ExceptionBudget {
 }
 
 /// Architecture type
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ArchitectureType {
     /// Basic vertical slice architecture (legacy)
+    #[default]
     VerticalSlice,
     /// Hexagonal architecture
     Hexagonal,
     /// Hexagonal Event-Sourced VSA (recommended)
     HexagonalEventSourcedVsa,
-}
-
-impl Default for ArchitectureType {
-    fn default() -> Self {
-        Self::VerticalSlice
-    }
 }
 
 // ============================================================================
@@ -346,19 +341,14 @@ impl Default for EventVersioningConfig {
 }
 
 /// Version format
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum VersionFormat {
     /// Simple string-based versions ('v1', 'v2', 'v3')
+    #[default]
     Simple,
     /// Semantic versioning ('1.0.0', '1.1.0', '2.0.0')
     Semver,
-}
-
-impl Default for VersionFormat {
-    fn default() -> Self {
-        Self::Simple
-    }
 }
 
 // ============================================================================

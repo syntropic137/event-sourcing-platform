@@ -20,11 +20,7 @@ pub struct CommandScanner<'a> {
 impl<'a> CommandScanner<'a> {
     /// Create a new command scanner (pascal_case convention by default)
     pub fn new(config: &'a CommandConfig, root: &'a Path) -> Self {
-        Self {
-            config,
-            root,
-            filename_convention: FilenameConvention::default(),
-        }
+        Self { config, root, filename_convention: FilenameConvention::default() }
     }
 
     /// Set the filename convention used to detect command files.
