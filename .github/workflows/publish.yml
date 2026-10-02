@@ -28,9 +28,12 @@ jobs:
 
       - name: Get version from tag
         id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            TAG_NAME=${{ github.event.release.tag_name }}
+          if [ "$EVENT_NAME" = "release" ]; then
+            TAG_NAME="$RELEASE_TAG"
           else
             TAG_NAME=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
           fi
@@ -45,10 +48,11 @@ jobs:
           python-version: "3.11"
 
       - name: Verify version consistency
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           python3 scripts/bump_version.py --check
           PLATFORM_VERSION=$(python3 scripts/bump_version.py --current)
-          RELEASE_VERSION="${{ steps.version.outputs.version }}"
           echo "Platform version: $PLATFORM_VERSION"
           echo "Release version: $RELEASE_VERSION"
           if [ "$PLATFORM_VERSION" != "$RELEASE_VERSION" ]; then
@@ -155,24 +159,29 @@ jobs:
 
       - name: Dry run - Package ready
         if: ${{ github.event.inputs.dry-run == 'true' }}
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           echo "🚀 Dry run mode - Package would be published"
-          echo "Version: ${{ needs.validate.outputs.version }}"
+          echo "Version: $VERSION"
           echo "Package: @syntropic137/event-sourcing-typescript"
 
       - name: Create release notes
         if: ${{ github.event_name == 'release' && github.event.inputs.dry-run != 'true' }}
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          TAG: ${{ needs.validate.outputs.tag }}
         run: |
           echo "## Published Package" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "📦 **Package:** @syntropic137/event-sourcing-typescript" >> $GITHUB_STEP_SUMMARY
-          echo "🏷️ **Version:** ${{ needs.validate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "📝 **Tag:** ${{ needs.validate.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "🏷️ **Version:** $VERSION" >> $GITHUB_STEP_SUMMARY
+          echo "📝 **Tag:** $TAG" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Installation" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "npm install @syntropic137/event-sourcing-typescript@${{ needs.validate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "npm install @syntropic137/event-sourcing-typescript@$VERSION" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
   verify-publication:
@@ -200,12 +209,13 @@ jobs:
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" > ~/.npmrc
           echo "@syntropic137:registry=https://npm.pkg.github.com" >> ~/.npmrc
 
-          npm view @syntropic137/event-sourcing-typescript@${{ needs.validate.outputs.version }} || {
+          npm view "@syntropic137/event-sourcing-typescript@$VERSION" || {
             echo "⚠️ Package not immediately available (may take a few minutes)"
             exit 0
           }
           echo "✅ Package successfully published and accessible"
         env:
+          VERSION: ${{ needs.validate.outputs.version }}
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Ensure package is public

@@ -35,9 +35,9 @@ jobs:
       # Fails closed — if we can't determine the age, we skip auto-merge.
       - name: Check package age (7-day supply chain hold)
         id: age-check
+        env:
+          UPDATED_AT: ${{ steps.metadata.outputs.updated-at }}
         run: |
-          UPDATED_AT="${{ steps.metadata.outputs.updated-at }}"
-
           if [ -z "$UPDATED_AT" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "⚠️ No updated-at timestamp available — skipping auto-merge (fail closed)"
