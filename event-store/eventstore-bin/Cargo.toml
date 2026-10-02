@@ -16,13 +16,13 @@ tokio-stream = "0.1"
 eventstore-core = { path = "../eventstore-core" }
 eventstore-backend-memory = { path = "../eventstore-backend-memory" }
 eventstore-proto = { path = "../eventstore-proto" }
-tower-http = { version = "0.6", features = ["trace"] }
+tower-http = { version = "0.7", features = ["trace"] }
 eventstore-backend-postgres = { path = "../eventstore-backend-postgres" }
 
 [dev-dependencies]
 eventstore-backend-postgres = { path = "../eventstore-backend-postgres", features = ["test-utils"] }
-serial_test = "3"
+serial_test = "4"
 testcontainers = "0.20"
 testcontainers-modules = { version = "0.8", features = ["postgres"] }
 uuid = { version = "1", features = ["v4"] }
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio"] }
+sqlx = { version = "0.9", features = ["postgres", "runtime-tokio"] }

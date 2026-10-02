@@ -13,12 +13,12 @@ eventstore-core = { path = "../eventstore-core" }
 eventstore-proto = { path = "../eventstore-proto" }
 tokio-stream = "0.1"
 thiserror = "2"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "macros", "postgres", "migrate"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "macros", "postgres", "migrate"] }
 tokio = { version = "1", features = ["time", "sync", "rt", "macros"] }
 tracing = "0.1"
 futures = "0.3"
 prost = "0.14"
-sha2 = "0.10"
+sha2 = "0.11"
 
 [features]
 default = []
