@@ -6,6 +6,7 @@ This module provides the SubscriptionCoordinator which:
 2. Routes events to relevant projections based on type filtering
 3. Handles per-projection checkpointing
 4. Provides proper error handling (no silent failures)
+5. Drains each ProcessManager's to-do list on its own task, off the cursor
 
 See ADR-014 for architectural rationale.
 """
@@ -27,6 +28,7 @@ from event_sourcing.core.checkpoint import (
     ProjectionResult,
 )
 from event_sourcing.core.process_manager import ProcessManager
+from event_sourcing.subscriptions.drain import ProcessManagerDrain
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -224,6 +226,14 @@ class SubscriptionCoordinator:
                 )
             self._projections[name] = projection
 
+        # One drain per ProcessManager, so a slow process_pending() holds up
+        # neither the track it is on nor another ProcessManager (#1528).
+        self._drains: dict[str, ProcessManagerDrain] = {
+            name: self._drain_for(name, projection)
+            for name, projection in self._projections.items()
+            if isinstance(projection, ProcessManager)
+        }
+
         # Until start() plans them against real checkpoints, everything shares
         # one catching-up track. Each subscription attempt replaces this.
         self._tracks: list[_SubscriptionTrack] = [
@@ -304,25 +314,30 @@ class SubscriptionCoordinator:
         self._running = True
         backoff = 1.0
 
-        while self._running:
-            try:
-                await self._subscribe_loop()
-                backoff = 1.0  # clean exit — reset backoff
-            except asyncio.CancelledError:
-                logger.info("Subscription cancelled")
-                raise
-            except Exception as e:
-                if not self._running:
-                    break
-                self._last_error = e
-                logger.warning(
-                    "Subscription error — retrying in %.1fs",
-                    backoff,
-                    extra={"error": str(e)},
-                    exc_info=True,
-                )
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
+        try:
+            while self._running:
+                try:
+                    await self._subscribe_loop()
+                    backoff = 1.0  # clean exit — reset backoff
+                except asyncio.CancelledError:
+                    logger.info("Subscription cancelled")
+                    raise
+                except Exception as e:
+                    if not self._running:
+                        break
+                    self._last_error = e
+                    logger.warning(
+                        "Subscription error — retrying in %.1fs",
+                        backoff,
+                        extra={"error": str(e)},
+                        exc_info=True,
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 30.0)
+        finally:
+            # However start() ends - stopped, cancelled, or failed - no drain
+            # task may outlive it.
+            await self._close_drains(self._drains)
 
         logger.info("Subscription coordinator stopped")
 
@@ -342,6 +357,17 @@ class SubscriptionCoordinator:
         """
         self._live_boundary_nonce = await self._read_head_nonce()
         self._tracks = await self._plan_tracks(self._live_boundary_nonce)
+
+        # A drain started while live must not keep running into a replay of
+        # the same ProcessManager, so any whose track is now catching up is
+        # stopped before that track delivers its first historical event.
+        await self._close_drains(
+            {
+                name: drain
+                for name, drain in self._drains.items()
+                if not self._is_live(name)
+            }
+        )
 
         for track in self._tracks:
             logger.info(
@@ -394,13 +420,44 @@ class SubscriptionCoordinator:
         """Stop the subscription coordinator gracefully.
 
         Sets `_running` to False which causes the subscription loop in `start()`
-        to exit on the next iteration.
+        to exit on the next iteration, and cancels and awaits every
+        ProcessManager drain. The drains are closed even if start() was never
+        called, since dispatch_event() can start them too.
         """
+        await self._close_drains(self._drains)
+
         if not self._running:
             return
 
         logger.info("Stopping subscription coordinator")
         self._running = False
+
+    async def wait_for_process_managers(self) -> None:
+        """Wait until every ProcessManager drain is idle with no wake pending.
+
+        Drains run off the dispatch path, so returning from dispatch_event()
+        does not mean ``process_pending()`` has run. Test and fitness tooling
+        that needs to observe its effects waits here first.
+        """
+        await asyncio.gather(*(drain.settled() for drain in self._drains.values()))
+
+    def _drain_for(self, name: str, process_manager: ProcessManager) -> ProcessManagerDrain:
+        return ProcessManagerDrain(process_manager, may_run=lambda: self._is_live(name))
+
+    def _is_live(self, name: str) -> bool:
+        """True when the track currently feeding ``name`` is past its catch-up.
+
+        Read off the track, not the coordinator: a sibling track reaching live
+        must not unlock side effects for a replay still in history. A
+        projection on no track is not being fed, so it is not live either.
+        """
+        return any(
+            name in track.projections and not track.is_catching_up for track in self._tracks
+        )
+
+    @staticmethod
+    async def _close_drains(drains: dict[str, ProcessManagerDrain]) -> None:
+        await asyncio.gather(*(drain.close() for drain in drains.values()))
 
     async def _plan_tracks(self, live_boundary_nonce: int) -> list[_SubscriptionTrack]:
         """
@@ -631,27 +688,15 @@ class SubscriptionCoordinator:
                 # Checkpoint should be saved by the projection itself
                 # for atomicity with data updates
 
-                # ProcessManager: run the processor side for live events only.
-                # The key invariant: process_pending() is NEVER called while
-                # this track's is_catching_up is True. Read off the track, not
-                # the coordinator: a sibling track reaching live must not
-                # unlock side effects for a replay still in history.
-                if not track.is_catching_up and isinstance(projection, ProcessManager):
-                    try:
-                        processed = await projection.process_pending()
-                        if processed > 0:
-                            logger.info(
-                                "ProcessManager processed pending items",
-                                extra={
-                                    "projection_name": name,
-                                    "items_processed": processed,
-                                },
-                            )
-                    except Exception:
-                        logger.exception(
-                            "ProcessManager.process_pending() failed",
-                            extra={"projection_name": name},
-                        )
+                # ProcessManager: the to-do item is written and checkpointed,
+                # so ask its drain to run. Never awaited here - the track's
+                # cursor is shared, and waiting on side effects would hold
+                # every projection on it to the drain's pace (#1528). Live
+                # events only; the drain re-checks the track before it calls
+                # process_pending(), which is never called during catch-up.
+                drain = self._drains.get(name)
+                if drain is not None and not track.is_catching_up:
+                    drain.wake()
             elif result == ProjectionResult.SKIP:
                 # SKIP means the projection doesn't care about this event.
                 # We must still advance the checkpoint so it's not retried.
@@ -731,6 +776,12 @@ class SubscriptionCoordinator:
             "Rebuilding projection",
             extra={"projection_name": projection_name},
         )
+
+        # A ProcessManager must not be processing while its to-do list is
+        # cleared and replayed underneath it.
+        drain = self._drains.get(projection_name)
+        if drain is not None:
+            await drain.close()
 
         # Delete checkpoint
         await self._checkpoint_store.delete_checkpoint(projection_name)

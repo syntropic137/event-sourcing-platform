@@ -5,6 +5,9 @@ Verifies that the SubscriptionCoordinator:
 2. Passes DispatchContext to handle_event()
 3. Gates process_pending() - never called during catch-up
 4. Calls process_pending() only for live events on ProcessManager instances
+
+process_pending() runs on the ProcessManager's own drain task (#1528), so a
+test that counts calls waits for the drain to settle first.
 """
 
 from __future__ import annotations
@@ -265,9 +268,11 @@ class TestProcessManagerGating:
         coordinator = _make_coordinator([pm], live_boundary_nonce=100, is_catching_up=False)
 
         await coordinator.dispatch_event(_make_envelope(global_nonce=101))
+        await coordinator.wait_for_process_managers()
 
         assert pm.handle_event_calls == 1
         assert pm.process_pending_calls == 1  # Should be called
+        await coordinator.stop()
 
     @pytest.mark.asyncio
     async def test_no_process_pending_on_regular_projection(self) -> None:
@@ -292,11 +297,14 @@ class TestProcessManagerGating:
         assert pm.handle_event_calls == 5
         assert pm.process_pending_calls == 0
 
-        # Live events (6-8): process_pending called each time
+        # Live events (6-8): process_pending called each time the drain is
+        # idle when the event lands
         for nonce in range(6, 9):
             await coordinator.dispatch_event(_make_envelope(global_nonce=nonce))
+            await coordinator.wait_for_process_managers()
         assert pm.handle_event_calls == 8
         assert pm.process_pending_calls == 3
+        await coordinator.stop()
 
     @pytest.mark.asyncio
     async def test_process_pending_exception_does_not_crash_coordinator(self) -> None:
@@ -312,6 +320,8 @@ class TestProcessManagerGating:
 
         # Should not raise - coordinator catches and logs the exception
         await coordinator.dispatch_event(_make_envelope(global_nonce=1))
+        await coordinator.wait_for_process_managers()
 
         # handle_event was still called
         assert pm.handle_event_calls == 1
+        await coordinator.stop()
