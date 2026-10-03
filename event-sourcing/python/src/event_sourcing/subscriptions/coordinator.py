@@ -365,6 +365,10 @@ class SubscriptionCoordinator:
             {name: drain for name, drain in self._drains.items() if not self._is_live(name)}
         )
 
+        # Items left pending before a restart must not wait for the next live
+        # event to be noticed: wake every ProcessManager that is live already.
+        self._wake_live_drains(self._tracks)
+
         for track in self._tracks:
             logger.info(
                 "Starting subscription track",
@@ -420,13 +424,14 @@ class SubscriptionCoordinator:
         ProcessManager drain. The drains are closed even if start() was never
         called, since dispatch_event() can start them too.
         """
+        # Stop admitting first, so no wake can spawn a drain after it is closed.
+        was_running, self._running = self._running, False
         await self._close_drains(self._drains)
 
-        if not self._running:
+        if not was_running:
             return
 
         logger.info("Stopping subscription coordinator")
-        self._running = False
 
     async def wait_for_process_managers(self) -> None:
         """Wait until every ProcessManager drain is idle with no wake pending.
@@ -436,6 +441,15 @@ class SubscriptionCoordinator:
         that needs to observe its effects waits here first.
         """
         await asyncio.gather(*(drain.settled() for drain in self._drains.values()))
+
+    def _wake_live_drains(self, tracks: list[_SubscriptionTrack]) -> None:
+        for track in tracks:
+            if track.is_catching_up:
+                continue
+            for name in track.projections:
+                drain = self._drains.get(name)
+                if drain is not None:
+                    drain.wake()
 
     def _drain_for(self, name: str, process_manager: ProcessManager) -> ProcessManagerDrain:
         return ProcessManagerDrain(process_manager, may_run=lambda: self._is_live(name))
@@ -613,6 +627,8 @@ class SubscriptionCoordinator:
                     "live_boundary_nonce": self._live_boundary_nonce,
                 },
             )
+            # Whatever the replay left on these to-do lists is now actionable.
+            self._wake_live_drains([track])
 
         for name, projection in track.projections.items():
             # Check if projection subscribes to this event type

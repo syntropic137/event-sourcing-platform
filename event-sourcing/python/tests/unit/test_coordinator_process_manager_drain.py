@@ -385,10 +385,13 @@ class TestDrainCoalescingAndSingleFlight:
                 await _within(run.coordinator.wait_for_process_managers(), "the failed drain")
             assert "ProcessManager.process_pending() failed" in caplog.text
 
+            # The start-up wake (items pending before a restart) may already
+            # have drained, so count from here rather than from zero.
+            before = pm.calls
             run.store.publish()
             await _within(_handled(pm, 2), "the second event")
             await _within(run.coordinator.wait_for_process_managers(), "the second drain")
-            assert pm.calls == 1, "the drain loop did not survive the exception"
+            assert pm.calls == before + 1, "the drain loop did not survive the exception"
         finally:
             await run.stop()
 
@@ -467,6 +470,33 @@ class TestCatchUpInvariant:
             await _within(run.coordinator.wait_for_process_managers(), "the live drain")
             assert pm.calls == calls_before_replay + 1
             assert not any(pm.called_after_catch_up_event)
+        finally:
+            await run.stop()
+
+
+class TestPendingWorkIsNoticedWithoutANewEvent:
+    async def test_a_live_process_manager_drains_at_start_with_no_event(self) -> None:
+        # Items left pending before a restart: nothing new arrives, but the
+        # to-do list is not empty, so the drain must run anyway.
+        pm = SlowProcessManager(released=True)
+        run = Running([pm])
+        await run.start()
+        try:
+            await _within(run.coordinator.wait_for_process_managers(), "the start-up drain")
+            assert pm.calls == 1
+            assert pm.handled == []
+        finally:
+            await run.stop()
+
+    async def test_a_catching_up_process_manager_does_not_drain_at_start(self) -> None:
+        pm = SlowProcessManager(released=True)
+        run = Running([pm])
+        run.store.publish(5)
+        await run.start(at_head=False)
+        try:
+            await _within(_handled(pm, 5), "the replay")
+            await _within(run.coordinator.wait_for_process_managers(), "the drains to settle")
+            assert pm.calls == 0
         finally:
             await run.stop()
 
