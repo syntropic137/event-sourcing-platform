@@ -152,3 +152,21 @@ reason = "linkify-it pinned at 3.x by vsce -> markdown-it 12.3.2. Fix needs link
 id = "GHSA-v245-v573-v5vm"
 reason = "Duplicate advisory for GHSA-22p9-wv53-3rq4 (linkify-it, pinned by vsce -> markdown-it). Migrate from deprecated vsce to @vscode/vsce."
 
+
+# npm: braces (GHSA-vfj7-8cjw-p6xm, stack-exhaustion DoS on deeply nested patterns).
+# NO FIX EXISTS: OSV marks last_affected = 3.0.3, the latest published release (checked 2026-10-03).
+# Reached only through build/test tooling: docs-site (@docusaurus/* -> micromatch/fast-glob)
+# and @vsa/visualizer devDependencies (jest -> micromatch). Patterns come from our own
+# config, never from untrusted input. Revisit when braces > 3.0.3 ships.
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+reason = "NO FIX EXISTS (latest braces 3.0.3 is last_affected, 2026-10-03). Build/test tooling only: docs-site (docusaurus) and vsa-visualizer devDependencies (jest); patterns are repo-authored, not untrusted input."
+
+# npm: http-cache-semantics (GHSA-ch52-4w7c-c8xp, max-stale can disclose cross-user cached responses).
+# NO FIX EXISTS: OSV marks last_affected = 4.2.0, the latest published release (checked 2026-10-03).
+# Reached only through docs-site build tooling (docusaurus -> got/cacheable-request). The docs
+# site is static output; no shared multi-user HTTP cache runs in any shipped artifact.
+# Revisit when http-cache-semantics > 4.2.0 ships.
+[[IgnoredVulns]]
+id = "GHSA-ch52-4w7c-c8xp"
+reason = "NO FIX EXISTS (latest http-cache-semantics 4.2.0 is last_affected, 2026-10-03). docs-site build tooling only (docusaurus); static output, no shared multi-user cache in any shipped artifact."
