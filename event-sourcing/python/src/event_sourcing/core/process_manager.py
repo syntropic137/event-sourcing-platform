@@ -18,7 +18,9 @@ boundary between them:
    events, never during catch-up replay. Must be idempotent.
 
 The ``SubscriptionCoordinator`` enforces the boundary: it never calls
-``process_pending()`` while ``is_catching_up`` is True.
+``process_pending()`` while ``is_catching_up`` is True. It runs each
+ProcessManager's ``process_pending()`` on a drain task of its own, one call
+at a time, so a slow drain never holds up event delivery (#1528).
 
 See Also:
     - ADR-025 for the architectural decision rationale
