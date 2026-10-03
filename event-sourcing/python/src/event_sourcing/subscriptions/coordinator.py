@@ -362,11 +362,7 @@ class SubscriptionCoordinator:
         # the same ProcessManager, so any whose track is now catching up is
         # stopped before that track delivers its first historical event.
         await self._close_drains(
-            {
-                name: drain
-                for name, drain in self._drains.items()
-                if not self._is_live(name)
-            }
+            {name: drain for name, drain in self._drains.items() if not self._is_live(name)}
         )
 
         for track in self._tracks:
@@ -451,9 +447,7 @@ class SubscriptionCoordinator:
         must not unlock side effects for a replay still in history. A
         projection on no track is not being fed, so it is not live either.
         """
-        return any(
-            name in track.projections and not track.is_catching_up for track in self._tracks
-        )
+        return any(name in track.projections and not track.is_catching_up for track in self._tracks)
 
     @staticmethod
     async def _close_drains(drains: dict[str, ProcessManagerDrain]) -> None:

@@ -21,7 +21,7 @@ own. That task gives three properties by construction:
   live and consumed after the track re-entered catch-up does nothing
   (ADR-025: never process during replay).
 
-See ADR-025 for the ProcessManager boundary this preserves.
+See docs/adrs/ADR-025-process-manager-pattern.md (amendment for #1528).
 """
 
 from __future__ import annotations

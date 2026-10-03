@@ -50,6 +50,10 @@ boundary between them.
 - `SIDE_EFFECTS_ALLOWED = True`
 - The coordinator enforces the boundary: `process_pending()` is never
   called while `is_catching_up` is True
+- `process_pending()` runs on the ProcessManager's own drain task, never
+  on the subscription cursor, so a slow drain does not delay any other
+  projection. One drain runs at a time per ProcessManager, and any number
+  of live events arriving during a drain cause exactly one more
 
 **When to use:** Dispatching workflows, sending notifications, calling
 external APIs, or any action that should happen once per event and
@@ -59,14 +63,17 @@ survive restarts.
 ```
 Event arrives
   -> handle_event() writes to-do record (always, replay-safe)
-  -> if live: process_pending() reads and executes pending items
+  -> if live: wake the ProcessManager's drain task (not awaited)
+  -> drain task, if the track is still live: process_pending() reads and
+     executes pending items
   -> process_pending() marks items as done
   -> on crash: restart, re-read pending items, resume
 ```
 
 **Test:** Replay 100 events in catch-up mode. Assert `process_pending()`
-called 0 times. Send 1 live event. Assert `process_pending()` called
-1 time.
+called 0 times. Send 1 live event, wait for
+`coordinator.wait_for_process_managers()`, and assert `process_pending()`
+called 1 time.
 
 ---
 
