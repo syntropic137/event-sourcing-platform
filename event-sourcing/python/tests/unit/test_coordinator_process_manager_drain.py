@@ -283,6 +283,13 @@ class Running:
         self._runner = asyncio.create_task(self.coordinator.start())
         await self.store.wait_until_subscribed(opened + 1)
 
+    async def checkpoints_reach(self, name: str, nonce: int) -> None:
+        while True:
+            checkpoint = await self.checkpoints.get_checkpoint(name)
+            if checkpoint is not None and checkpoint.global_position >= nonce:
+                return
+            await asyncio.sleep(0)
+
     async def stop(self) -> None:
         await self.coordinator.stop()
         await self.cancel()
@@ -501,6 +508,35 @@ class TestPendingWorkIsNoticedWithoutANewEvent:
             await run.stop()
 
 
+class OtherEventsProcessManager(SlowProcessManager):
+    """Subscribes to nothing the test store publishes, so it only ever skips."""
+
+    def get_subscribed_event_types(self) -> set[str] | None:
+        return {"SomethingElse"}
+
+
+class TestGoingLiveWakesTheDrain:
+    async def test_an_unhandled_event_crossing_the_boundary_still_drains(self) -> None:
+        # Pending work, then a catch-up, then a live event this ProcessManager
+        # does not subscribe to. No delivery wakes it, so only the catch-up ->
+        # live transition can notice the to-do list.
+        pm = OtherEventsProcessManager(released=True)
+        run = Running([pm])
+        run.store.publish(5)
+        await run.start(at_head=False)
+        try:
+            await _within(run.coordinator.wait_for_process_managers(), "the replay to settle")
+            assert pm.calls == 0
+
+            run.store.publish()
+            await _within(run.checkpoints_reach(pm.get_name(), 6), "the skipped live event")
+            await _within(run.coordinator.wait_for_process_managers(), "the live drain")
+            assert pm.calls == 1
+            assert pm.handled == []
+        finally:
+            await run.stop()
+
+
 class TestShutdown:
     async def test_stop_cancels_and_awaits_a_blocked_drain(self) -> None:
         pm = SlowProcessManager()
@@ -515,6 +551,21 @@ class TestShutdown:
         assert pm.cancelled == 1
         assert pm.in_flight == 0
         assert _drain_tasks() == []
+
+    async def test_a_wake_after_stop_starts_no_drain(self) -> None:
+        # A live handler still suspended when stop() closed the drains resumes
+        # and dispatches: it must not leave a fresh drain task behind.
+        pm = SlowProcessManager(released=True)
+        run = Running([pm])
+        await run.start()
+        await _within(run.coordinator.wait_for_process_managers(), "the start-up drain")
+        calls = pm.calls
+
+        await run.stop()
+        await run.coordinator.dispatch_event(_envelope(run.store.publish()))
+
+        assert _drain_tasks() == []
+        assert pm.calls == calls
 
     async def test_cancelling_start_closes_drains_without_stop(self) -> None:
         pm = SlowProcessManager()

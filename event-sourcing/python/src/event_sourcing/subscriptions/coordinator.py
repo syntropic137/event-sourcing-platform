@@ -212,6 +212,10 @@ class SubscriptionCoordinator:
         self._checkpoint_store = checkpoint_store
         self._replay_concurrency = replay_concurrency
         self._running = False
+        # Closed by stop(): a handler still suspended when the drains were
+        # closed must not wake a fresh one afterwards. Open by default, since
+        # dispatch_event() is used without start().
+        self._wakes_open = True
         self._last_error: Exception | None = None
         self._live_boundary_nonce: int = 0
 
@@ -312,6 +316,7 @@ class SubscriptionCoordinator:
             return
 
         self._running = True
+        self._wakes_open = True
         backoff = 1.0
 
         try:
@@ -355,15 +360,15 @@ class SubscriptionCoordinator:
         arriving while we plan cannot make a projection that is genuinely at
         head look behind and strand it on a replay track.
         """
+        # Every drain is stopped BEFORE planning: planning may clear a
+        # ProcessManager's data on a version change, and a drain still running
+        # from the previous subscription must not process underneath that, nor
+        # run into a replay of the same ProcessManager. The live ones are woken
+        # again below, so nothing pending is lost.
+        await self._close_drains(self._drains)
+
         self._live_boundary_nonce = await self._read_head_nonce()
         self._tracks = await self._plan_tracks(self._live_boundary_nonce)
-
-        # A drain started while live must not keep running into a replay of
-        # the same ProcessManager, so any whose track is now catching up is
-        # stopped before that track delivers its first historical event.
-        await self._close_drains(
-            {name: drain for name, drain in self._drains.items() if not self._is_live(name)}
-        )
 
         # Items left pending before a restart must not wait for the next live
         # event to be noticed: wake every ProcessManager that is live already.
@@ -426,6 +431,7 @@ class SubscriptionCoordinator:
         """
         # Stop admitting first, so no wake can spawn a drain after it is closed.
         was_running, self._running = self._running, False
+        self._wakes_open = False
         await self._close_drains(self._drains)
 
         if not was_running:
@@ -447,9 +453,13 @@ class SubscriptionCoordinator:
             if track.is_catching_up:
                 continue
             for name in track.projections:
-                drain = self._drains.get(name)
-                if drain is not None:
-                    drain.wake()
+                self._wake(name)
+
+    def _wake(self, name: str) -> None:
+        """Wake ``name``'s drain, if it is a ProcessManager and wakes are open."""
+        drain = self._drains.get(name)
+        if drain is not None and self._wakes_open:
+            drain.wake()
 
     def _drain_for(self, name: str, process_manager: ProcessManager) -> ProcessManagerDrain:
         return ProcessManagerDrain(process_manager, may_run=lambda: self._is_live(name))
@@ -704,9 +714,8 @@ class SubscriptionCoordinator:
                 # every projection on it to the drain's pace (#1528). Live
                 # events only; the drain re-checks the track before it calls
                 # process_pending(), which is never called during catch-up.
-                drain = self._drains.get(name)
-                if drain is not None and not track.is_catching_up:
-                    drain.wake()
+                if not track.is_catching_up:
+                    self._wake(name)
             elif result == ProjectionResult.SKIP:
                 # SKIP means the projection doesn't care about this event.
                 # We must still advance the checkpoint so it's not retried.
