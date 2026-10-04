@@ -23,12 +23,14 @@ import pytest
 
 from event_sourcing.core.checkpoint import (
     DispatchContext,
+    ProjectionCheckpoint,
     ProjectionCheckpointStore,
     ProjectionResult,
 )
 from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.stores.memory_checkpoint import MemoryCheckpointStore
 from event_sourcing.subscriptions.coordinator import (
+    CATCH_UP_SKIP_CHECKPOINT_INTERVAL,
     DEFAULT_NEAR_HEAD_WINDOW,
     SubscriptionCoordinator,
 )
@@ -340,3 +342,93 @@ class TestDrainGateOnTheNearHeadTrack:
             await coordinator.stop()
             runner.cancel()
             await asyncio.gather(runner, return_exceptions=True)
+
+
+def _typed(global_nonce: int, event_type: str) -> EventEnvelope[DomainEvent]:
+    envelope = _envelope(global_nonce)
+    metadata = envelope.metadata.model_copy(update={"event_type": event_type})
+    return envelope.model_copy(update={"metadata": metadata})
+
+
+class _SavesRecorder(MemoryCheckpointStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.saved: dict[str, list[int]] = {}
+
+    async def save_checkpoint(self, checkpoint: ProjectionCheckpoint) -> None:
+        self.saved.setdefault(checkpoint.projection_name, []).append(checkpoint.global_position)
+        await super().save_checkpoint(checkpoint)
+
+
+class _Subscribes(RecordingProjection):
+    def __init__(self, name: str, types: set[str]) -> None:
+        super().__init__(name)
+        self._types = types
+
+    def get_subscribed_event_types(self) -> set[str] | None:
+        return self._types
+
+
+class TestCatchUpSkipCheckpoints:
+    """Skips are checkpointed in batches during catch-up, never out of order."""
+
+    async def _replay(
+        self, projections: list[RecordingProjection], types: list[str]
+    ) -> tuple[SubscriptionCoordinator, _SavesRecorder]:
+        checkpoints = _SavesRecorder()
+        coordinator = SubscriptionCoordinator(
+            event_store=BroadcastEventStore(1),
+            checkpoint_store=checkpoints,
+            projections=list(projections),
+        )
+        boundary = len(types)
+        coordinator.live_boundary_nonce = boundary
+        coordinator._tracks = await coordinator._plan_tracks(boundary)
+        (track,) = [t for t in coordinator._tracks if t.projections]
+        assert track.is_catching_up
+        for nonce, event_type in enumerate(types, start=1):
+            await coordinator._dispatch_to_track(track, _typed(nonce, event_type))
+        return coordinator, checkpoints
+
+    async def test_a_skip_only_replay_saves_per_interval_and_at_the_boundary(self) -> None:
+        events = CATCH_UP_SKIP_CHECKPOINT_INTERVAL * 2 + 37
+        skipper = _Subscribes("skipper", {"Never"})
+        _, checkpoints = await self._replay([skipper], ["Other"] * events)
+
+        assert checkpoints.saved["skipper"] == [
+            CATCH_UP_SKIP_CHECKPOINT_INTERVAL,
+            CATCH_UP_SKIP_CHECKPOINT_INTERVAL * 2,
+            events,
+        ], "skips must be saved once per interval and once at the boundary"
+
+    async def test_mixed_handle_and_skip_never_moves_a_checkpoint_backwards(self) -> None:
+        types = ["Wanted" if nonce % 7 == 0 else "Other" for nonce in range(1, 1201)]
+        mixed = _Subscribes("mixed", {"Wanted"})
+        _, checkpoints = await self._replay([mixed], types)
+
+        saved = checkpoints.saved["mixed"]
+        assert saved == sorted(saved), f"checkpoint moved backwards: {saved}"
+        assert saved[-1] == len(types)
+        assert mixed.handled_nonces == [n for n in range(1, 1201) if n % 7 == 0]
+
+    async def test_rebuild_drops_a_held_back_skip(self) -> None:
+        skipper = _Subscribes("skipper", {"Never"})
+        checkpoints = _SavesRecorder()
+        coordinator = SubscriptionCoordinator(
+            event_store=BroadcastEventStore(1),
+            checkpoint_store=checkpoints,
+            projections=[skipper],
+        )
+        coordinator.live_boundary_nonce = 100
+        coordinator._tracks = await coordinator._plan_tracks(100)
+        (track,) = [t for t in coordinator._tracks if t.projections]
+        for nonce in range(1, 11):
+            await coordinator._dispatch_to_track(track, _typed(nonce, "Other"))
+        assert track.unsaved_skips == {"skipper": 10}
+
+        await coordinator.rebuild_projection("skipper")
+        await coordinator._save_skips(track, 10)
+
+        assert await checkpoints.get_checkpoint("skipper") is None, (
+            "a skip held back before the rebuild resurrected the deleted checkpoint"
+        )
