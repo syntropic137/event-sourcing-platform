@@ -46,46 +46,49 @@ fn append_request(aggregate_id: &str, event_type: &str) -> proto::AppendRequest 
     }
 }
 
-/// Blocks until the slow append is inside its trigger's `pg_sleep`, i.e. its
-/// INSERT has already drawn a global_nonce and its transaction is still open.
-/// Observed, not timed, so a loaded runner cannot reorder the two appends.
-async fn wait_until_slow_append_holds_its_nonce(store: &PostgresStore) {
+/// Single-bigint advisory key the test holds to keep the slow append open.
+/// The store's ordering lock uses the two-int key form, a separate keyspace.
+const GATE_KEY: i64 = 0x0E51_5450_0001;
+
+/// How many other backends in this database match `predicate`.
+async fn backends_where(store: &PostgresStore, predicate: &str) -> i64 {
+    sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM pg_stat_activity \
+         WHERE datname = current_database() AND pid <> pg_backend_pid() AND {predicate}"
+    ))
+    .fetch_one(store.pool())
+    .await
+    .expect("read pg_stat_activity")
+}
+
+/// Waits, observing rather than sleeping, until `predicate` matches a backend.
+async fn wait_for_backend(store: &PostgresStore, predicate: &str, what: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let sleeping: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM pg_stat_activity \
-             WHERE datname = current_database() AND wait_event = 'PgSleep' \
-             AND query LIKE '%INSERT INTO events%'",
-        )
-        .fetch_one(store.pool())
-        .await
-        .expect("read pg_stat_activity");
-        if sleeping > 0 {
-            return;
-        }
+    while backends_where(store, predicate).await == 0 {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the slow append never reached its trigger"
+            "{what} never happened"
         );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
 
-/// Holds any append to a `CommitOrderSlow-*` aggregate open for 1s AFTER
-/// its row (and so its global_nonce) exists, standing in for a slow commit.
+/// An append to a `CommitOrderSlow-*` aggregate blocks AFTER its row (and so
+/// its global_nonce) exists, until the test releases `GATE_KEY`: a slow
+/// commit whose length the test controls instead of a timer.
 async fn install_slow_commit_trigger(store: &PostgresStore) {
-    sqlx::query(
+    sqlx::query(&format!(
         r#"
         CREATE OR REPLACE FUNCTION commit_order_test_slow_commit() RETURNS trigger AS $$
         BEGIN
             IF NEW.aggregate_id LIKE 'CommitOrderSlow-%' THEN
-                PERFORM pg_sleep(1.0);
+                PERFORM pg_advisory_xact_lock({GATE_KEY});
             END IF;
             RETURN NEW;
         END
         $$ LANGUAGE plpgsql
-        "#,
-    )
+        "#
+    ))
     .execute(store.pool())
     .await
     .expect("create slow-commit function");
@@ -100,6 +103,24 @@ async fn install_slow_commit_trigger(store: &PostgresStore) {
     .execute(store.pool())
     .await
     .expect("create slow-commit trigger");
+}
+
+async fn next_event(
+    stream: &mut eventstore_core::StoreStream<proto::SubscribeResponse>,
+    deadline: tokio::time::Instant,
+) -> Option<(String, u64)> {
+    loop {
+        match tokio::time::timeout_at(deadline, stream.next()).await {
+            Err(_) | Ok(None) => return None,
+            Ok(Some(Err(e))) => panic!("subscribe error: {e:?}"),
+            Ok(Some(Ok(resp))) => {
+                if let Some(ev) = resp.event {
+                    let meta = ev.meta.expect("meta");
+                    return Some((meta.aggregate_id, meta.global_nonce));
+                }
+            }
+        }
+    }
 }
 
 #[tokio::test]
@@ -146,39 +167,69 @@ async fn live_subscriber_receives_an_event_whose_append_commits_after_a_later_no
         }
     }
 
-    // Slow append takes nonce N and holds its transaction open.
+    // Close the gate on a connection of its own.
+    let mut gate = store.pool().acquire().await.expect("gate connection");
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(GATE_KEY)
+        .execute(&mut *gate)
+        .await
+        .expect("close gate");
+
+    // Slow append draws nonce N, then blocks in its trigger with N uncommitted.
     let slow_store = store.clone();
     let slow_req = append_request(&slow_id, "Started");
     let slow = tokio::spawn(async move { slow_store.append(slow_req).await });
-    wait_until_slow_append_holds_its_nonce(&store).await;
+    wait_for_backend(
+        &store,
+        "wait_event = 'advisory' AND query LIKE '%INSERT INTO events%'",
+        "the slow append blocking in its trigger",
+    )
+    .await;
 
-    // Fast append for another aggregate: nonce N+1, committed while N is not.
-    let fast = store
-        .append(append_request(&fast_id, "Other"))
-        .await
-        .expect("fast append");
-
-    // Read the subscription WHILE the slow append is still open - this is a
-    // live subscriber, it polls when woken, not when the test is ready.
+    // Fast append for another aggregate. On main it draws N+1 and commits
+    // while N is open. With ordered commits it must wait for the slow one.
+    let fast_store = store.clone();
+    let fast_req = append_request(&fast_id, "Other");
+    let mut fast = tokio::spawn(async move { fast_store.append(fast_req).await });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let mut seen: Vec<(String, u64)> = Vec::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
-    while seen.len() < 2 {
-        let Ok(next) = tokio::time::timeout_at(deadline, stream.next()).await else {
-            break;
-        };
-        match next {
-            Some(Ok(resp)) => {
-                if let Some(ev) = resp.event {
-                    let meta = ev.meta.expect("meta");
-                    seen.push((meta.aggregate_id, meta.global_nonce));
-                }
+    loop {
+        if fast.is_finished() {
+            // N+1 committed first: let the live subscriber act on it BEFORE N
+            // commits, which is the moment #1545 happened in production.
+            if let Some(ev) = next_event(&mut stream, deadline).await {
+                seen.push(ev);
             }
-            Some(Err(e)) => panic!("subscribe error: {e:?}"),
-            None => break,
+            break;
         }
+        if backends_where(
+            &store,
+            "wait_event = 'advisory' AND query LIKE '%pg_advisory_xact_lock%'",
+        )
+        .await
+            > 0
+        {
+            // The fast append is held behind the slow one's commit. (Another
+            // test's appender waiting on its own tenant can match too; then
+            // the gate opens early, which only makes this pass where the
+            // ordering holds anyway: on main nothing waits on that lock.)
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the fast append neither committed nor waited"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
 
+    // Open the gate: N commits now.
+    sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(GATE_KEY)
+        .execute(&mut *gate)
+        .await
+        .expect("open gate");
     let slow = slow.await.expect("join").expect("slow append");
+    let fast = (&mut fast).await.expect("join").expect("fast append");
     assert!(
         slow.last_global_nonce < fast.last_global_nonce,
         "precondition: the slow append must have taken the lower nonce \
@@ -186,6 +237,15 @@ async fn live_subscriber_receives_an_event_whose_append_commits_after_a_later_no
         slow.last_global_nonce,
         fast.last_global_nonce
     );
+
+    // Past the 5s fallback poll, so a skipped event has every chance to show.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(7);
+    while seen.len() < 2 {
+        let Some(ev) = next_event(&mut stream, deadline).await else {
+            break;
+        };
+        seen.push(ev);
+    }
 
     let ids: Vec<&str> = seen.iter().map(|(id, _)| id.as_str()).collect();
     assert!(
