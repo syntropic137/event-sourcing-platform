@@ -17,13 +17,24 @@ and never on a sibling's.
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
 import pytest
 
+from event_sourcing.core.checkpoint import (
+    DispatchContext,
+    ProjectionCheckpointStore,
+    ProjectionResult,
+)
+from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.stores.memory_checkpoint import MemoryCheckpointStore
-from event_sourcing.subscriptions.coordinator import SubscriptionCoordinator
+from event_sourcing.subscriptions.coordinator import (
+    DEFAULT_NEAR_HEAD_WINDOW,
+    SubscriptionCoordinator,
+)
 from tests.unit.test_coordinator_rebuild_isolation import (
     HISTORY_SIZE,
+    LIVE_DELIVERY_TIMEOUT_S,
     BlockingProjection,
     BroadcastEventStore,
     RecordingProjection,
@@ -32,6 +43,9 @@ from tests.unit.test_coordinator_rebuild_isolation import (
     _checkpoint_at,
     _envelope,
 )
+
+if TYPE_CHECKING:
+    from event_sourcing.core.event import DomainEvent, EventEnvelope
 
 pytestmark = pytest.mark.unit
 
@@ -154,3 +168,175 @@ class TestNearHeadIsNeverHeldByARebuild:
             assert plan.store.max_open_subscriptions <= 2 + 4, plan.store.subscribed_from
         finally:
             await plan.stop()
+
+
+class TestWindowBoundary:
+    WINDOW = 20
+
+    async def test_exactly_window_events_behind_is_near_head(self) -> None:
+        at_window = HISTORY_SIZE - self.WINDOW  # needs WINDOW events: at_window+1..HISTORY
+        plan = _Plan(
+            rebuilds=1,
+            near={"edge": at_window},
+            replay_concurrency=1,
+            near_head_window=self.WINDOW,
+        )
+        await plan.start()
+        try:
+            assert await _await_started(plan.rebuilding[0]), "the rebuild never started"
+            assert await _await_nonce(plan.near["edge"], HISTORY_SIZE), (
+                f"a projection exactly {self.WINDOW} events behind is inside the window "
+                f"and must not wait on the rebuild; opened from={plan.store.subscribed_from}"
+            )
+            assert sorted(plan.store.subscribed_from) == [0, at_window + 1, HISTORY_SIZE + 1]
+        finally:
+            await plan.stop()
+
+    async def test_one_past_the_window_replays_with_the_rebuilds(self) -> None:
+        """One event further and it is a replay, so it competes for replay tracks.
+
+        With one replay track that means sharing the rebuild's cursor: the
+        window is a hard edge, which is what makes it configurable rather than
+        a guess.
+        """
+        past_window = HISTORY_SIZE - self.WINDOW - 1
+        plan = _Plan(
+            rebuilds=1,
+            near={"far": past_window},
+            replay_concurrency=1,
+            near_head_window=self.WINDOW,
+        )
+        await plan.start()
+        try:
+            assert await _await_started(plan.rebuilding[0]), "the rebuild never started"
+            assert sorted(plan.store.subscribed_from) == [0, HISTORY_SIZE + 1], (
+                f"a projection {self.WINDOW + 1} events behind is outside the window; "
+                f"expected only the replay and live tracks, got {plan.store.subscribed_from}"
+            )
+            await asyncio.sleep(0.05)
+            assert plan.near["far"].handled_nonces == []
+        finally:
+            await plan.stop()
+
+    async def test_window_zero_disables_the_near_head_track(self) -> None:
+        plan = _Plan(
+            rebuilds=1,
+            near={"near": HISTORY_SIZE - 1},
+            replay_concurrency=1,
+            near_head_window=0,
+        )
+        await plan.start()
+        try:
+            assert await _await_started(plan.rebuilding[0]), "the rebuild never started"
+            assert sorted(plan.store.subscribed_from) == [0, HISTORY_SIZE + 1]
+        finally:
+            await plan.stop()
+
+    def test_default_window_covers_the_incident(self) -> None:
+        assert DEFAULT_NEAR_HEAD_WINDOW >= NEAR_DISTANCE
+
+    def test_negative_window_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="near_head_window"):
+            SubscriptionCoordinator(
+                event_store=BroadcastEventStore(1),
+                checkpoint_store=MemoryCheckpointStore(),
+                projections=[],
+                near_head_window=-1,
+            )
+
+
+class _RecordingProcessManager(ProcessManager):
+    """Near-head ProcessManager that records the catch-up state behind each drain."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self.handled: list[int] = []
+        self.calls = 0
+        self.catching_up_at_call: list[bool] = []
+        self._last_context: DispatchContext | None = None
+        self.called = asyncio.Event()
+
+    def get_name(self) -> str:
+        return self._name
+
+    def get_version(self) -> int:
+        return 1
+
+    def get_subscribed_event_types(self) -> set[str] | None:
+        return None
+
+    async def clear_all_data(self) -> None:
+        self.handled.clear()
+
+    async def handle_event(
+        self,
+        envelope: EventEnvelope[DomainEvent],
+        checkpoint_store: ProjectionCheckpointStore,
+        context: DispatchContext | None = None,
+    ) -> ProjectionResult:
+        nonce = envelope.metadata.global_nonce or 0
+        self.handled.append(nonce)
+        self._last_context = context
+        await _checkpoint_at(
+            checkpoint_store,  # type: ignore[arg-type]
+            self._name,
+            position=nonce,
+            version=1,
+        )
+        return ProjectionResult.SUCCESS
+
+    async def process_pending(self) -> int:
+        self.calls += 1
+        self.catching_up_at_call.append(
+            self._last_context is not None and self._last_context.is_catching_up
+        )
+        self.called.set()
+        return 0
+
+    def get_idempotency_key(self, todo_item: dict[str, str | int | float | bool | None]) -> str:
+        return str(todo_item.get("id", ""))
+
+
+class TestDrainGateOnTheNearHeadTrack:
+    async def test_process_pending_waits_for_the_near_head_track_to_go_live(self) -> None:
+        """The near-head track replays history, so it is a catch-up track.
+
+        ADR-025 / #334: process_pending() is never called while the
+        ProcessManager's own track is catching up. Joining a short track must
+        not shortcut that.
+        """
+        store = BroadcastEventStore(HISTORY_SIZE)
+        checkpoints = MemoryCheckpointStore()
+        rebuild = BlockingProjection("rebuild")
+        pm = _RecordingProcessManager("near_pm")
+        near_at = HISTORY_SIZE - NEAR_DISTANCE
+        await _checkpoint_at(checkpoints, "near_pm", position=near_at, version=1)
+        coordinator = SubscriptionCoordinator(
+            event_store=store,
+            checkpoint_store=checkpoints,
+            projections=[rebuild, pm],
+            replay_concurrency=1,
+        )
+        runner = asyncio.create_task(coordinator.start())
+        try:
+            await store.wait_until_subscribed()
+            assert await _await_started(rebuild)
+
+            async def caught_up() -> None:
+                while HISTORY_SIZE not in pm.handled:
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(caught_up(), timeout=LIVE_DELIVERY_TIMEOUT_S)
+            await coordinator.wait_for_process_managers()
+            assert pm.calls == 0, "process_pending ran while the near-head track was replaying"
+
+            store.publish(_envelope(HISTORY_SIZE + 1))
+            await asyncio.wait_for(pm.called.wait(), timeout=LIVE_DELIVERY_TIMEOUT_S)
+            await coordinator.wait_for_process_managers()
+            assert pm.calls >= 1
+            assert pm.catching_up_at_call == [False] * pm.calls
+        finally:
+            rebuild.released.set()
+            await coordinator.stop()
+            runner.cancel()
+            await asyncio.gather(runner, return_exceptions=True)

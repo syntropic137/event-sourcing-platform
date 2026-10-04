@@ -612,3 +612,84 @@ class TestThroughputFloor:
 async def _handled(pm: SlowProcessManager, nonce: int) -> None:
     while nonce not in pm.handled:
         await asyncio.sleep(0)
+
+
+class FilteredProjection(Projection):
+    """A read model that subscribes to a type this history never carries.
+
+    Most production projections skip most events, so on a replay the
+    coordinator's skip path, not ``handle_event``, is what every one of them
+    pays per event (syntropic137#1554).
+    """
+
+    def get_subscribed_event_types(self) -> set[str] | None:
+        return {"SomeOtherEvent"}
+
+
+class CountingCheckpointStore(MemoryCheckpointStore):
+    """Counts checkpoint round trips and signals when every name reaches a target.
+
+    In memory each call is free, so the count is the number that matters: in
+    production every call is a Postgres round trip.
+    """
+
+    def __init__(self, names: list[str], target: int) -> None:
+        super().__init__()
+        self.gets = 0
+        self.saves = 0
+        self._target = target
+        self._pending = set(names)
+        self.all_reached = asyncio.Event()
+
+    async def get_checkpoint(self, projection_name: str) -> ProjectionCheckpoint | None:
+        self.gets += 1
+        return await super().get_checkpoint(projection_name)
+
+    async def save_checkpoint(self, checkpoint: ProjectionCheckpoint) -> None:
+        self.saves += 1
+        await super().save_checkpoint(checkpoint)
+        if checkpoint.global_position >= self._target:
+            self._pending.discard(checkpoint.projection_name)
+            if not self._pending:
+                self.all_reached.set()
+
+
+class TestReplayThroughput:
+    """Replay from 0, measured: rate, and checkpoint round trips per event.
+
+    Not a floor on the round-trip count - the print is the measurement the
+    PR reports - but the rate is held to the same loose floor as the live
+    benchmark so a pathological regression still fails.
+    """
+
+    async def test_10k_event_replay_of_28_projections_from_zero(self) -> None:
+        events = 10_000
+        handling = [Projection(f"handles_{index}") for index in range(14)]
+        skipping = [FilteredProjection(f"skips_{index}") for index in range(14)]
+        projections: list[Projection] = [*handling, *skipping]
+        store = InMemoryEventStore()
+        store.publish(events)
+        checkpoints = CountingCheckpointStore([p.get_name() for p in projections], events)
+        coordinator = SubscriptionCoordinator(
+            event_store=store,
+            checkpoint_store=checkpoints,
+            projections=projections,  # type: ignore[arg-type]
+        )
+        started = time.perf_counter()
+        runner = asyncio.create_task(coordinator.start())
+        try:
+            await asyncio.wait_for(checkpoints.all_reached.wait(), THROUGHPUT_HANG_TIMEOUT_S)
+            elapsed = time.perf_counter() - started
+            rate = events / elapsed
+            round_trips = checkpoints.gets + checkpoints.saves
+            print(
+                f"\nreplay: {events} events x {len(projections)} projections in "
+                f"{elapsed:.2f}s = {rate:,.0f} events/s; checkpoint round trips "
+                f"{round_trips:,} ({checkpoints.gets:,} get + {checkpoints.saves:,} save) "
+                f"= {round_trips / events:.1f}/event"
+            )
+            assert rate >= THROUGHPUT_FLOOR_EVENTS_PER_S
+        finally:
+            await coordinator.stop()
+            runner.cancel()
+            await asyncio.gather(runner, return_exceptions=True)
