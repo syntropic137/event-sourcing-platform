@@ -436,3 +436,67 @@ class TestCatchUpSkipCheckpoints:
         assert await checkpoints.get_checkpoint("skipper") is None, (
             "a skip held back before the rebuild resurrected the deleted checkpoint"
         )
+
+
+class _SlowSaves(_SavesRecorder):
+    """A store whose next save parks mid-flight until released."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.park_next_save = False
+        self.parked = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def save_checkpoint(self, checkpoint: ProjectionCheckpoint) -> None:
+        if self.park_next_save:
+            self.park_next_save = False
+            self.parked.set()
+            await self.release.wait()
+        await super().save_checkpoint(checkpoint)
+
+
+class TestSkipSaveRacesRebuild:
+    async def test_a_skip_save_in_flight_never_lands_after_the_rebuild_delete(self) -> None:
+        """Codex review: a skip save awaiting the store while rebuild_projection runs.
+
+        The rebuild must either wait for it and delete afterwards, or the save
+        must see the rebuild and drop itself. Either way the rebuilt projection
+        has no checkpoint afterwards.
+        """
+        skipper = _Subscribes("skipper", {"Never"})
+        checkpoints = _SlowSaves()
+        coordinator = SubscriptionCoordinator(
+            event_store=BroadcastEventStore(1),
+            checkpoint_store=checkpoints,
+            projections=[skipper],
+        )
+        checkpoints.park_next_save = True
+        in_flight = asyncio.create_task(coordinator._advance_checkpoint_if_behind("skipper", 50))
+        await asyncio.wait_for(checkpoints.parked.wait(), LIVE_DELIVERY_TIMEOUT_S)
+
+        rebuild = asyncio.create_task(coordinator.rebuild_projection("skipper"))
+        await asyncio.sleep(0)
+        assert not rebuild.done(), "rebuild deleted while a skip save was still in flight"
+        checkpoints.release.set()
+        await asyncio.wait_for(asyncio.gather(in_flight, rebuild), LIVE_DELIVERY_TIMEOUT_S)
+
+        assert await checkpoints.get_checkpoint("skipper") is None
+
+    async def test_a_skip_save_queued_behind_a_rebuild_is_dropped(self) -> None:
+        skipper = _Subscribes("skipper", {"Never"})
+        checkpoints = _SavesRecorder()
+        coordinator = SubscriptionCoordinator(
+            event_store=BroadcastEventStore(1),
+            checkpoint_store=checkpoints,
+            projections=[skipper],
+        )
+        lock = coordinator._checkpoint_lock("skipper")
+        await lock.acquire()
+        queued = asyncio.create_task(coordinator._advance_checkpoint_if_behind("skipper", 50))
+        await asyncio.sleep(0)
+        rebuild = asyncio.create_task(coordinator.rebuild_projection("skipper"))
+        await asyncio.sleep(0)
+        lock.release()
+        await asyncio.wait_for(asyncio.gather(queued, rebuild), LIVE_DELIVERY_TIMEOUT_S)
+
+        assert await checkpoints.get_checkpoint("skipper") is None, checkpoints.saved
