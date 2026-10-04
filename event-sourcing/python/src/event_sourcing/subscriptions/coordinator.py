@@ -115,6 +115,10 @@ class _SubscriptionTrack:
             projection whose checkpoint has not been saved yet; see
             ``CATCH_UP_SKIP_CHECKPOINT_INTERVAL``.
         skips_saved_at: global_nonce at which ``unsaved_skips`` was last saved.
+        generations: Each projection's rebuild generation when this track was
+            planned. A track whose generation for a projection is stale was
+            planned before a ``rebuild_projection`` of it, and no longer
+            touches it: no dispatch, no checkpoint, no drain unlock.
     """
 
     name: str
@@ -123,6 +127,7 @@ class _SubscriptionTrack:
     is_catching_up: bool
     unsaved_skips: dict[str, int] = field(default_factory=dict[str, int])
     skips_saved_at: int = 0
+    generations: dict[str, int] = field(default_factory=dict[str, int])
 
 
 class _BehindProjection(NamedTuple):
@@ -131,6 +136,7 @@ class _BehindProjection(NamedTuple):
     name: str
     projection: CheckpointedProjection
     resume_from: int
+    generation: int
 
 
 class EventStoreSubscriber(Protocol):
@@ -250,12 +256,16 @@ class SubscriptionCoordinator:
         self._checkpoint_store = checkpoint_store
         self._replay_concurrency = replay_concurrency
         self._near_head_window = near_head_window
-        # Coordinator-owned checkpoint saves (skips) against rebuild_projection:
-        # a save already awaiting the store when a rebuild deletes the
-        # checkpoint must not land after the delete and resume the rebuild
-        # past history. asyncio.Lock is FIFO, so a save that started before
-        # the rebuild reached the lock completes before the delete.
+        # A track planned before rebuild_projection() is still running after
+        # it. Nothing it does to that projection may land after the rebuild
+        # deletes the checkpoint, or the rebuild resumes past history. So every
+        # touch of a projection from a track (dispatch, skip save) and the
+        # rebuild's delete+clear hold that projection's lock, and the rebuild
+        # bumps its generation under the lock: a track still holding the old
+        # generation sees it is stale and leaves the projection alone. The
+        # projection is fed again from the next plan (restart), as before.
         self._checkpoint_locks: dict[str, asyncio.Lock] = {}
+        self._generations: dict[str, int] = {}
         self._running = False
         # Closed by stop(): a handler still suspended when the drains were
         # closed must not wake a fresh one afterwards. Open by default, since
@@ -289,7 +299,8 @@ class SubscriptionCoordinator:
             _SubscriptionTrack(
                 name="all",
                 from_position=0,
-                projections=self._projections,
+                # A copy: tracks own their membership.
+                projections=dict(self._projections),
                 is_catching_up=True,
             )
         ]
@@ -498,7 +509,8 @@ class SubscriptionCoordinator:
             if track.is_catching_up:
                 continue
             for name in track.projections:
-                self._wake(name)
+                if self._is_current(track, name):
+                    self._wake(name)
 
     def _wake(self, name: str) -> None:
         """Wake ``name``'s drain, if it is a ProcessManager and wakes are open."""
@@ -514,9 +526,19 @@ class SubscriptionCoordinator:
 
         Read off the track, not the coordinator: a sibling track reaching live
         must not unlock side effects for a replay still in history. A
-        projection on no track is not being fed, so it is not live either.
+        projection on no track is not being fed, so it is not live either,
+        and nor is one whose only track was planned before it was rebuilt.
         """
-        return any(name in track.projections and not track.is_catching_up for track in self._tracks)
+        return any(
+            name in track.projections
+            and self._is_current(track, name)
+            and not track.is_catching_up
+            for track in self._tracks
+        )
+
+    def _is_current(self, track: _SubscriptionTrack, name: str) -> bool:
+        """False once ``name`` was rebuilt after ``track`` was planned."""
+        return track.generations.get(name, 0) == self._generations.get(name, 0)
 
     @staticmethod
     async def _close_drains(drains: dict[str, ProcessManagerDrain]) -> None:
@@ -569,15 +591,20 @@ class SubscriptionCoordinator:
             replay tracks.
         """
         at_head: dict[str, CheckpointedProjection] = {}
+        at_head_generations: dict[str, int] = {}
         near_head: list[_BehindProjection] = []
         far_behind: list[_BehindProjection] = []
 
         for name, projection in self._projections.items():
+            # Captured BEFORE the checkpoint is read: a rebuild landing after
+            # the read makes this plan stale for the projection, not wrong.
+            generation = self._generations.get(name, 0)
             resume_from = await self._resume_position(name, projection)
             if resume_from > live_boundary_nonce:
                 at_head[name] = projection
+                at_head_generations[name] = generation
                 continue
-            entry = _BehindProjection(name, projection, resume_from)
+            entry = _BehindProjection(name, projection, resume_from, generation)
             # 0 is a rebuild (no checkpoint, or a version bump): a replay,
             # however short the stream is today. Otherwise, count the events
             # this projection still needs at or below the boundary.
@@ -595,6 +622,7 @@ class SubscriptionCoordinator:
                 # Starts above the boundary by construction, so every event it
                 # ever sees is live.
                 is_catching_up=False,
+                generations=at_head_generations,
             )
         ]
 
@@ -633,6 +661,7 @@ class SubscriptionCoordinator:
             projections={entry.name: entry.projection for entry in group},
             is_catching_up=from_position <= live_boundary_nonce,
             skips_saved_at=from_position,
+            generations={entry.name: entry.generation for entry in group},
         )
 
     async def _resume_position(
@@ -703,7 +732,6 @@ class SubscriptionCoordinator:
             track: The track the event arrived on
             envelope: Event envelope to dispatch
         """
-        event_type = envelope.metadata.event_type or "Unknown"
         global_nonce = envelope.metadata.global_nonce or 0
 
         # Transition: catch-up -> live when this track passes the boundary
@@ -723,31 +751,13 @@ class SubscriptionCoordinator:
             self._wake_live_drains([track])
 
         for name, projection in track.projections.items():
-            # Check if projection subscribes to this event type
-            subscribed = projection.get_subscribed_event_types()
-            if subscribed is not None and event_type not in subscribed:
-                # Skip but advance checkpoint. During catch-up the save is
-                # deferred and batched (CATCH_UP_SKIP_CHECKPOINT_INTERVAL);
-                # live, it is saved at once as before.
-                if track.is_catching_up:
-                    track.unsaved_skips[name] = global_nonce
-                else:
-                    await self._advance_checkpoint_if_behind(name, global_nonce)
-                continue
-
-            # A skip held back for this projection is superseded by the event
-            # it is about to handle: handle_event() checkpoints past it. If
-            # handling fails, the skipped events are simply skipped again on
-            # the next replay.
-            track.unsaved_skips.pop(name, None)
-
-            # Check if projection is already past this position
-            checkpoint = await self._checkpoint_store.get_checkpoint(name)
-            if checkpoint and checkpoint.global_position >= global_nonce:
-                continue  # Already processed
-
-            # Dispatch to projection
-            await self._dispatch_to_projection(track, projection, envelope)
+            # Held across the handler, so rebuild_projection() cannot delete
+            # the checkpoint underneath it and the handler's own save cannot
+            # land after the delete.
+            async with self._checkpoint_lock(name):
+                if not self._is_current(track, name):
+                    continue  # rebuilt since this track was planned
+                await self._dispatch_under_lock(track, name, projection, envelope)
 
         # Save the held-back skips periodically, and all of them once the
         # track has delivered the last historical event, so a projection that
@@ -758,10 +768,48 @@ class SubscriptionCoordinator:
         ):
             await self._save_skips(track, global_nonce)
 
+    async def _dispatch_under_lock(
+        self,
+        track: _SubscriptionTrack,
+        name: str,
+        projection: CheckpointedProjection,
+        envelope: EventEnvelope[DomainEvent],
+    ) -> None:
+        """Deliver one event to one projection; caller holds its checkpoint lock."""
+        event_type = envelope.metadata.event_type or "Unknown"
+        global_nonce = envelope.metadata.global_nonce or 0
+
+        # Check if projection subscribes to this event type
+        subscribed = projection.get_subscribed_event_types()
+        if subscribed is not None and event_type not in subscribed:
+            # Skip but advance checkpoint. During catch-up the save is
+            # deferred and batched (CATCH_UP_SKIP_CHECKPOINT_INTERVAL);
+            # live, it is saved at once as before.
+            if track.is_catching_up:
+                track.unsaved_skips[name] = global_nonce
+            else:
+                await self._advance_checkpoint_if_behind(name, global_nonce)
+            return
+
+        # A skip held back for this projection is superseded by the event
+        # it is about to handle: handle_event() checkpoints past it. If
+        # handling fails, the skipped events are simply skipped again on
+        # the next replay.
+        track.unsaved_skips.pop(name, None)
+
+        # Check if projection is already past this position
+        checkpoint = await self._checkpoint_store.get_checkpoint(name)
+        if checkpoint and checkpoint.global_position >= global_nonce:
+            return  # Already processed
+
+        # Dispatch to projection
+        await self._dispatch_to_projection(track, projection, envelope)
+
     async def _save_skip(self, track: _SubscriptionTrack, name: str) -> None:
-        position = track.unsaved_skips.pop(name, None)
-        if position is not None:
-            await self._advance_checkpoint_if_behind(name, position)
+        async with self._checkpoint_lock(name):
+            position = track.unsaved_skips.pop(name, None)
+            if position is not None and self._is_current(track, name):
+                await self._advance_checkpoint_if_behind(name, position)
 
     async def _save_skips(self, track: _SubscriptionTrack, global_nonce: int) -> None:
         for name in list(track.unsaved_skips):
@@ -862,9 +910,9 @@ class SubscriptionCoordinator:
         """
         Advance checkpoint for skipped events (event type not subscribed).
 
-        Serialised with ``rebuild_projection`` per projection, so a save
-        started before a rebuild completes before the rebuild deletes the
-        checkpoint rather than landing after it.
+        The caller holds ``projection_name``'s checkpoint lock and has
+        checked its track is current, which is what keeps this save from
+        landing after a ``rebuild_projection`` delete.
 
         Args:
             projection_name: Name of the projection
@@ -874,19 +922,18 @@ class SubscriptionCoordinator:
         if not projection:
             return
 
-        async with self._checkpoint_lock(projection_name):
-            checkpoint = await self._checkpoint_store.get_checkpoint(projection_name)
-            if checkpoint and checkpoint.global_position >= position:
-                return  # Already past this position
+        checkpoint = await self._checkpoint_store.get_checkpoint(projection_name)
+        if checkpoint and checkpoint.global_position >= position:
+            return  # Already past this position
 
-            # Advance checkpoint without processing
-            new_checkpoint = ProjectionCheckpoint(
-                projection_name=projection_name,
-                global_position=position,
-                updated_at=datetime.now(UTC),
-                version=projection.get_version(),
-            )
-            await self._checkpoint_store.save_checkpoint(new_checkpoint)
+        # Advance checkpoint without processing
+        new_checkpoint = ProjectionCheckpoint(
+            projection_name=projection_name,
+            global_position=position,
+            updated_at=datetime.now(UTC),
+            version=projection.get_version(),
+        )
+        await self._checkpoint_store.save_checkpoint(new_checkpoint)
 
     def _checkpoint_lock(self, projection_name: str) -> asyncio.Lock:
         lock = self._checkpoint_locks.get(projection_name)
@@ -919,18 +966,22 @@ class SubscriptionCoordinator:
             extra={"projection_name": projection_name},
         )
 
-        # A skip held back on a catch-up track must not be saved after the
-        # checkpoint is deleted, or the rebuild would resume past history.
-        for track in self._tracks:
-            track.unsaved_skips.pop(projection_name, None)
+        async with self._checkpoint_lock(projection_name):
+            # From here every running track is stale for this projection: it
+            # dispatches nothing to it and saves no checkpoint for it, now or
+            # after the delete below. Taking the lock first lets a dispatch or
+            # skip save already in flight finish before the delete.
+            self._generations[projection_name] = self._generations.get(projection_name, 0) + 1
+            for track in self._tracks:
+                track.unsaved_skips.pop(projection_name, None)
 
         # A ProcessManager must not be processing while its to-do list is
-        # cleared and replayed underneath it.
+        # cleared and replayed underneath it. Its tracks are stale now, so
+        # _is_live() keeps the drain from restarting it.
         drain = self._drains.get(projection_name)
         if drain is not None:
             await drain.close()
 
-        # Held over the delete, so a skip save already in flight lands first.
         async with self._checkpoint_lock(projection_name):
             # Delete checkpoint
             await self._checkpoint_store.delete_checkpoint(projection_name)

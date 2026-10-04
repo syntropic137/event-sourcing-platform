@@ -469,8 +469,11 @@ class TestSkipSaveRacesRebuild:
             checkpoint_store=checkpoints,
             projections=[skipper],
         )
+        coordinator._tracks = await coordinator._plan_tracks(100)
+        (track,) = [t for t in coordinator._tracks if t.projections]
+        track.unsaved_skips["skipper"] = 50
         checkpoints.park_next_save = True
-        in_flight = asyncio.create_task(coordinator._advance_checkpoint_if_behind("skipper", 50))
+        in_flight = asyncio.create_task(coordinator._save_skip(track, "skipper"))
         await asyncio.wait_for(checkpoints.parked.wait(), LIVE_DELIVERY_TIMEOUT_S)
 
         rebuild = asyncio.create_task(coordinator.rebuild_projection("skipper"))
