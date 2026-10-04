@@ -480,3 +480,78 @@ class TestSkipSaveRacesRebuild:
         await asyncio.wait_for(asyncio.gather(in_flight, rebuild), LIVE_DELIVERY_TIMEOUT_S)
 
         assert await checkpoints.get_checkpoint("skipper") is None
+
+
+class _ParkedDelete(_SavesRecorder):
+    """A store whose delete_checkpoint parks until released."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.parked = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def delete_checkpoint(self, projection_name: str) -> None:
+        self.parked.set()
+        await self.release.wait()
+        await super().delete_checkpoint(projection_name)
+
+
+class TestARunningTrackCannotTouchARebuiltProjection:
+    """Codex review pass 2: the track still running after rebuild_projection().
+
+    rebuild_projection() used to clear held-back skips and then await the
+    delete. The track kept dispatching, so it could hold back a fresh skip in
+    that gap and save it after the delete, resuming the rebuild past history.
+    The same track also kept feeding the rebuilt projection events from its
+    old position. Both must be impossible: once a rebuild starts, the track
+    that was planned before it no longer touches that projection.
+    """
+
+    async def _setup(
+        self, projection: RecordingProjection
+    ) -> tuple[SubscriptionCoordinator, _ParkedDelete]:
+        checkpoints = _ParkedDelete()
+        await _checkpoint_at(checkpoints, projection.get_name(), position=40, version=1)
+        coordinator = SubscriptionCoordinator(
+            event_store=BroadcastEventStore(1),
+            checkpoint_store=checkpoints,
+            projections=[projection],
+        )
+        coordinator.live_boundary_nonce = 100
+        coordinator._tracks = await coordinator._plan_tracks(100)
+        return coordinator, checkpoints
+
+    async def test_a_skip_held_back_after_the_clear_and_before_the_delete_is_dropped(
+        self,
+    ) -> None:
+        skipper = _Subscribes("skipper", {"Never"})
+        coordinator, checkpoints = await self._setup(skipper)
+        (track,) = [t for t in coordinator._tracks if t.projections]
+
+        rebuild = asyncio.create_task(coordinator.rebuild_projection("skipper"))
+        await asyncio.wait_for(checkpoints.parked.wait(), LIVE_DELIVERY_TIMEOUT_S)
+        # Held-back skips were cleared; the delete is in flight. The old track
+        # now delivers the boundary event, which holds back and flushes a skip.
+        dispatch = asyncio.create_task(coordinator._dispatch_to_track(track, _typed(100, "Other")))
+        await asyncio.sleep(0)
+        checkpoints.release.set()
+        await asyncio.wait_for(asyncio.gather(rebuild, dispatch), LIVE_DELIVERY_TIMEOUT_S)
+
+        assert await checkpoints.get_checkpoint("skipper") is None, (
+            f"a skip from the pre-rebuild track recreated the deleted checkpoint: "
+            f"{checkpoints.saved.get('skipper')}"
+        )
+
+    async def test_the_old_track_stops_feeding_a_rebuilt_projection(self) -> None:
+        projection = RecordingProjection("rebuilt")
+        coordinator, checkpoints = await self._setup(projection)
+        (track,) = [t for t in coordinator._tracks if t.projections]
+        checkpoints.release.set()
+
+        await coordinator.rebuild_projection("rebuilt")
+        await coordinator._dispatch_to_track(track, _envelope(41))
+
+        assert projection.handled_nonces == [], (
+            "the track planned before the rebuild fed the rebuilt projection"
+        )
+        assert await checkpoints.get_checkpoint("rebuilt") is None
