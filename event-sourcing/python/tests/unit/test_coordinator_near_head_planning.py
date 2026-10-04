@@ -410,6 +410,10 @@ class TestCatchUpSkipCheckpoints:
         assert saved == sorted(saved), f"checkpoint moved backwards: {saved}"
         assert saved[-1] == len(types)
         assert mixed.handled_nonces == [n for n in range(1, 1201) if n % 7 == 0]
+        # One save per handled event (the projection's own) plus the skip
+        # saves at 500, 1000 and the boundary: a handled event supersedes a
+        # held-back skip rather than costing a save of its own.
+        assert len(saved) == len(mixed.handled_nonces) + 3, saved
 
     async def test_rebuild_drops_a_held_back_skip(self) -> None:
         skipper = _Subscribes("skipper", {"Never"})

@@ -729,9 +729,11 @@ class SubscriptionCoordinator:
                     await self._advance_checkpoint_if_behind(name, global_nonce)
                 continue
 
-            # A skip held back for this projection is saved before it handles
-            # anything, so its checkpoint never moves backwards past a skip.
-            await self._save_skip(track, name)
+            # A skip held back for this projection is superseded by the event
+            # it is about to handle: handle_event() checkpoints past it. If
+            # handling fails, the skipped events are simply skipped again on
+            # the next replay.
+            track.unsaved_skips.pop(name, None)
 
             # Check if projection is already past this position
             checkpoint = await self._checkpoint_store.get_checkpoint(name)
