@@ -46,7 +46,32 @@ fn append_request(aggregate_id: &str, event_type: &str) -> proto::AppendRequest 
     }
 }
 
-/// Holds any append to a `CommitOrderSlow-*` aggregate open for 600ms AFTER
+/// Blocks until the slow append is inside its trigger's `pg_sleep`, i.e. its
+/// INSERT has already drawn a global_nonce and its transaction is still open.
+/// Observed, not timed, so a loaded runner cannot reorder the two appends.
+async fn wait_until_slow_append_holds_its_nonce(store: &PostgresStore) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let sleeping: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity \
+             WHERE datname = current_database() AND wait_event = 'PgSleep' \
+             AND query LIKE '%INSERT INTO events%'",
+        )
+        .fetch_one(store.pool())
+        .await
+        .expect("read pg_stat_activity");
+        if sleeping > 0 {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the slow append never reached its trigger"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// Holds any append to a `CommitOrderSlow-*` aggregate open for 1s AFTER
 /// its row (and so its global_nonce) exists, standing in for a slow commit.
 async fn install_slow_commit_trigger(store: &PostgresStore) {
     sqlx::query(
@@ -54,7 +79,7 @@ async fn install_slow_commit_trigger(store: &PostgresStore) {
         CREATE OR REPLACE FUNCTION commit_order_test_slow_commit() RETURNS trigger AS $$
         BEGIN
             IF NEW.aggregate_id LIKE 'CommitOrderSlow-%' THEN
-                PERFORM pg_sleep(0.6);
+                PERFORM pg_sleep(1.0);
             END IF;
             RETURN NEW;
         END
@@ -125,7 +150,7 @@ async fn live_subscriber_receives_an_event_whose_append_commits_after_a_later_no
     let slow_store = store.clone();
     let slow_req = append_request(&slow_id, "Started");
     let slow = tokio::spawn(async move { slow_store.append(slow_req).await });
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    wait_until_slow_append_holds_its_nonce(&store).await;
 
     // Fast append for another aggregate: nonce N+1, committed while N is not.
     let fast = store
@@ -195,13 +220,18 @@ async fn live_subscriber_receives_every_event_under_concurrent_appends() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    // A tenant of its own, so the subscription from 0 sees only this test.
+    // A tenant of its own, so the subscription sees only this test. Start at
+    // the database-wide head so the live polls do not walk other tests' rows.
     let tenant = format!("tenant-commit-order-stress-{run}");
+    let head: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(global_nonce), 0) FROM events")
+        .fetch_one(store.pool())
+        .await
+        .expect("read head");
 
     let mut stream = store.subscribe(proto::SubscribeRequest {
         tenant_id: tenant.clone(),
         aggregate_id_prefix: String::new(),
-        from_global_nonce: 0,
+        from_global_nonce: head as u64 + 1,
     });
     loop {
         match tokio::time::timeout(Duration::from_secs(2), stream.next()).await {
