@@ -80,6 +80,9 @@ class ReplaySafetyChecker:
                 with patch.object(projection, "process_pending", spy):
                     for event in events:
                         await self._coordinator.dispatch_event(event)
+                    # process_pending() runs on a drain task, not inside
+                    # dispatch_event(); count its calls only once they settle.
+                    await self._coordinator.wait_for_process_managers()
 
             # Check: no process_pending() calls during catch-up
             for name, spy in spies.items():
