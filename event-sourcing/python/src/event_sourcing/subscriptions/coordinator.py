@@ -2,7 +2,8 @@
 Subscription Coordinator for managing event delivery to projections.
 
 This module provides the SubscriptionCoordinator which:
-1. Groups projections into subscription tracks by how far behind they are
+1. Groups projections into subscription tracks by position: at head, near
+   head, or replaying
 2. Routes events to relevant projections based on type filtering
 3. Handles per-projection checkpointing
 4. Provides proper error handling (no silent failures)
@@ -16,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, NamedTuple, Protocol, TypedDict
 
@@ -63,6 +64,26 @@ logger = logging.getLogger(__name__)
 # while leaving a 25-projection deployment well inside a default pool.
 DEFAULT_REPLAY_CONCURRENCY = 4
 
+# How far behind the live boundary, in events, a projection may be and still
+# catch up on the short near-head track instead of competing for a replay
+# track. A replay track starts at its furthest-behind member, so a projection
+# 9 events behind dealt onto the same track as a rebuild from 0 waits for the
+# whole rebuild (syntropic137#1554: ~46k events, about an hour). Inside the
+# window the wait is bounded by the window itself. 1000 events is seconds of
+# catch-up even at the slowest replay rate observed (~12 events/s is ~80s),
+# and far below any real rebuild.
+DEFAULT_NEAR_HEAD_WINDOW = 1000
+
+# While a track is catching up, the checkpoint a projection earns by
+# *skipping* an event it does not subscribe to is held in memory and saved at
+# most once per this many events, instead of a read plus a write per event.
+# Skips are the bulk of a replay - most projections subscribe to a handful of
+# types - and each checkpoint call is a database round trip in production.
+# Losing an unsaved skip on a crash is safe: the events are re-skipped on the
+# next replay. Checkpoints a projection saves itself in handle_event() are
+# untouched, so its data and position stay atomic.
+CATCH_UP_SKIP_CHECKPOINT_INTERVAL = 500
+
 
 @dataclass
 class _SubscriptionTrack:
@@ -86,16 +107,27 @@ class _SubscriptionTrack:
     (ADR-025) - one shared flag would fire them during a replay.
 
     Attributes:
-        name: Identifier used in logs ("live", "replay-0", "replay-1", ...).
+        name: Identifier used in logs ("live", "near-head", "replay-0", ...).
         from_position: Inclusive global_nonce the subscription starts at.
         projections: The projections this track feeds, by name.
         is_catching_up: True while this track is replaying historical events.
+        unsaved_skips: Catch-up only. Highest skipped global_nonce per
+            projection whose checkpoint has not been saved yet; see
+            ``CATCH_UP_SKIP_CHECKPOINT_INTERVAL``.
+        skips_saved_at: global_nonce at which ``unsaved_skips`` was last saved.
+        generations: Each projection's rebuild generation when this track was
+            planned. A track whose generation for a projection is stale was
+            planned before a ``rebuild_projection`` of it, and no longer
+            touches it: no dispatch, no checkpoint, no drain unlock.
     """
 
     name: str
     from_position: int
     projections: dict[str, CheckpointedProjection]
     is_catching_up: bool
+    unsaved_skips: dict[str, int] = field(default_factory=dict[str, int])
+    skips_saved_at: int = 0
+    generations: dict[str, int] = field(default_factory=dict[str, int])
 
 
 class _BehindProjection(NamedTuple):
@@ -104,6 +136,7 @@ class _BehindProjection(NamedTuple):
     name: str
     projection: CheckpointedProjection
     resume_from: int
+    generation: int
 
 
 class EventStoreSubscriber(Protocol):
@@ -149,14 +182,17 @@ class SubscriptionCoordinator:
     behind the head of the stream each one is, opens one subscription per
     track, and routes events to the projections on that track based on their
     subscribed types. In steady state every projection is at head and there
-    is exactly one track; a projection that has to replay history gets one to
-    itself, so it can hold up neither the projections at head nor another
-    rebuild (#1318). At most ``replay_concurrency`` of those exist at once,
-    so the number of connections stays bounded however many projections are
-    rebuilding.
+    is exactly one track. Projections within ``near_head_window`` events of
+    head share one short near-head track, so their latency is bounded by
+    their own distance from head (syntropic137#1554). A projection that has
+    to replay further than that gets a replay track to itself, so it can hold
+    up neither the projections at or near head nor another rebuild (#1318).
+    At most ``replay_concurrency`` of those exist at once, so the number of
+    connections stays bounded however many projections are rebuilding.
 
     Key features:
-    1. One subscription per track (one in steady state, at most 1 + replay_concurrency)
+    1. One subscription per track (one in steady state, at most
+       2 + replay_concurrency: live, near-head, replays)
     2. Per-projection checkpointing (independent progress)
     3. A replay never starves projections already at head, or another replay
     4. Event type filtering (performance)
@@ -190,6 +226,7 @@ class SubscriptionCoordinator:
         checkpoint_store: ProjectionCheckpointStore,
         projections: list[CheckpointedProjection],
         replay_concurrency: int = DEFAULT_REPLAY_CONCURRENCY,
+        near_head_window: int = DEFAULT_NEAR_HEAD_WINDOW,
     ) -> None:
         """
         Initialize the subscription coordinator.
@@ -200,17 +237,35 @@ class SubscriptionCoordinator:
             projections: List of projections to manage
             replay_concurrency: How many rebuilds may replay independently.
                 One event-store connection each, so size it against the pool.
+            near_head_window: A projection needing at most this many events
+                at or below the live boundary catches up on the near-head
+                track (one more connection, only while such projections
+                exist) rather than a replay track. 0 disables it.
 
         Raises:
             ValueError: If replay_concurrency is below 1, which would leave a
-                behind projection with no track to replay on.
+                behind projection with no track to replay on, or if
+                near_head_window is negative.
         """
         if replay_concurrency < 1:
             raise ValueError(f"replay_concurrency must be at least 1, got {replay_concurrency}")
+        if near_head_window < 0:
+            raise ValueError(f"near_head_window must not be negative, got {near_head_window}")
 
         self._event_store = event_store
         self._checkpoint_store = checkpoint_store
         self._replay_concurrency = replay_concurrency
+        self._near_head_window = near_head_window
+        # A track planned before rebuild_projection() is still running after
+        # it. Nothing it does to that projection may land after the rebuild
+        # deletes the checkpoint, or the rebuild resumes past history. So every
+        # touch of a projection from a track (dispatch, skip save) and the
+        # rebuild's delete+clear hold that projection's lock, and the rebuild
+        # bumps its generation under the lock: a track still holding the old
+        # generation sees it is stale and leaves the projection alone. The
+        # projection is fed again from the next plan (restart), as before.
+        self._checkpoint_locks: dict[str, asyncio.Lock] = {}
+        self._generations: dict[str, int] = {}
         self._running = False
         # Closed by stop(): a handler still suspended when the drains were
         # closed must not wake a fresh one afterwards. Open by default, since
@@ -244,7 +299,8 @@ class SubscriptionCoordinator:
             _SubscriptionTrack(
                 name="all",
                 from_position=0,
-                projections=self._projections,
+                # A copy: tracks own their membership.
+                projections=dict(self._projections),
                 is_catching_up=True,
             )
         ]
@@ -453,7 +509,8 @@ class SubscriptionCoordinator:
             if track.is_catching_up:
                 continue
             for name in track.projections:
-                self._wake(name)
+                if self._is_current(track, name):
+                    self._wake(name)
 
     def _wake(self, name: str) -> None:
         """Wake ``name``'s drain, if it is a ProcessManager and wakes are open."""
@@ -469,9 +526,19 @@ class SubscriptionCoordinator:
 
         Read off the track, not the coordinator: a sibling track reaching live
         must not unlock side effects for a replay still in history. A
-        projection on no track is not being fed, so it is not live either.
+        projection on no track is not being fed, so it is not live either,
+        and nor is one whose only track was planned before it was rebuilt.
         """
-        return any(name in track.projections and not track.is_catching_up for track in self._tracks)
+        return any(
+            name in track.projections
+            and self._is_current(track, name)
+            and not track.is_catching_up
+            for track in self._tracks
+        )
+
+    def _is_current(self, track: _SubscriptionTrack, name: str) -> bool:
+        """False once ``name`` was rebuilt after ``track`` was planned."""
+        return track.generations.get(name, 0) == self._generations.get(name, 0)
 
     @staticmethod
     async def _close_drains(drains: dict[str, ProcessManagerDrain]) -> None:
@@ -484,8 +551,19 @@ class SubscriptionCoordinator:
         A projection that needs nothing at or below ``live_boundary_nonce`` is
         at head and can take live events straight away. One that still needs
         history - never run, version bumped and cleared, or left behind by a
-        failure - has to replay first, and it replays on a track of its own so
-        the at-head projections keep consuming while it does (#1318).
+        failure or a crash - has to catch up first, and how far it has to go
+        decides where:
+
+        - Resuming from a checkpoint within ``near_head_window`` events of
+          the boundary: the near-head track. It starts at the lowest of these
+          positions, so every member waits at most the window, then runs live. Its latency depends on
+          its own distance from head, never on a rebuild's (syntropic137#1554:
+          23 projections 9 events behind sat on rebuild tracks from 0 for an
+          hour). Not merged into the live track, because that would put the
+          projections already at head back into catch-up, and gate their
+          ProcessManagers, for the length of the window.
+        - Rebuilding from 0, or further behind: a replay track, so the
+          projections at or near head keep consuming while it replays (#1318).
 
         Grouping on position rather than on "was a rebuild triggered" is what
         makes this hold across a reconnect: a rebuild interrupted halfway has
@@ -498,9 +576,9 @@ class SubscriptionCoordinator:
         The count is capped at ``replay_concurrency`` because each track is a
         connection held for the length of a replay, and a version bump rolled
         out across a whole read model would otherwise open one per projection.
-        Past the cap the rebuilds are spread evenly over the tracks available
-        and the ones sharing a track pace each other - the behaviour they had
-        before the split, which is the safe direction to degrade in.
+        Past the cap the rebuilds share, grouped by position: they are sorted
+        and split into contiguous runs, so the ones sharing a cursor are the
+        ones whose positions are closest and the least is replayed twice.
 
         Args:
             live_boundary_nonce: Head snapshot separating history from live
@@ -508,18 +586,33 @@ class SubscriptionCoordinator:
         Returns:
             The tracks to subscribe, at-head track first. It is always
             present, even when empty, so the coordinator always holds one
-            subscription on the live tail. At most ``replay_concurrency``
-            replay tracks follow it.
+            subscription on the live tail. A near-head track follows when any
+            projection is near head, then at most ``replay_concurrency``
+            replay tracks.
         """
         at_head: dict[str, CheckpointedProjection] = {}
-        behind: list[_BehindProjection] = []
+        at_head_generations: dict[str, int] = {}
+        near_head: list[_BehindProjection] = []
+        far_behind: list[_BehindProjection] = []
 
         for name, projection in self._projections.items():
+            # Captured BEFORE the checkpoint is read: a rebuild landing after
+            # the read makes this plan stale for the projection, not wrong.
+            generation = self._generations.get(name, 0)
             resume_from = await self._resume_position(name, projection)
             if resume_from > live_boundary_nonce:
                 at_head[name] = projection
+                at_head_generations[name] = generation
+                continue
+            entry = _BehindProjection(name, projection, resume_from, generation)
+            # 0 is a rebuild (no checkpoint, or a version bump): a replay,
+            # however short the stream is today. Otherwise, count the events
+            # this projection still needs at or below the boundary.
+            needs = live_boundary_nonce - resume_from + 1
+            if resume_from > 0 and needs <= self._near_head_window:
+                near_head.append(entry)
             else:
-                behind.append(_BehindProjection(name, projection, resume_from))
+                far_behind.append(entry)
 
         tracks = [
             _SubscriptionTrack(
@@ -529,29 +622,47 @@ class SubscriptionCoordinator:
                 # Starts above the boundary by construction, so every event it
                 # ever sees is live.
                 is_catching_up=False,
+                generations=at_head_generations,
             )
         ]
 
-        track_count = min(len(behind), self._replay_concurrency)
-        groups: list[list[_BehindProjection]] = [[] for _ in range(track_count)]
-        for index, entry in enumerate(behind):
-            groups[index % track_count].append(entry)
+        if near_head:
+            tracks.append(self._catch_up_track("near-head", near_head, live_boundary_nonce))
 
-        for index, group in enumerate(groups):
-            # A track can only start where its furthest-behind member needs
-            # it to; members already past that skip the redelivered events on
-            # their checkpoint.
-            from_position = min(entry.resume_from for entry in group)
-            tracks.append(
-                _SubscriptionTrack(
-                    name=f"replay-{index}",
-                    from_position=from_position,
-                    projections={entry.name: entry.projection for entry in group},
-                    is_catching_up=from_position <= live_boundary_nonce,
+        far_behind.sort(key=lambda entry: entry.resume_from)
+        track_count = min(len(far_behind), self._replay_concurrency)
+        if track_count:
+            size, larger = divmod(len(far_behind), track_count)
+            start = 0
+            for index in range(track_count):
+                end = start + size + (1 if index < larger else 0)
+                tracks.append(
+                    self._catch_up_track(
+                        f"replay-{index}", far_behind[start:end], live_boundary_nonce
+                    )
                 )
-            )
+                start = end
 
         return tracks
+
+    @staticmethod
+    def _catch_up_track(
+        name: str,
+        group: list[_BehindProjection],
+        live_boundary_nonce: int,
+    ) -> _SubscriptionTrack:
+        # A track can only start where its furthest-behind member needs it
+        # to; members already past that skip the redelivered events on their
+        # checkpoint.
+        from_position = min(entry.resume_from for entry in group)
+        return _SubscriptionTrack(
+            name=name,
+            from_position=from_position,
+            projections={entry.name: entry.projection for entry in group},
+            is_catching_up=from_position <= live_boundary_nonce,
+            skips_saved_at=from_position,
+            generations={entry.name: entry.generation for entry in group},
+        )
 
     async def _resume_position(
         self,
@@ -621,7 +732,6 @@ class SubscriptionCoordinator:
             track: The track the event arrived on
             envelope: Event envelope to dispatch
         """
-        event_type = envelope.metadata.event_type or "Unknown"
         global_nonce = envelope.metadata.global_nonce or 0
 
         # Transition: catch-up -> live when this track passes the boundary
@@ -641,20 +751,70 @@ class SubscriptionCoordinator:
             self._wake_live_drains([track])
 
         for name, projection in track.projections.items():
-            # Check if projection subscribes to this event type
-            subscribed = projection.get_subscribed_event_types()
-            if subscribed is not None and event_type not in subscribed:
-                # Skip but advance checkpoint
+            # Held across the handler, so rebuild_projection() cannot delete
+            # the checkpoint underneath it and the handler's own save cannot
+            # land after the delete.
+            async with self._checkpoint_lock(name):
+                if not self._is_current(track, name):
+                    continue  # rebuilt since this track was planned
+                await self._dispatch_under_lock(track, name, projection, envelope)
+
+        # Save the held-back skips periodically, and all of them once the
+        # track has delivered the last historical event, so a projection that
+        # reaches head by skipping is checkpointed at head before it goes live.
+        if track.unsaved_skips and (
+            global_nonce >= self._live_boundary_nonce
+            or global_nonce - track.skips_saved_at >= CATCH_UP_SKIP_CHECKPOINT_INTERVAL
+        ):
+            await self._save_skips(track, global_nonce)
+
+    async def _dispatch_under_lock(
+        self,
+        track: _SubscriptionTrack,
+        name: str,
+        projection: CheckpointedProjection,
+        envelope: EventEnvelope[DomainEvent],
+    ) -> None:
+        """Deliver one event to one projection; caller holds its checkpoint lock."""
+        event_type = envelope.metadata.event_type or "Unknown"
+        global_nonce = envelope.metadata.global_nonce or 0
+
+        # Check if projection subscribes to this event type
+        subscribed = projection.get_subscribed_event_types()
+        if subscribed is not None and event_type not in subscribed:
+            # Skip but advance checkpoint. During catch-up the save is
+            # deferred and batched (CATCH_UP_SKIP_CHECKPOINT_INTERVAL);
+            # live, it is saved at once as before.
+            if track.is_catching_up:
+                track.unsaved_skips[name] = global_nonce
+            else:
                 await self._advance_checkpoint_if_behind(name, global_nonce)
-                continue
+            return
 
-            # Check if projection is already past this position
-            checkpoint = await self._checkpoint_store.get_checkpoint(name)
-            if checkpoint and checkpoint.global_position >= global_nonce:
-                continue  # Already processed
+        # A skip held back for this projection is superseded by the event
+        # it is about to handle: handle_event() checkpoints past it. If
+        # handling fails, the skipped events are simply skipped again on
+        # the next replay.
+        track.unsaved_skips.pop(name, None)
 
-            # Dispatch to projection
-            await self._dispatch_to_projection(track, projection, envelope)
+        # Check if projection is already past this position
+        checkpoint = await self._checkpoint_store.get_checkpoint(name)
+        if checkpoint and checkpoint.global_position >= global_nonce:
+            return  # Already processed
+
+        # Dispatch to projection
+        await self._dispatch_to_projection(track, projection, envelope)
+
+    async def _save_skip(self, track: _SubscriptionTrack, name: str) -> None:
+        async with self._checkpoint_lock(name):
+            position = track.unsaved_skips.pop(name, None)
+            if position is not None and self._is_current(track, name):
+                await self._advance_checkpoint_if_behind(name, position)
+
+    async def _save_skips(self, track: _SubscriptionTrack, global_nonce: int) -> None:
+        for name in list(track.unsaved_skips):
+            await self._save_skip(track, name)
+        track.skips_saved_at = global_nonce
 
     async def _dispatch_to_projection(
         self,
@@ -750,6 +910,10 @@ class SubscriptionCoordinator:
         """
         Advance checkpoint for skipped events (event type not subscribed).
 
+        The caller holds ``projection_name``'s checkpoint lock and has
+        checked its track is current, which is what keeps this save from
+        landing after a ``rebuild_projection`` delete.
+
         Args:
             projection_name: Name of the projection
             position: Current event position
@@ -770,6 +934,12 @@ class SubscriptionCoordinator:
             version=projection.get_version(),
         )
         await self._checkpoint_store.save_checkpoint(new_checkpoint)
+
+    def _checkpoint_lock(self, projection_name: str) -> asyncio.Lock:
+        lock = self._checkpoint_locks.get(projection_name)
+        if lock is None:
+            lock = self._checkpoint_locks[projection_name] = asyncio.Lock()
+        return lock
 
     async def rebuild_projection(self, projection_name: str) -> None:
         """
@@ -796,17 +966,28 @@ class SubscriptionCoordinator:
             extra={"projection_name": projection_name},
         )
 
+        async with self._checkpoint_lock(projection_name):
+            # From here every running track is stale for this projection: it
+            # dispatches nothing to it and saves no checkpoint for it, now or
+            # after the delete below. Taking the lock first lets a dispatch or
+            # skip save already in flight finish before the delete.
+            self._generations[projection_name] = self._generations.get(projection_name, 0) + 1
+            for track in self._tracks:
+                track.unsaved_skips.pop(projection_name, None)
+
         # A ProcessManager must not be processing while its to-do list is
-        # cleared and replayed underneath it.
+        # cleared and replayed underneath it. Its tracks are stale now, so
+        # _is_live() keeps the drain from restarting it.
         drain = self._drains.get(projection_name)
         if drain is not None:
             await drain.close()
 
-        # Delete checkpoint
-        await self._checkpoint_store.delete_checkpoint(projection_name)
+        async with self._checkpoint_lock(projection_name):
+            # Delete checkpoint
+            await self._checkpoint_store.delete_checkpoint(projection_name)
 
-        # Clear projection data
-        await projection.clear_all_data()
+            # Clear projection data
+            await projection.clear_all_data()
 
         logger.info(
             "Projection rebuild prepared - restart coordinator to re-process",
