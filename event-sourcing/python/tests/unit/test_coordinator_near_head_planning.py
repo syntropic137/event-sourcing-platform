@@ -558,3 +558,29 @@ class TestARunningTrackCannotTouchARebuiltProjection:
             "the track planned before the rebuild fed the rebuilt projection"
         )
         assert await checkpoints.get_checkpoint("rebuilt") is None
+
+    async def test_a_stale_live_track_does_not_unlock_a_rebuilt_process_manager(self) -> None:
+        """The drain gate reads the track; a stale track must not count as live.
+
+        Any wake after the rebuild (a straggling handler, a going-live wake)
+        must find process_pending() gated until the next plan feeds the
+        ProcessManager its replay.
+        """
+        pm = _RecordingProcessManager("rebuilt_pm")
+        checkpoints = MemoryCheckpointStore()
+        await _checkpoint_at(checkpoints, "rebuilt_pm", position=100, version=1)
+        coordinator = SubscriptionCoordinator(
+            event_store=BroadcastEventStore(1),
+            checkpoint_store=checkpoints,
+            projections=[pm],
+        )
+        coordinator.live_boundary_nonce = 100
+        coordinator._tracks = await coordinator._plan_tracks(100)
+        assert coordinator._is_live("rebuilt_pm"), "precondition: at head, on the live track"
+
+        await coordinator.rebuild_projection("rebuilt_pm")
+        coordinator._wake("rebuilt_pm")
+        await coordinator.wait_for_process_managers()
+
+        assert pm.calls == 0, "process_pending ran for a rebuilt ProcessManager off a stale track"
+        await coordinator.stop()
