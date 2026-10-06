@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
 use crate::error::{Error, Result};
-use crate::event::DomainEvent;
+use crate::event::{DomainEvent, EventEnvelope};
 
 /// Core trait for event-sourced aggregates
 ///
@@ -117,19 +117,28 @@ impl AggregateMetadata {
     }
 }
 
-/// A wrapper that combines an aggregate with its metadata
+/// A unit of work: an aggregate, its stream revision, and its pending events.
+///
+/// `metadata.version` is the stream revision *including* pending events.
+/// [`committed_version`](Self::committed_version) is the revision the store
+/// last acknowledged and is sent as the expected revision on save.
+///
+/// Pending events are recorded as [`EventEnvelope`]s with their event ID,
+/// timestamp, and aggregate nonce fixed at record time. A retried save sends
+/// byte-identical events, which lets the store (and the repository) recognize
+/// a batch that was already committed before an acknowledgment was lost.
 #[derive(Debug)]
 pub struct AggregateInstance<A: Aggregate> {
     /// The aggregate root
     pub aggregate: A,
     /// Metadata about the aggregate
     pub metadata: AggregateMetadata,
-    /// Uncommitted events
-    pub uncommitted_events: Vec<A::Event>,
+    /// Uncommitted (pending) events, in stream order
+    pub uncommitted_events: Vec<EventEnvelope<A::Event>>,
 }
 
 impl<A: Aggregate> AggregateInstance<A> {
-    /// Create a new aggregate instance
+    /// Create a new aggregate instance for a stream that does not exist yet.
     pub fn new(aggregate_id: String, aggregate: A) -> Self {
         let metadata = AggregateMetadata::new(aggregate_id, aggregate.aggregate_type().to_string());
         Self {
@@ -139,20 +148,57 @@ impl<A: Aggregate> AggregateInstance<A> {
         }
     }
 
-    /// Add uncommitted events
+    /// Create an instance rehydrated from `version` committed events.
+    pub fn from_history(aggregate_id: String, aggregate: A, version: u64) -> Self {
+        let mut instance = Self::new(aggregate_id, aggregate);
+        instance.metadata.version = version;
+        instance
+    }
+
+    /// The aggregate's identifier (stream id).
+    pub fn aggregate_id(&self) -> &str {
+        &self.metadata.aggregate_id
+    }
+
+    /// Stream revision acknowledged by the store (excludes pending events).
+    pub fn committed_version(&self) -> u64 {
+        self.metadata.version - self.uncommitted_events.len() as u64
+    }
+
+    /// Apply new events to the aggregate and record them as pending.
     pub fn add_events(&mut self, events: Vec<A::Event>) -> Result<()> {
         // Apply events to the aggregate
         self.aggregate.apply_events(&events)?;
 
-        // Update metadata
-        for _ in &events {
+        for event in events {
             self.metadata.increment_version();
+            self.uncommitted_events.push(EventEnvelope::new(
+                event,
+                self.metadata.aggregate_id.clone(),
+                self.metadata.aggregate_type.clone(),
+                self.metadata.version,
+            ));
         }
 
-        // Track uncommitted events
-        self.uncommitted_events.extend(events);
-
         Ok(())
+    }
+
+    /// Run a command against the current state and record the resulting events.
+    ///
+    /// Returns the number of events recorded.
+    pub async fn execute(&mut self, command: A::Command) -> Result<usize>
+    where
+        A: AggregateRoot,
+    {
+        let events = self.aggregate.handle_command(command).await?;
+        let count = events.len();
+        self.add_events(events)?;
+        Ok(count)
+    }
+
+    /// Pending domain events, in stream order.
+    pub fn pending_events(&self) -> impl Iterator<Item = &A::Event> {
+        self.uncommitted_events.iter().map(|e| &e.event)
     }
 
     /// Mark all events as committed
@@ -264,9 +310,23 @@ mod tests {
         assert_eq!(instance.uncommitted_count(), 2);
         assert!(instance.has_uncommitted_events());
         assert_eq!(instance.metadata.version, 2);
+        assert_eq!(instance.committed_version(), 0);
+        let nonces: Vec<u64> = instance
+            .uncommitted_events
+            .iter()
+            .map(|e| e.aggregate_nonce())
+            .collect();
+        assert_eq!(nonces, vec![1, 2]);
 
         instance.mark_committed();
         assert_eq!(instance.uncommitted_count(), 0);
         assert!(!instance.has_uncommitted_events());
+        assert_eq!(instance.committed_version(), 2);
+
+        instance
+            .add_events(vec![TestEvent::Updated { value: 7 }])
+            .unwrap();
+        assert_eq!(instance.committed_version(), 2);
+        assert_eq!(instance.uncommitted_events[0].aggregate_nonce(), 3);
     }
 }
