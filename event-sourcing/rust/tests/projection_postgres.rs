@@ -85,11 +85,15 @@ impl CheckpointedProjection<PostgresProjectionStore> for SqlBalances {
         }
         Ok(())
     }
-    async fn reset(&mut self, store: &PostgresProjectionStore, key: &CheckpointKey) -> Result<()> {
+    async fn reset(
+        &mut self,
+        tx: &mut Transaction<'static, Postgres>,
+        key: &CheckpointKey,
+    ) -> Result<()> {
         sqlx::query("DELETE FROM rs_sdk_test_balances WHERE tenant = $1 AND version = $2")
             .bind(&key.tenant_id)
             .bind(key.projection_version as i32)
-            .execute(store.pool())
+            .execute(&mut **tx)
             .await
             .map_err(|e| Error::Repository(e.into()))?;
         Ok(())

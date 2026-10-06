@@ -49,6 +49,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
@@ -198,8 +199,27 @@ pub trait ProjectionStore: Send + Sync {
     /// or beyond `position`; this fences off a second runner on the same key.
     async fn commit(&self, tx: Self::Tx, key: &CheckpointKey, position: u64) -> Result<()>;
 
-    /// Remove the checkpoint of `key` (rebuild).
+    /// Remove the checkpoint of `key`.
     async fn delete_checkpoint(&self, key: &CheckpointKey) -> Result<()>;
+
+    /// Start a rebuild of `key`; the projection clears its data through the
+    /// returned unit of work, then [`commit_reset`](Self::commit_reset) runs.
+    ///
+    /// Default (non-transactional stores): delete the checkpoint *first*, so
+    /// a crash mid-reset replays from zero into idempotent handlers rather
+    /// than resuming over cleared data. Transactional stores override both
+    /// methods to clear data and checkpoint in one transaction.
+    async fn begin_reset(&self, key: &CheckpointKey) -> Result<Self::Tx> {
+        self.delete_checkpoint(key).await?;
+        self.begin(key).await
+    }
+
+    /// Finish a rebuild: commit the projection's reset writes with the
+    /// checkpoint of `key` removed. Default: nothing left to commit.
+    async fn commit_reset(&self, tx: Self::Tx, key: &CheckpointKey) -> Result<()> {
+        let _ = (tx, key);
+        Ok(())
+    }
 }
 
 /// A read model built from events, with mandatory checkpointing.
@@ -230,9 +250,10 @@ pub trait CheckpointedProjection<S: ProjectionStore>: Send {
         ctx: &DispatchContext,
     ) -> Result<()>;
 
-    /// Delete all read-model data for `key` (rebuild). The runner deletes the
-    /// checkpoint afterwards.
-    async fn reset(&mut self, store: &S, key: &CheckpointKey) -> Result<()>;
+    /// Delete all read-model data for `key` (rebuild), writing through `tx`.
+    /// For transactional stores this commits atomically with the checkpoint
+    /// removal (see [`ProjectionStore::begin_reset`]).
+    async fn reset(&mut self, tx: &mut S::Tx, key: &CheckpointKey) -> Result<()>;
 }
 
 /// Processor half of a process manager: executes pending to-do items with
@@ -386,13 +407,6 @@ impl<S: Clone + Default + Send + Sync> InMemoryProjectionStore<S> {
             .map(|(s, _)| s.clone())
             .unwrap_or_default()
     }
-
-    /// Drop the committed state of `key` (keeps its checkpoint).
-    pub fn clear_state(&self, key: &CheckpointKey) {
-        if let Some(slot) = self.slots.lock().expect("poisoned").get_mut(key) {
-            slot.0 = S::default();
-        }
-    }
 }
 
 #[async_trait]
@@ -434,6 +448,18 @@ impl<S: Clone + Default + Send + Sync> ProjectionStore for InMemoryProjectionSto
         }
         Ok(())
     }
+
+    async fn begin_reset(&self, key: &CheckpointKey) -> Result<InMemoryTx<S>> {
+        self.begin(key).await
+    }
+
+    async fn commit_reset(&self, tx: InMemoryTx<S>, key: &CheckpointKey) -> Result<()> {
+        self.slots
+            .lock()
+            .expect("poisoned")
+            .insert(key.clone(), (tx.state, None));
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +498,8 @@ pub struct ProjectionRunner<P, S: ProjectionStore> {
     key: CheckpointKey,
     page_size: u32,
     processor: Option<Arc<dyn LiveProcessor>>,
+    drain_on_live_start: bool,
+    processor_retry: Duration,
     position: u64,
     progress: watch::Sender<RunnerProgress>,
 }
@@ -497,6 +525,8 @@ where
             key,
             page_size: DEFAULT_PAGE_SIZE,
             processor: None,
+            drain_on_live_start: false,
+            processor_retry: Duration::from_secs(1),
             position: 0,
             progress,
         }
@@ -517,9 +547,27 @@ where
 
     /// Wake `processor` after each committed live event (never during
     /// catch-up). It runs on its own task, one pass at a time; wake-ups
-    /// during a pass coalesce into exactly one more pass.
+    /// during a pass coalesce into exactly one more pass. A failed pass is
+    /// retried with backoff until it succeeds or the runner stops.
     pub fn with_live_processor(mut self, processor: Arc<dyn LiveProcessor>) -> Self {
         self.processor = Some(processor);
+        self
+    }
+
+    /// Also run one processor pass when the runner goes live, to resume
+    /// to-do items left pending by a crash or an earlier failed pass. The
+    /// pass runs after catch-up has finished, never during replay. Off by
+    /// default (matching the Python coordinator, which drains only on live
+    /// events).
+    pub fn drain_pending_on_live_start(mut self, enabled: bool) -> Self {
+        self.drain_on_live_start = enabled;
+        self
+    }
+
+    /// Delay before retrying a failed processor pass (doubles per failure,
+    /// capped at 30 s). Default 1 s.
+    pub fn with_processor_retry_delay(mut self, delay: Duration) -> Self {
+        self.processor_retry = delay;
         self
     }
 
@@ -551,9 +599,13 @@ where
     /// Reset this key's read model and checkpoint. The next `catch_up` or
     /// `run` replays the feed from the beginning. Other keys (tenants,
     /// projections, versions) are untouched.
+    ///
+    /// Transactional stores clear data and checkpoint atomically. Stop any
+    /// other runner on this key first: an empty checkpoint cannot fence it.
     pub async fn rebuild(&mut self) -> Result<()> {
-        self.projection.reset(&self.store, &self.key).await?;
-        self.store.delete_checkpoint(&self.key).await?;
+        let mut tx = self.store.begin_reset(&self.key).await?;
+        self.projection.reset(&mut tx, &self.key).await?;
+        self.store.commit_reset(tx, &self.key).await?;
         self.position = 0;
         self.publish(false);
         Ok(())
@@ -586,10 +638,13 @@ where
             .await?;
         self.publish(true);
 
-        let drain = self
-            .processor
-            .clone()
-            .map(|p| Drain::spawn(p, cancel.child_token()));
+        let drain = self.processor.clone().map(|p| {
+            let drain = Drain::spawn(p, cancel.child_token(), self.processor_retry);
+            if self.drain_on_live_start {
+                drain.wake();
+            }
+            drain
+        });
         let result = loop {
             let item = tokio::select! {
                 biased;
@@ -737,20 +792,39 @@ struct Drain {
 }
 
 impl Drain {
-    fn spawn(processor: Arc<dyn LiveProcessor>, stop: CancellationToken) -> Self {
+    fn spawn(processor: Arc<dyn LiveProcessor>, stop: CancellationToken, retry: Duration) -> Self {
+        const MAX_RETRY: Duration = Duration::from_secs(30);
         let wake = Arc::new(Notify::new());
         let task_wake = wake.clone();
         let task_stop = stop.clone();
         let handle = tokio::spawn(async move {
+            // Some(delay) while the last pass failed: retry after `delay`
+            // even if no new live event arrives.
+            let mut retry_after: Option<Duration> = None;
             loop {
-                tokio::select! {
-                    biased;
-                    _ = task_stop.cancelled() => return,
-                    _ = task_wake.notified() => {}
+                match retry_after {
+                    None => tokio::select! {
+                        biased;
+                        _ = task_stop.cancelled() => return,
+                        _ = task_wake.notified() => {}
+                    },
+                    Some(delay) => tokio::select! {
+                        biased;
+                        _ = task_stop.cancelled() => return,
+                        _ = task_wake.notified() => {}
+                        _ = tokio::time::sleep(delay) => {}
+                    },
                 }
-                if let Err(err) = processor.process_pending().await {
-                    // Pending items stay pending; the next live event retries.
-                    tracing::warn!(error = %err, "live processor pass failed");
+                match processor.process_pending().await {
+                    Ok(_) => retry_after = None,
+                    Err(err) => {
+                        // Pending items stay pending and are retried.
+                        tracing::warn!(error = %err, "live processor pass failed");
+                        retry_after = Some(match retry_after {
+                            None => retry,
+                            Some(d) => (d * 2).min(MAX_RETRY),
+                        });
+                    }
                 }
             }
         });

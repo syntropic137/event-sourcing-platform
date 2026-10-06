@@ -137,8 +137,8 @@ impl CheckpointedProjection<MemStore> for BalanceProjection {
         Ok(())
     }
 
-    async fn reset(&mut self, store: &MemStore, key: &CheckpointKey) -> Result<()> {
-        store.clear_state(key);
+    async fn reset(&mut self, tx: &mut InMemoryTx<Balances>, _key: &CheckpointKey) -> Result<()> {
+        tx.state = Balances::default();
         Ok(())
     }
 }
@@ -501,6 +501,12 @@ impl ProjectionStore for CrashOnCommit {
     async fn delete_checkpoint(&self, key: &CheckpointKey) -> Result<()> {
         self.inner.delete_checkpoint(key).await
     }
+    async fn begin_reset(&self, key: &CheckpointKey) -> Result<Self::Tx> {
+        self.inner.begin_reset(key).await
+    }
+    async fn commit_reset(&self, tx: Self::Tx, key: &CheckpointKey) -> Result<()> {
+        self.inner.commit_reset(tx, key).await
+    }
 }
 
 #[async_trait]
@@ -520,8 +526,8 @@ impl CheckpointedProjection<CrashOnCommit> for BalanceProjection {
         self.probe.calls.fetch_add(1, Ordering::SeqCst);
         apply(&mut tx.state, event)
     }
-    async fn reset(&mut self, store: &CrashOnCommit, key: &CheckpointKey) -> Result<()> {
-        store.inner.clear_state(key);
+    async fn reset(&mut self, tx: &mut InMemoryTx<Balances>, _key: &CheckpointKey) -> Result<()> {
+        tx.state = Balances::default();
         Ok(())
     }
 }
@@ -624,7 +630,7 @@ impl CheckpointedProjection<ExtStore> for IndexProjection {
             .insert(event.event_id.clone(), amount);
         Ok(())
     }
-    async fn reset(&mut self, _store: &ExtStore, _key: &CheckpointKey) -> Result<()> {
+    async fn reset(&mut self, _tx: &mut (), _key: &CheckpointKey) -> Result<()> {
         self.index.docs.lock().unwrap().clear();
         Ok(())
     }
@@ -836,23 +842,57 @@ impl CheckpointedProjection<TodoStore> for TodoProjection {
         tx.state.pending.push(event.event_id.clone());
         Ok(())
     }
-    async fn reset(&mut self, store: &TodoStore, key: &CheckpointKey) -> Result<()> {
-        store.clear_state(key);
+    async fn reset(&mut self, tx: &mut InMemoryTx<Todos>, _key: &CheckpointKey) -> Result<()> {
+        tx.state = Todos::default();
         Ok(())
     }
 }
 
 struct Notifier {
     passes: AtomicUsize,
+    fail_passes: AtomicUsize,
     sent: Mutex<Vec<String>>,
     store: Arc<TodoStore>,
     key: CheckpointKey,
+}
+
+impl Notifier {
+    fn new(store: &Arc<TodoStore>, key: &CheckpointKey, fail_passes: usize) -> Arc<Self> {
+        Arc::new(Self {
+            passes: AtomicUsize::new(0),
+            fail_passes: AtomicUsize::new(fail_passes),
+            sent: Mutex::new(vec![]),
+            store: store.clone(),
+            key: key.clone(),
+        })
+    }
+
+    fn sent(&self) -> usize {
+        self.sent.lock().unwrap().len()
+    }
+}
+
+async fn eventually(what: &str, cond: impl Fn() -> bool) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !cond() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out: {what}"));
 }
 
 #[async_trait]
 impl LiveProcessor for Notifier {
     async fn process_pending(&self) -> Result<usize> {
         self.passes.fetch_add(1, Ordering::SeqCst);
+        if self
+            .fail_passes
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            return Err(Error::from(tonic::Status::unavailable("smtp down")));
+        }
         let todos = self.store.state(&self.key);
         let mut sent = self.sent.lock().unwrap();
         let mut n = 0;
@@ -876,12 +916,7 @@ async fn live_processor_never_runs_during_replay() {
     let store = Arc::new(TodoStore::new());
     let mut runner =
         ProjectionRunner::new(f.port.clone(), store.clone(), TodoProjection, &f.tenant);
-    let notifier = Arc::new(Notifier {
-        passes: AtomicUsize::new(0),
-        sent: Mutex::new(vec![]),
-        store: store.clone(),
-        key: runner.key().clone(),
-    });
+    let notifier = Notifier::new(&store, runner.key(), 0);
     runner = runner.with_live_processor(notifier.clone());
     let mut progress = runner.progress();
     let cancel = CancellationToken::new();
@@ -909,4 +944,61 @@ async fn live_processor_never_runs_during_replay() {
     cancel.cancel();
     task.await.unwrap().unwrap();
     assert_eq!(notifier.passes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn failed_processor_pass_is_retried_without_new_events() {
+    let f = fixture().await;
+    let store = Arc::new(TodoStore::new());
+    let mut runner =
+        ProjectionRunner::new(f.port.clone(), store.clone(), TodoProjection, &f.tenant);
+    let notifier = Notifier::new(&store, runner.key(), 2);
+    runner = runner
+        .with_live_processor(notifier.clone())
+        .with_processor_retry_delay(Duration::from_millis(20));
+    let mut progress = runner.progress();
+    let cancel = CancellationToken::new();
+    let task = tokio::spawn({
+        let cancel = cancel.clone();
+        async move { runner.run(cancel).await }
+    });
+    wait_for(&mut progress, |p| p.is_live).await;
+
+    append(&f.client, &f.tenant, "a", 1, "Deposited", 1).await;
+    eventually("pending item eventually processed", || notifier.sent() == 1).await;
+    assert_eq!(
+        notifier.passes.load(Ordering::SeqCst),
+        3,
+        "2 failures + 1 success"
+    );
+    cancel.cancel();
+    task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn drain_on_live_start_resumes_stranded_items_after_replay() {
+    let f = fixture().await;
+    let mut last = 0;
+    for nonce in 1..=3 {
+        last = append(&f.client, &f.tenant, "a", nonce, "Deposited", 1).await;
+    }
+    let store = Arc::new(TodoStore::new());
+    let mut runner =
+        ProjectionRunner::new(f.port.clone(), store.clone(), TodoProjection, &f.tenant);
+    let notifier = Notifier::new(&store, runner.key(), 0);
+    runner = runner
+        .with_live_processor(notifier.clone())
+        .drain_pending_on_live_start(true);
+    let mut progress = runner.progress();
+    let cancel = CancellationToken::new();
+    let task = tokio::spawn({
+        let cancel = cancel.clone();
+        async move { runner.run(cancel).await }
+    });
+    wait_for(&mut progress, |p| p.is_live && p.position == last).await;
+    // One pass, after catch-up committed everything (never during replay).
+    eventually("startup drain", || notifier.sent() == 3).await;
+    assert_eq!(notifier.passes.load(Ordering::SeqCst), 1);
+    cancel.cancel();
+    task.await.unwrap().unwrap();
 }

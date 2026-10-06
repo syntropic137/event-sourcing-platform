@@ -10,7 +10,7 @@ const DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS esp_projection_checkpoints (
     tenant_id          TEXT        NOT NULL,
     projection_name    TEXT        NOT NULL,
-    projection_version INTEGER     NOT NULL,
+    projection_version BIGINT      NOT NULL,
     feed               TEXT        NOT NULL DEFAULT '',
     global_position    BIGINT      NOT NULL,
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -90,7 +90,7 @@ impl PostgresProjectionStore {
         Ok(sqlx::query(UPSERT)
             .bind(&key.tenant_id)
             .bind(&key.projection_name)
-            .bind(key.projection_version as i32)
+            .bind(i64::from(key.projection_version))
             .bind(&key.feed)
             .bind(to_i64(position)?)
             .execute(exec)
@@ -103,7 +103,7 @@ impl PostgresProjectionStore {
         let row = sqlx::query(SELECT)
             .bind(&key.tenant_id)
             .bind(&key.projection_name)
-            .bind(key.projection_version as i32)
+            .bind(i64::from(key.projection_version))
             .bind(&key.feed)
             .fetch_optional(&self.pool)
             .await
@@ -135,8 +135,33 @@ impl ProjectionStore for PostgresProjectionStore {
     }
 
     async fn delete_checkpoint(&self, key: &CheckpointKey) -> Result<()> {
-        CheckpointStore::delete(self, key).await
+        delete(&self.pool, key).await
     }
+
+    async fn begin_reset(&self, key: &CheckpointKey) -> Result<Self::Tx> {
+        self.begin(key).await
+    }
+
+    async fn commit_reset(&self, mut tx: Self::Tx, key: &CheckpointKey) -> Result<()> {
+        // Same transaction as the projection's reset writes.
+        delete(&mut *tx, key).await?;
+        tx.commit().await.map_err(db)
+    }
+}
+
+async fn delete<'e, E>(exec: E, key: &CheckpointKey) -> Result<()>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
+    sqlx::query(DELETE)
+        .bind(&key.tenant_id)
+        .bind(&key.projection_name)
+        .bind(i64::from(key.projection_version))
+        .bind(&key.feed)
+        .execute(exec)
+        .await
+        .map_err(db)?;
+    Ok(())
 }
 
 #[async_trait]
@@ -154,14 +179,6 @@ impl CheckpointStore for PostgresProjectionStore {
     }
 
     async fn delete(&self, key: &CheckpointKey) -> Result<()> {
-        sqlx::query(DELETE)
-            .bind(&key.tenant_id)
-            .bind(&key.projection_name)
-            .bind(key.projection_version as i32)
-            .bind(&key.feed)
-            .execute(&self.pool)
-            .await
-            .map_err(db)?;
-        Ok(())
+        delete(&self.pool, key).await
     }
 }
