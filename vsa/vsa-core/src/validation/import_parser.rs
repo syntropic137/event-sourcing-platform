@@ -88,9 +88,7 @@ impl ImportParser for PythonImportParser {
             }
 
             // Detect `if TYPE_CHECKING:` blocks
-            if trimmed == "if TYPE_CHECKING:"
-                || trimmed == "if typing.TYPE_CHECKING:"
-            {
+            if trimmed == "if TYPE_CHECKING:" || trimmed == "if typing.TYPE_CHECKING:" {
                 in_type_checking_block = true;
                 // Record the indentation level of the `if` statement
                 let indent = line.len() - line.trim_start().len();
