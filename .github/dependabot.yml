@@ -1,25 +1,64 @@
-# Monthly schedule to reduce PR noise — we batch-upgrade deps manually
-# when needed rather than chasing every weekly bump. Security vulns are
-# caught by OSV scanner in CI, not by dependabot cadence.
+# SECURITY UPDATES ONLY. Version updates are disabled.
+#
+# `open-pull-requests-limit: 0` on every ecosystem turns off VERSION update
+# PRs. It does NOT affect Dependabot SECURITY updates, which are governed by
+# the repository's Code security settings rather than this file, so an
+# advisory still opens a PR while routine bumps do not.
+#
+# WHY. This file already said "security vulns are caught by OSV scanner in CI,
+# not by dependabot cadence", and that is true: .osv-scanner.toml carries
+# written per-advisory justifications and the OSV scan is a CI gate. PR #313
+# cleared 23 real advisories through it. Version updates duplicated that work
+# and added noise.
+#
+# MEASURED, 2026-10-01 to 2026-10-02. A v0.15.0 release left zero open PRs.
+# Within hours the monthly cadence opened NINE, none of them security-driven.
+# Two were actively harmful:
+#
+#   #324  sqlx 0.9 raised MSRV to rustc 1.94 while event-store/Dockerfile
+#         pins rust:1.93. PR CI uses a floating @stable toolchain and never
+#         builds that Dockerfile, so it was GREEN and would have broken the
+#         shipped container at release time (#328).
+#   #325  Titled "github-actions group with 16 updates" while carrying
+#         setup-python v6->v7 and setup-uv v8->v10, because the group below
+#         lacked the minor/major split every other ecosystem has.
+#
+# A tenth, #319, was green and merged, and main then went red from an
+# unrelated toolchain roll that the churn made hard to attribute (#329).
+#
+# TO RE-ENABLE a single ecosystem, delete its `open-pull-requests-limit: 0`.
+# Leave the `update-types` splits in place so a major is never hidden behind
+# a routine title again.
 
 version: 2
 updates:
-  # GitHub Actions — keep action SHAs up to date
+  # GitHub Actions - keep action SHAs up to date
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "monthly"
+    # Version updates off; security updates unaffected (see header).
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "chore(deps):"
     groups:
-      github-actions:
+      # Split so a major action bump can never hide behind a routine title,
+      # as setup-uv v8->v10 did in #325. Every other ecosystem already
+      # splits; this one did not.
+      github-actions-minor:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
+      github-actions-major:
+        patterns: ["*"]
+        update-types: ["major"]
 
-  # Rust — event-store workspace
+  # Rust - event-store workspace
   - package-ecosystem: "cargo"
     directory: "/event-store"
     schedule:
       interval: "monthly"
+    # Version updates off; security updates unaffected (see header).
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "chore(deps):"
     groups:
@@ -30,11 +69,13 @@ updates:
         update-types: ["major"]
         patterns: ["*"]
 
-  # Rust — event-sourcing/rust
+  # Rust - event-sourcing/rust
   - package-ecosystem: "cargo"
     directory: "/event-sourcing/rust"
     schedule:
       interval: "monthly"
+    # Version updates off; security updates unaffected (see header).
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "chore(deps):"
     groups:
@@ -45,11 +86,13 @@ updates:
         update-types: ["major"]
         patterns: ["*"]
 
-  # Node.js — root workspace
+  # Node.js - root workspace
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "monthly"
+    # Version updates off; security updates unaffected (see header).
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "chore(deps):"
     groups:
@@ -60,11 +103,13 @@ updates:
         update-types: ["major"]
         patterns: ["*"]
 
-  # Python — event-sourcing/python (uv)
+  # Python - event-sourcing/python (uv)
   - package-ecosystem: "uv"
     directory: "/event-sourcing/python"
     schedule:
       interval: "monthly"
+    # Version updates off; security updates unaffected (see header).
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "chore(deps):"
     groups:
