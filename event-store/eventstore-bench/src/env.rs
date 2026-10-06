@@ -28,6 +28,8 @@ const PG_SETTINGS: &[&str] = &[
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Environment {
     pub git_sha: String,
+    /// Uncommitted changes in the checkout: the SHA alone does not reproduce it.
+    pub git_dirty: bool,
     pub os: String,
     pub host_cpu: String,
     pub host_logical_cpus: String,
@@ -62,6 +64,9 @@ fn gb(bytes: &str) -> String {
 pub async fn capture(pool: &PgPool, container: Option<&str>) -> Environment {
     let mut e = Environment {
         git_sha: sh("git", &["rev-parse", "HEAD"]).await,
+        git_dirty: !sh("git", &["status", "--porcelain", "--untracked-files=no"])
+            .await
+            .is_empty(),
         os: sh("uname", &["-srm"]).await,
         rustc: sh("rustc", &["--version"]).await,
         server_pool_max: crate::sampler::SERVER_POOL_MAX,

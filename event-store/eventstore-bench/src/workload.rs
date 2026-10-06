@@ -21,7 +21,7 @@ use tokio::sync::{mpsc, Mutex};
 use crate::sampler::{PgActivity, Resources};
 use crate::stats::{self, Hist, Latency};
 use crate::verify::{self, Verify};
-use crate::{make_event, pb, Client, Ctx};
+use crate::{achieved_secs, make_event, pb, Client, Ctx};
 
 /// Events per aggregate before a writer moves to a fresh aggregate.
 pub const EVENTS_PER_AGGREGATE: u64 = 100;
@@ -375,7 +375,7 @@ pub async fn run_append(ctx: &Ctx, spec: AppendSpec) -> anyhow::Result<AppendRes
     .await?;
     let db_events_before = ctx.count_events().await?;
     let w = Window::new(spec.warmup_s, spec.duration_s);
-    let mon = ctx.monitors(w.warm_end);
+    let mon = ctx.monitors(w.warm_end).stop_at(w.end);
     let handles = match spec.mode {
         Mode::Closed => run_closed(ctx, writers, spec.batch, w),
         Mode::Open { rps } => run_open(
@@ -388,16 +388,17 @@ pub async fn run_append(ctx: &Ctx, spec: AppendSpec) -> anyhow::Result<AppendRes
         ),
     };
     let c = collect(handles).await?;
-    let (pg, resources) = mon.stop().await;
+    let (pg, resources) = mon.await?;
     let (verify, _) = verify_writers(ctx, &c.writers).await?;
     let drain_ms = c
         .last_done
         .map(|t| t.saturating_duration_since(w.end).as_secs_f64() * 1000.0)
         .unwrap_or(0.0);
+    let secs = achieved_secs(w.warm_end, w.end, c.last_done);
     Ok(AppendResult {
         db_events_before,
-        events_per_sec: c.events as f64 / spec.duration_s,
-        requests_per_sec: c.requests as f64 / spec.duration_s,
+        events_per_sec: c.events as f64 / secs,
+        requests_per_sec: c.requests as f64 / secs,
         latency: Latency::from_hist(&c.lat),
         service: Latency::from_hist(&c.svc),
         errors: c.errors,

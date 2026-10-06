@@ -16,7 +16,7 @@ use crate::sampler::{PgActivity, Resources};
 use crate::stats::{self, Hist, Latency};
 use crate::verify::{self, SeqCheck, Verify};
 use crate::workload::{self, Window};
-use crate::{payload_stamp, pb, Ctx};
+use crate::{achieved_secs, payload_stamp, pb, Ctx};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct E2eSpec {
@@ -196,7 +196,7 @@ pub async fn run_e2e(ctx: &Ctx, spec: E2eSpec) -> anyhow::Result<E2eResult> {
     let writers = workload::make_writers(ctx, &spec.name, spec.writers, true, spec.payload).await?;
     let w = Window::new(spec.warmup_s, spec.duration_s);
     *window.lock().expect("window lock") = Some(w);
-    let mon = ctx.monitors(w.warm_end);
+    let mon = ctx.monitors(w.warm_end).stop_at(w.end);
     let acked = Arc::new(AtomicU64::new(0));
 
     let lag_stop = Arc::new(AtomicBool::new(false));
@@ -227,7 +227,7 @@ pub async fn run_e2e(ctx: &Ctx, spec: E2eSpec) -> anyhow::Result<E2eResult> {
     let writers_done = c.last_done.unwrap_or_else(Instant::now);
     let total_acked: u64 = c.writers.iter().map(|w| w.acked.len() as u64).sum();
     let total_uncertain: u64 = c.writers.iter().map(|w| w.uncertain.len() as u64).sum();
-    let (pg, resources) = mon.stop().await;
+    let (pg, resources) = mon.await?;
     // Subscribers stop once they have every committed event. With failed
     // appends the committed count is unknown up front, so they run to the
     // drain timeout and the sequence check decides.
@@ -254,7 +254,7 @@ pub async fn run_e2e(ctx: &Ctx, spec: E2eSpec) -> anyhow::Result<E2eResult> {
 
     let mut delivery = stats::new_hist();
     let mut slow_delivery = stats::new_hist();
-    let mut fast_in_window = 0u64;
+    let mut fast_rate_sum = 0f64;
     let (mut drain_fast, mut drain_slow) = (0f64, 0f64);
     let mut checks = Vec::new();
     let mut errors = Vec::new();
@@ -268,7 +268,7 @@ pub async fn run_e2e(ctx: &Ctx, spec: E2eSpec) -> anyhow::Result<E2eResult> {
             drain_slow = drain_slow.max(drain);
         } else {
             stats::merge(&mut delivery, &o.lat);
-            fast_in_window += o.in_window;
+            fast_rate_sum += o.in_window as f64 / achieved_secs(w.warm_end, w.end, o.last_event);
             drain_fast = drain_fast.max(drain);
         }
         if let Some(e) = &o.error {
@@ -278,14 +278,12 @@ pub async fn run_e2e(ctx: &Ctx, spec: E2eSpec) -> anyhow::Result<E2eResult> {
     }
     let exact = checks.iter().all(|c| c.exact) && errors.is_empty();
     Ok(E2eResult {
-        append_events_per_sec: c.events as f64 / spec.duration_s,
+        append_events_per_sec: c.events as f64 / achieved_secs(w.warm_end, w.end, c.last_done),
         append_latency: Latency::from_hist(&c.lat),
         append_errors: c.errors,
         delivery: Latency::from_hist(&delivery),
         slow_delivery: Latency::from_hist(&slow_delivery),
-        delivered_per_sub_eps: fast_in_window as f64
-            / spec.fast_subscribers.max(1) as f64
-            / spec.duration_s,
+        delivered_per_sub_eps: fast_rate_sum / spec.fast_subscribers.max(1) as f64,
         max_lag_fast,
         max_lag_slow,
         drain_ms_fast: drain_fast,

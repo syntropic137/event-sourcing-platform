@@ -26,13 +26,19 @@ pub struct Results {
 }
 
 impl Results {
-    /// True when every completeness/ordering check passed.
+    /// True when every completeness/ordering check passed and no request
+    /// failed. Latency is recorded for successful requests only, so a run
+    /// with errors would publish a success-only tail; it fails instead.
     pub fn all_verified(&self) -> bool {
-        self.appends.iter().all(|a| a.verify.ok)
+        self.appends.iter().all(|a| a.verify.ok && a.errors == 0)
+            && self.preloads.iter().all(|p| p.errors == 0)
             && self.read_all.iter().all(|r| r.verify.ok)
             && self.read_stream.iter().all(|r| r.invalid == 0)
             && self.catchup.iter().all(|c| c.check.exact)
-            && self.e2e.iter().all(|e| e.verify.ok && e.subscribers_exact)
+            && self
+                .e2e
+                .iter()
+                .all(|e| e.verify.ok && e.subscribers_exact && e.append_errors == 0)
     }
 }
 
@@ -82,7 +88,7 @@ pub fn markdown(r: &Results) -> String {
     );
     let _ = writeln!(
         s,
-        "- Host: {} ({} logical CPUs, {} GB), {}\n- Docker {} VM: {} CPUs, {} GB; Postgres container `{}`: {} CPUs, {} GB\n- Postgres {}: fsync={} synchronous_commit={} full_page_writes={} wal_sync_method={} shared_buffers={} max_connections={}\n- Server pool max {} connections; git {}; {}\n",
+        "- Host: {} ({} logical CPUs, {} GB), {}\n- Docker {} VM: {} CPUs, {} GB; Postgres container `{}`: {} CPUs, {} GB\n- Postgres {}: fsync={} synchronous_commit={} full_page_writes={} wal_sync_method={} shared_buffers={} max_connections={}\n- Server pool max {} connections; git {}{}; {}\n",
         e.host_cpu,
         e.host_logical_cpus,
         e.host_mem_gb,
@@ -102,6 +108,7 @@ pub fn markdown(r: &Results) -> String {
         e.pg_settings.get("max_connections").map(String::as_str).unwrap_or("?"),
         e.server_pool_max,
         &e.git_sha[..e.git_sha.len().min(12)],
+        if e.git_dirty { " (dirty)" } else { "" },
         e.rustc,
     );
 

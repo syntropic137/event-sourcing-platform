@@ -84,6 +84,23 @@ impl Monitors {
         let (pg, res) = tokio::join!(self.pg.stop(), self.res.stop());
         (pg, res)
     }
+
+    /// Stops sampling at `at` (the window end), even if work is still
+    /// draining, so resource/lock figures cover the measurement window only.
+    pub fn stop_at(self, at: Instant) -> tokio::task::JoinHandle<(PgActivity, Resources)> {
+        tokio::spawn(async move {
+            tokio::time::sleep_until(at.into()).await;
+            self.stop().await
+        })
+    }
+}
+
+/// Seconds over which work recorded for a window actually completed: the
+/// window, stretched to the last completion when a backlog drained after it.
+/// Throughput over this span is *achieved*, not offered, under overload.
+pub fn achieved_secs(warm_end: Instant, end: Instant, last_done: Option<Instant>) -> f64 {
+    let stop = last_done.map_or(end, |t| t.max(end));
+    stop.duration_since(warm_end).as_secs_f64().max(1e-9)
 }
 
 /// Builds a bench event. The first 8 payload bytes carry the intended send
@@ -120,6 +137,21 @@ pub fn payload_stamp(payload: &[u8]) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn achieved_span_stretches_to_drain() {
+        let w = Instant::now();
+        let end = w + Duration::from_secs(10);
+        assert_eq!(achieved_secs(w, end, None), 10.0);
+        assert_eq!(
+            achieved_secs(w, end, Some(w + Duration::from_secs(4))),
+            10.0
+        );
+        assert_eq!(
+            achieved_secs(w, end, Some(w + Duration::from_secs(15))),
+            15.0
+        );
+    }
 
     #[test]
     fn stamp_round_trips_through_payload() {
