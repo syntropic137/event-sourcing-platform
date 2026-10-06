@@ -45,7 +45,9 @@ Creates a real-time subscription to event streams.
 cannot read events (for example the database is down), the stream ends with
 gRPC status `UNAVAILABLE` instead of going quiet. Reconnect with
 `fromGlobalNonce = last processed globalNonce + 1`, with backoff, and keep
-handlers idempotent. See ADR-026 (Subscription Failure Semantics) in `docs/adrs/`.
+handlers idempotent. If a stored event cannot be decoded, the stream delivers
+the events before it and ends with `DATA_LOSS` naming its global nonce; it
+never skips it. Retrying does not help: alert an operator. See ADR-026 (Subscription Failure Semantics) in `docs/adrs/`.
 
 ### 🎯 Event Definition
 

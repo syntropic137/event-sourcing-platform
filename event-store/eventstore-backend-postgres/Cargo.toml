@@ -48,3 +48,8 @@ required-features = ["test-utils"]
 name = "it_subscribe_faults"
 path = "tests/it_subscribe_faults.rs"
 required-features = ["test-utils"]
+
+[[test]]
+name = "it_subscribe_undecodable"
+path = "tests/it_subscribe_undecodable.rs"
+required-features = ["test-utils"]

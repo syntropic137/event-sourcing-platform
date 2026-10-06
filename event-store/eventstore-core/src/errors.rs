@@ -29,6 +29,13 @@ pub enum StoreError {
     /// consumer reconnects from its own last checkpoint (at-least-once).
     #[error("unavailable: {0}")]
     Unavailable(String),
+    /// A stored event cannot be decoded (data integrity). Not retryable until
+    /// an operator repairs the row or the reader. `reason` never contains
+    /// payload or header values. Subscriptions stop here; see ADR-026.
+    #[error(
+        "data integrity: stored event at global_nonce {global_nonce} cannot be decoded: {reason}"
+    )]
+    UndecodableEvent { global_nonce: u64, reason: String },
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -69,6 +76,9 @@ impl StoreError {
                 tonic::Status::new(Code::ResourceExhausted, msg.clone())
             }
             StoreError::Unavailable(msg) => tonic::Status::new(Code::Unavailable, msg.clone()),
+            StoreError::UndecodableEvent { .. } => {
+                tonic::Status::new(Code::DataLoss, self.to_string())
+            }
             StoreError::Internal(err) => tonic::Status::new(Code::Internal, err.to_string()),
         }
     }
@@ -83,5 +93,16 @@ mod tests {
         let status = StoreError::Unavailable("db down".into()).to_status();
         assert_eq!(status.code(), tonic::Code::Unavailable);
         assert_eq!(status.message(), "db down");
+    }
+
+    #[test]
+    fn undecodable_event_maps_to_grpc_data_loss_with_position() {
+        let status = StoreError::UndecodableEvent {
+            global_nonce: 42,
+            reason: "column 'headers'".into(),
+        }
+        .to_status();
+        assert_eq!(status.code(), tonic::Code::DataLoss);
+        assert!(status.message().contains("global_nonce 42"), "{status:?}");
     }
 }
