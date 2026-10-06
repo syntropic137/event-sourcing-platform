@@ -122,6 +122,11 @@ pub mod prelude {
     pub use crate::command::{Command, CommandHandler};
     pub use crate::error::{Error, Result};
     pub use crate::event::{DomainEvent, EventEnvelope, EventMetadata};
+    pub use crate::projection::{
+        CheckpointKey, CheckpointStore, CheckpointedProjection, DispatchContext,
+        ExternalCheckpoints, InMemoryCheckpointStore, InMemoryProjectionStore, LiveProcessor,
+        ProjectionRunner, ProjectionStore, RecordedEvent, RunExit,
+    };
     pub use crate::repository::{
         AggregateRepository, EventStoreRepository, Repository, RetryPolicy,
     };

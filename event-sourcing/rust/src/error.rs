@@ -42,6 +42,17 @@ pub enum Error {
     #[error("Invalid command: {message}")]
     InvalidCommand { message: String },
 
+    /// A projection handler failed; its checkpoint was not advanced.
+    #[error("Projection {projection} failed at global nonce {global_nonce}: {source}")]
+    ProjectionFailed {
+        /// Checkpoint key of the projection (`tenant/name@vN[feed]`).
+        projection: String,
+        /// Position of the event that failed.
+        global_nonce: u64,
+        /// Handler error.
+        source: Box<Error>,
+    },
+
     /// Repository error
     #[error("Repository error: {0}")]
     Repository(#[from] anyhow::Error),
