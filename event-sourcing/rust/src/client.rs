@@ -101,13 +101,11 @@ impl EventStorePort for EventStoreClient {
     async fn subscribe(&self, req: proto::SubscribeRequest) -> Result<EventDataStream> {
         let mut inner = self.inner.clone();
         let stream = inner.subscribe(req).await.map_err(map_anyhow)?;
-        Ok(Box::pin(stream.map(|item| match item {
-            Ok(resp) => resp.event.ok_or_else(|| {
-                Error::from(tonic::Status::internal(
-                    "subscribe response without an event",
-                ))
-            }),
-            Err(status) => Err(Error::from(status)),
+        // The Postgres backend emits event-less responses as keepalives while
+        // it waits for new events; they carry no data and are skipped.
+        Ok(Box::pin(stream.filter_map(|item| match item {
+            Ok(resp) => resp.event.map(Ok),
+            Err(status) => Some(Err(Error::from(status))),
         })))
     }
 }
