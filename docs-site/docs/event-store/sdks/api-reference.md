@@ -37,9 +37,15 @@ Creates a real-time subscription to event streams.
 **Parameters:**
 - `tenantId` (string): Tenant/partition routing key
 - `aggregateIdPrefix` (string): Filter by aggregate id prefix (optional)
-- `fromGlobalNonce` (number): Starting global nonce
+- `fromGlobalNonce` (number): Starting global nonce (inclusive)
 
 **Returns:** AsyncIterator of events
+
+**Delivery and errors:** at-least-once, in global nonce order. If the store
+cannot read events (for example the database is down), the stream ends with
+gRPC status `UNAVAILABLE` instead of going quiet. Reconnect with
+`fromGlobalNonce = last processed globalNonce + 1`, with backoff, and keep
+handlers idempotent. See ADR-026 (Subscription Failure Semantics) in `docs/adrs/`.
 
 ### 🎯 Event Definition
 

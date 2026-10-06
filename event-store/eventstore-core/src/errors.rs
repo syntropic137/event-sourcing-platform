@@ -24,6 +24,11 @@ pub enum StoreError {
     Unauthenticated(String),
     #[error("resource exhausted: {0}")]
     ResourceExhausted(String),
+    /// A dependency (e.g. the database) failed while serving the request.
+    /// Retryable. For a subscription, the stream ends after this error and the
+    /// consumer reconnects from its own last checkpoint (at-least-once).
+    #[error("unavailable: {0}")]
+    Unavailable(String),
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -63,7 +68,20 @@ impl StoreError {
             StoreError::ResourceExhausted(msg) => {
                 tonic::Status::new(Code::ResourceExhausted, msg.clone())
             }
+            StoreError::Unavailable(msg) => tonic::Status::new(Code::Unavailable, msg.clone()),
             StoreError::Internal(err) => tonic::Status::new(Code::Internal, err.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_maps_to_grpc_unavailable() {
+        let status = StoreError::Unavailable("db down".into()).to_status();
+        assert_eq!(status.code(), tonic::Code::Unavailable);
+        assert_eq!(status.message(), "db down");
     }
 }

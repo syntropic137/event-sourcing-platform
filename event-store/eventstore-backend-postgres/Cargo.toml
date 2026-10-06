@@ -43,3 +43,8 @@ required-features = ["test-utils"]
 name = "it_commit_order"
 path = "tests/it_commit_order.rs"
 required-features = ["test-utils"]
+
+[[test]]
+name = "it_subscribe_faults"
+path = "tests/it_subscribe_faults.rs"
+required-features = ["test-utils"]
