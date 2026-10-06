@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "eventstore-backend-memory"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "async-trait",
  "eventstore-core",
@@ -581,7 +581,7 @@ dependencies = [
 
 [[package]]
 name = "eventstore-backend-postgres"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -603,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "eventstore-bin"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "eventstore-backend-memory",
@@ -625,7 +625,7 @@ dependencies = [
 
 [[package]]
 name = "eventstore-core"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -641,7 +641,7 @@ dependencies = [
 
 [[package]]
 name = "eventstore-proto"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "prost",
  "prost-types",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "eventstore-sdk-rs"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "eventstore-backend-memory",
