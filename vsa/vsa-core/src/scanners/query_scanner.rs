@@ -20,11 +20,7 @@ pub struct QueryScanner<'a> {
 impl<'a> QueryScanner<'a> {
     /// Create a new query scanner (pascal_case convention by default)
     pub fn new(config: &'a QueryConfig, root: &'a Path) -> Self {
-        Self {
-            config,
-            root,
-            filename_convention: FilenameConvention::default(),
-        }
+        Self { config, root, filename_convention: FilenameConvention::default() }
     }
 
     /// Set the filename convention used to detect query files.
