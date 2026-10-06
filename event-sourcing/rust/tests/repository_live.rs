@@ -321,6 +321,34 @@ async fn uncertain_save_retried_by_caller_commits_exactly_once() {
 }
 
 #[tokio::test]
+async fn uncertain_save_then_more_events_reconciles_committed_prefix() {
+    let server = spawn_server().await;
+    let client = connect(&server.addr).await;
+    let faulty = Arc::new(FaultyPort::new(client.clone()));
+    faulty.lose_acks.store(1, Ordering::SeqCst);
+    let tenant = unique_tenant();
+    let repo = EventStoreRepository::<Account>::new(faulty.clone(), &tenant)
+        .with_retry_policy(RetryPolicy::none());
+
+    let mut acct = opened_with_deposit("acct-8").await;
+    repo.save(&mut acct).await.expect_err("ack lost");
+    // The caller keeps working before retrying the save.
+    acct.execute(AccountCommand::Deposit { amount: 5 })
+        .await
+        .unwrap();
+    assert_eq!(acct.uncommitted_count(), 3);
+
+    repo.save(&mut acct)
+        .await
+        .expect("committed prefix recognized");
+    assert!(!acct.has_uncommitted_events());
+    assert_eq!(acct.committed_version(), 3);
+    assert_eq!(stream_len(&client, &tenant, "acct-8").await, 3);
+    let loaded = repo.load("acct-8").await.unwrap().unwrap();
+    assert_eq!(loaded.aggregate.balance, 15);
+}
+
+#[tokio::test]
 async fn uncertain_save_retried_automatically_commits_exactly_once() {
     let server = spawn_server().await;
     let client = connect(&server.addr).await;

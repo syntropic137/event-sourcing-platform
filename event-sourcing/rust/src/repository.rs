@@ -24,7 +24,9 @@
 //! idempotency key. If a retry is rejected as a conflict (or as an idempotency
 //! key reuse), the repository reads the stream at the expected position and
 //! compares event IDs. If its own batch is already there, the save is treated
-//! as committed. This makes the result exactly-once in the stream regardless
+//! as committed. If only a prefix is there (the caller recorded more events
+//! after an unknown-outcome save), the prefix is cleared and the remainder is
+//! appended on top of it. This makes the result exactly-once in the stream regardless
 //! of whether the backend checks idempotency keys before or after the
 //! concurrency precondition.
 
@@ -181,28 +183,32 @@ where
         Ok(())
     }
 
-    /// True if the store already holds exactly this batch at the expected
-    /// position (same event IDs, same order).
-    async fn batch_already_committed(
+    /// Number of leading events of `batch` that the store already holds at
+    /// the expected position (same event IDs, same nonces). A non-zero result
+    /// means an earlier attempt committed (batches are atomic, so the prefix
+    /// is one or more whole earlier batches).
+    async fn committed_prefix_len(
         &self,
         aggregate_id: &str,
         expected: u64,
         batch: &[proto::EventData],
-    ) -> Result<bool> {
+    ) -> Result<usize> {
         let page = self
             .read_page(aggregate_id, expected + 1, batch.len() as u32)
             .await?;
-        if page.events.len() != batch.len() {
-            return Ok(false);
-        }
-        Ok(page.events.iter().zip(batch).all(|(stored, ours)| {
-            match (stored.meta.as_ref(), ours.meta.as_ref()) {
-                (Some(s), Some(o)) => {
-                    s.event_id == o.event_id && s.aggregate_nonce == o.aggregate_nonce
-                }
-                _ => false,
-            }
-        }))
+        Ok(page
+            .events
+            .iter()
+            .zip(batch)
+            .take_while(
+                |(stored, ours)| match (stored.meta.as_ref(), ours.meta.as_ref()) {
+                    (Some(s), Some(o)) => {
+                        s.event_id == o.event_id && s.aggregate_nonce == o.aggregate_nonce
+                    }
+                    _ => false,
+                },
+            )
+            .count())
     }
 }
 
@@ -238,6 +244,33 @@ where
                 global_nonce: 0,
             }),
             payload: serde_json::to_vec(&envelope.event)?,
+        })
+    }
+
+    /// Append request for the instance's (non-empty) pending batch.
+    fn append_request(
+        &self,
+        aggregate_id: &str,
+        instance: &AggregateInstance<A>,
+    ) -> Result<proto::AppendRequest> {
+        let pending = &instance.uncommitted_events;
+        let expected = instance.committed_version();
+        let events = pending
+            .iter()
+            .map(|e| self.to_event_data(aggregate_id, e))
+            .collect::<Result<Vec<_>>>()?;
+        let count = events.len();
+        let first_id = pending[0].metadata.event_id;
+        let last_id = pending[count - 1].metadata.event_id;
+        Ok(proto::AppendRequest {
+            tenant_id: self.tenant_id.clone(),
+            aggregate_id: aggregate_id.to_string(),
+            aggregate_type: self.aggregate_type.clone(),
+            expected_aggregate_nonce: expected,
+            // Same key on every attempt for this batch; a batch that changed
+            // (more events recorded) gets a different key.
+            idempotency_key: format!("esp-rs:{expected}:{count}:{first_id}:{last_id}"),
+            events,
         })
     }
 }
@@ -298,71 +331,61 @@ where
             ));
         }
 
-        let expected = instance.committed_version();
-        let events = instance
-            .uncommitted_events
-            .iter()
-            .map(|e| self.to_event_data(&aggregate_id, e))
-            .collect::<Result<Vec<_>>>()?;
-        let count = events.len() as u64;
-        let first_id = &instance.uncommitted_events[0].metadata.event_id;
-        let last_id = &instance.uncommitted_events[events.len() - 1]
-            .metadata
-            .event_id;
-        let request = proto::AppendRequest {
-            tenant_id: self.tenant_id.clone(),
-            aggregate_id: aggregate_id.clone(),
-            aggregate_type: self.aggregate_type.clone(),
-            expected_aggregate_nonce: expected,
-            // Same key on every attempt for this batch; a batch that changed
-            // (more events recorded) gets a different key.
-            idempotency_key: format!("esp-rs:{expected}:{count}:{first_id}:{last_id}"),
-            events,
-        };
-
         let max_attempts = self.retry.max_attempts.max(1);
         let mut backoff = self.retry.initial_backoff;
         let mut attempt = 1u32;
-        loop {
-            match self.store.append(request.clone()).await {
-                Ok(resp) => {
-                    if resp.last_aggregate_nonce != expected + count {
-                        return Err(Error::Repository(anyhow::anyhow!(
-                            "store acknowledged head {} for '{aggregate_id}', expected {}",
-                            resp.last_aggregate_nonce,
-                            expected + count
-                        )));
-                    }
-                    instance.mark_committed();
-                    return Ok(());
-                }
-                Err(err)
-                    if err.is_concurrency_conflict()
-                        || err.status_code() == Some(tonic::Code::AlreadyExists) =>
-                {
-                    // An earlier attempt (this call or a previous save of the
-                    // same instance) may have committed before its ack was lost.
-                    if self
-                        .batch_already_committed(&aggregate_id, expected, &request.events)
-                        .await?
-                    {
+        // Each pass appends the current pending batch. A pass ends early only
+        // when reconciliation finds that a prefix of the batch was committed
+        // by an earlier attempt whose ack was lost (possibly before more
+        // events were recorded on the instance). That prefix is cleared and
+        // the remainder is appended on top of it. Pending strictly shrinks
+        // between passes, so this terminates.
+        'batch: loop {
+            if instance.uncommitted_events.is_empty() {
+                return Ok(());
+            }
+            let request = self.append_request(&aggregate_id, instance)?;
+            let expected = request.expected_aggregate_nonce;
+            let count = request.events.len() as u64;
+            loop {
+                match self.store.append(request.clone()).await {
+                    Ok(resp) => {
+                        if resp.last_aggregate_nonce != expected + count {
+                            return Err(Error::Repository(anyhow::anyhow!(
+                                "store acknowledged head {} for '{aggregate_id}', expected {}",
+                                resp.last_aggregate_nonce,
+                                expected + count
+                            )));
+                        }
                         instance.mark_committed();
                         return Ok(());
                     }
-                    return Err(err);
+                    Err(err)
+                        if err.is_concurrency_conflict()
+                            || err.status_code() == Some(tonic::Code::AlreadyExists) =>
+                    {
+                        let committed = self
+                            .committed_prefix_len(&aggregate_id, expected, &request.events)
+                            .await?;
+                        if committed == 0 {
+                            return Err(err);
+                        }
+                        instance.uncommitted_events.drain(..committed);
+                        continue 'batch;
+                    }
+                    Err(err) if err.is_transient() && attempt < max_attempts => {
+                        tracing::warn!(
+                            aggregate_id = %aggregate_id,
+                            attempt,
+                            error = %err,
+                            "append outcome unknown; retrying idempotently"
+                        );
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(self.retry.max_backoff);
+                        attempt += 1;
+                    }
+                    Err(err) => return Err(err),
                 }
-                Err(err) if err.is_transient() && attempt < max_attempts => {
-                    tracing::warn!(
-                        aggregate_id = %aggregate_id,
-                        attempt,
-                        error = %err,
-                        "append outcome unknown; retrying idempotently"
-                    );
-                    tokio::time::sleep(backoff).await;
-                    backoff = (backoff * 2).min(self.retry.max_backoff);
-                    attempt += 1;
-                }
-                Err(err) => return Err(err),
             }
         }
     }
