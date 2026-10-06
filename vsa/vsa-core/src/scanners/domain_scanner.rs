@@ -21,11 +21,7 @@ pub struct DomainScanner {
 impl DomainScanner {
     /// Create a new domain scanner (pascal_case convention by default)
     pub fn new(config: DomainConfig, root: PathBuf) -> Self {
-        Self {
-            config,
-            root,
-            filename_convention: FilenameConvention::default(),
-        }
+        Self { config, root, filename_convention: FilenameConvention::default() }
     }
 
     /// Set the filename convention threaded into the artifact sub-scanners so

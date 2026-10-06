@@ -97,22 +97,47 @@ pub struct ExceptionBudget {
     pub issue: Option<String>,
 }
 
+impl ExceptionBudget {
+    /// Does this budget apply to `path` under `rule_code`?
+    ///
+    /// `file` is always written with forward slashes in vsa.yaml, while `path`
+    /// comes from the filesystem and uses the platform separator. Both sides are
+    /// normalised to forward slashes so a budget declared once behaves the same
+    /// on Windows as it does on Unix.
+    pub fn matches(&self, rule_code: &str, path: &str) -> bool {
+        self.matches_with_separator(rule_code, path, std::path::MAIN_SEPARATOR)
+    }
+
+    /// `matches` with an explicit separator, so the Windows behaviour is
+    /// reproducible from a test on any host.
+    fn matches_with_separator(&self, rule_code: &str, path: &str, separator: char) -> bool {
+        self.rule == rule_code
+            && normalize_separators(path, separator)
+                .ends_with(&normalize_separators(&self.file, separator))
+    }
+}
+
+/// Rewrite `separator` to forward slashes so a path from the filesystem can be
+/// compared against a vsa.yaml entry, which is always written with slashes.
+fn normalize_separators(path: &str, separator: char) -> String {
+    if separator == '/' {
+        path.to_string()
+    } else {
+        path.replace(separator, "/")
+    }
+}
+
 /// Architecture type
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ArchitectureType {
     /// Basic vertical slice architecture (legacy)
+    #[default]
     VerticalSlice,
     /// Hexagonal architecture
     Hexagonal,
     /// Hexagonal Event-Sourced VSA (recommended)
     HexagonalEventSourcedVsa,
-}
-
-impl Default for ArchitectureType {
-    fn default() -> Self {
-        Self::VerticalSlice
-    }
 }
 
 // ============================================================================
@@ -346,19 +371,14 @@ impl Default for EventVersioningConfig {
 }
 
 /// Version format
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum VersionFormat {
     /// Simple string-based versions ('v1', 'v2', 'v3')
+    #[default]
     Simple,
     /// Semantic versioning ('1.0.0', '1.1.0', '2.0.0')
     Semver,
-}
-
-impl Default for VersionFormat {
-    fn default() -> Self {
-        Self::Simple
-    }
 }
 
 // ============================================================================
@@ -1411,5 +1431,46 @@ mod tests {
         let _saga = SliceType::Saga;
         let _mixed = SliceType::Mixed;
         let _unknown = SliceType::Unknown;
+    }
+}
+
+#[cfg(test)]
+mod exception_budget_tests {
+    use super::*;
+
+    fn budget() -> ExceptionBudget {
+        ExceptionBudget {
+            file: "orchestration/service.py".to_string(),
+            rule: "VSA204".to_string(),
+            budget: 2,
+            issue: None,
+        }
+    }
+
+    #[test]
+    fn matches_a_unix_path() {
+        assert!(budget().matches_with_separator("VSA204", "/tmp/x/orchestration/service.py", '/'));
+    }
+
+    #[test]
+    fn matches_a_windows_path() {
+        // Regression: the vsa.yaml entry uses forward slashes, the scanned path
+        // uses backslashes. Comparing them raw made every budget a no-op on
+        // Windows, so declared exceptions were silently reported as violations.
+        assert!(budget().matches_with_separator(
+            "VSA204",
+            "C:\\r\\x\\orchestration\\service.py",
+            '\\'
+        ));
+    }
+
+    #[test]
+    fn does_not_match_a_different_rule() {
+        assert!(!budget().matches_with_separator("VSA206", "/tmp/x/orchestration/service.py", '/'));
+    }
+
+    #[test]
+    fn does_not_match_a_different_file() {
+        assert!(!budget().matches_with_separator("VSA204", "/tmp/x/orchestration/other.py", '/'));
     }
 }

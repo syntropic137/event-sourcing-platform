@@ -11,6 +11,13 @@ on:
 permissions:
   contents: read
 
+# Supersede in-flight PR scans when a newer commit is pushed to the same PR.
+# Scoped to pull_request only: push-to-main and scheduled scans are never
+# cancelled, so the default-branch security posture keeps a complete history.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   osv-scan:
     name: OSV Vulnerability Scan
