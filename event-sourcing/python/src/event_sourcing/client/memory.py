@@ -45,6 +45,21 @@ def _assert_test_environment() -> None:
         )
 
 
+def _stream_key(stream_name: str) -> str:
+    """The key the ESP server stores ``stream_name`` under: the aggregate id alone.
+
+    The gRPC client splits ``"Type-id"`` and the server keys a stream by
+    ``(tenant, aggregate_id)``; the type is stored but is not part of the key.
+    So ``Order-1`` and ``Invoice-1`` are ONE stream on the server, and must be
+    one stream here too, or a collision production hits passes every unit test
+    (event-sourcing-platform#344).
+    """
+    parts = stream_name.split("-", 1)
+    if len(parts) != 2:
+        raise EventStoreError(f"Invalid stream name format: {stream_name}")
+    return parts[1]
+
+
 class MemoryEventStoreClient:
     """
     In-memory implementation of event store client.
@@ -61,6 +76,7 @@ class MemoryEventStoreClient:
         # CRITICAL: Validate test environment before allowing usage
         _assert_test_environment()
 
+        # Keyed by aggregate id alone, as the server keys them: see _stream_key.
         self._streams: dict[str, list[EventEnvelope[DomainEvent]]] = {}
         self._connected = False
         self._global_nonce_counter = 0  # For assigning global nonces
@@ -93,12 +109,13 @@ class MemoryEventStoreClient:
         Raises:
             EventStoreError: If stream doesn't exist and from_version is specified
         """
-        if stream_name not in self._streams:
+        key = _stream_key(stream_name)
+        if key not in self._streams:
             if from_version is not None:
                 raise EventStoreError(f"Stream not found: {stream_name}")
             return []
 
-        events = self._streams[stream_name]
+        events = self._streams[key]
 
         if from_version is not None:
             # from_version is 1-based, so we need to convert to 0-based index
@@ -127,8 +144,9 @@ class MemoryEventStoreClient:
         if not events:
             return
 
+        key = _stream_key(stream_name)
         # Get current version (number of events in stream)
-        current_version = len(self._streams.get(stream_name, []))
+        current_version = len(self._streams.get(key, []))
 
         # Check expected version if provided
         if expected_version is not None:
@@ -144,8 +162,8 @@ class MemoryEventStoreClient:
                 )
 
         # Create stream if it doesn't exist
-        if stream_name not in self._streams:
-            self._streams[stream_name] = []
+        if key not in self._streams:
+            self._streams[key] = []
 
         # Assign global nonce to events if not already set
         # Create new envelopes since EventEnvelope is frozen
@@ -163,16 +181,16 @@ class MemoryEventStoreClient:
                 updated_events.append(event)
 
         # Append events
-        self._streams[stream_name].extend(updated_events)
+        self._streams[key].extend(updated_events)
 
         logger.debug(
             f"Appended {len(events)} event(s) to stream '{stream_name}' "
-            f"(new version: {len(self._streams[stream_name])})"
+            f"(new version: {len(self._streams[key])})"
         )
 
     async def stream_exists(self, stream_name: str) -> bool:
         """Check if a stream exists."""
-        return stream_name in self._streams and len(self._streams[stream_name]) > 0
+        return len(self._streams.get(_stream_key(stream_name), [])) > 0
 
     def clear(self) -> None:
         """Clear all streams (useful for tests)."""
@@ -180,7 +198,7 @@ class MemoryEventStoreClient:
 
     def get_stream_version(self, stream_name: str) -> int:
         """Get the current version of a stream (for testing)."""
-        return len(self._streams.get(stream_name, []))
+        return len(self._streams.get(_stream_key(stream_name), []))
 
     def _filter_and_sort_events(
         self,

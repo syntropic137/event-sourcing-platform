@@ -18,6 +18,11 @@ const NOTIFY_CHANNEL: &str = "eventstore_events";
 const NOTIFY_BROADCAST_CAPACITY: usize = 256;
 const FALLBACK_POLL_SECS: u64 = 5;
 
+/// First key of the two-key advisory lock that orders appends per tenant, so
+/// it cannot collide with any other advisory lock in the database. Arbitrary,
+/// fixed: changing it while two versions run side by side breaks the ordering.
+const APPEND_ORDER_LOCK_NAMESPACE: i32 = 0x0E5_1545;
+
 /// Payload sent via PostgreSQL NOTIFY and the in-process broadcast channel.
 /// Format: `"{tenant_id}:{last_global_nonce}"`.
 #[derive(Debug, Clone)]
@@ -389,6 +394,39 @@ impl EventStoreTrait for PostgresStore {
                 )));
             }
         }
+
+        // Commit order must equal global_nonce order (syntropic137#1545).
+        //
+        // global_nonce is a BIGSERIAL: `nextval()` hands it out at INSERT, but
+        // the row only becomes visible at COMMIT. Without this lock a slow
+        // append can hold nonce N while a faster one commits N+1; a subscriber
+        // polling `global_nonce > cursor` then yields N+1, advances past N, and
+        // never sees N even after it commits. Nothing errors: the event is in
+        // the store, behind every cursor. That is how a WorkflowExecutionStarted
+        // at 39502 was skipped by every projection in syntropic137#1545.
+        //
+        // Held from before the first nonce is drawn until commit/rollback.
+        // Postgres releases transaction locks only after the commit is visible
+        // to new snapshots, so the next append for this tenant cannot draw a
+        // nonce until every lower nonce of the tenant is committed or rolled
+        // back. A reader of `global_nonce > cursor` can therefore never see a
+        // higher nonce while a lower one of the same tenant is still in flight.
+        //
+        // Per tenant because every read path (read_all, subscribe) filters by
+        // tenant_id. A reader that spans tenants would need a global lock.
+        //
+        // Deadlocks: taken after the FOR UPDATE row locks above. While holding
+        // it, an append only writes rows of its own aggregate and idempotency
+        // key, which another waiter can hold only if this append already lost
+        // the optimistic check (it then fails on the committed row, it does
+        // not wait). Postgres' deadlock detector covers advisory locks too.
+        // Cost: one tenant's INSERT..COMMIT windows are serialized.
+        sqlx::query("SELECT pg_advisory_xact_lock($1, hashtext($2))")
+            .bind(APPEND_ORDER_LOCK_NAMESPACE)
+            .bind(&tenant_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_db_error)?;
 
         let mut last_global_nonce = current_last_global;
         let mut assigned_events: Vec<proto::EventData> = Vec::with_capacity(events.len());
