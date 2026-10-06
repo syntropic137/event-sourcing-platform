@@ -8,7 +8,9 @@ production while every unit test passed (#344, syntropic137#1641).
 
 The memory client runs as ``unit``. The gRPC client runs the SAME assertions
 as ``integration`` against a live server at ``ESP_EVENT_STORE_ADDRESS``; it is
-skipped when that is unset, never replaced by the memory client.
+never replaced by the memory client. Locally an unset address skips it. Under
+CI (``CI`` set) an unset address FAILS: a silent skip there would leave the
+contract unverified, which is the gap #344 was.
 """
 
 from __future__ import annotations
@@ -61,9 +63,10 @@ async def client(request: pytest.FixtureRequest) -> AsyncIterator[EventStoreClie
     else:
         address = os.getenv("ESP_EVENT_STORE_ADDRESS")
         if not address:
-            pytest.skip(
-                "ESP_EVENT_STORE_ADDRESS not set: no live event store to hold the contract to"
-            )
+            reason = "ESP_EVENT_STORE_ADDRESS not set: no live event store to hold the contract to"
+            if os.getenv("CI"):
+                pytest.fail(f"{reason} (CI is set, so this is an error, not a skip)")
+            pytest.skip(reason)
         # A fresh tenant per test: the server keeps streams across runs.
         store = GrpcEventStoreClient(address=address, tenant_id=f"contract-{uuid.uuid4().hex}")
     await store.connect()
