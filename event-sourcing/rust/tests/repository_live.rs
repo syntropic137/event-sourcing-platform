@@ -405,4 +405,21 @@ async fn aggregate_type_mismatch_is_an_error() {
     repo.save(&mut acct).await.unwrap();
     assert!(other.load("acct-7").await.is_err());
     assert!(other.exists("acct-7").await.is_err());
+
+    // Saving through a repository of another type must not append.
+    let mut loaded = repo.load("acct-7").await.unwrap().unwrap();
+    loaded
+        .execute(AccountCommand::Deposit { amount: 1 })
+        .await
+        .unwrap();
+    assert!(other.save(&mut loaded).await.is_err());
+    assert_eq!(loaded.uncommitted_count(), 1);
+    assert_eq!(
+        repo.load("acct-7")
+            .await
+            .unwrap()
+            .unwrap()
+            .committed_version(),
+        2
+    );
 }

@@ -203,7 +203,10 @@ where
             .take_while(
                 |(stored, ours)| match (stored.meta.as_ref(), ours.meta.as_ref()) {
                     (Some(s), Some(o)) => {
-                        s.event_id == o.event_id && s.aggregate_nonce == o.aggregate_nonce
+                        s.event_id == o.event_id
+                            && s.aggregate_nonce == o.aggregate_nonce
+                            && s.event_type == o.event_type
+                            && stored.payload == ours.payload
                     }
                     _ => false,
                 },
@@ -313,11 +316,10 @@ where
         if version == 0 {
             return Ok(None);
         }
-        Ok(Some(AggregateInstance::from_history(
-            aggregate_id.to_string(),
-            aggregate,
-            version,
-        )))
+        let mut instance =
+            AggregateInstance::from_history(aggregate_id.to_string(), aggregate, version);
+        instance.metadata.aggregate_type = self.aggregate_type.clone();
+        Ok(Some(instance))
     }
 
     async fn save(&self, instance: &mut AggregateInstance<A>) -> Result<()> {
@@ -330,6 +332,18 @@ where
                 "cannot save an aggregate without an id",
             ));
         }
+        // Appending to an existing stream must not change its aggregate type.
+        // Instances loaded or saved by this repository carry its type; any
+        // other instance is verified against the stream before appending.
+        if instance.committed_version() > 0
+            && instance.metadata.aggregate_type != self.aggregate_type
+        {
+            let page = self.read_page(&aggregate_id, 1, 1).await?;
+            if let Some(meta) = page.events.first().and_then(|e| e.meta.as_ref()) {
+                self.check_type(&aggregate_id, meta)?;
+            }
+        }
+        instance.metadata.aggregate_type = self.aggregate_type.clone();
 
         let max_attempts = self.retry.max_attempts.max(1);
         let mut backoff = self.retry.initial_backoff;
