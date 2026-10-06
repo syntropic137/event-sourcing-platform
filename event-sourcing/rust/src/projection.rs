@@ -525,7 +525,7 @@ where
             key,
             page_size: DEFAULT_PAGE_SIZE,
             processor: None,
-            drain_on_live_start: false,
+            drain_on_live_start: true,
             processor_retry: Duration::from_secs(1),
             position: 0,
             progress,
@@ -554,11 +554,12 @@ where
         self
     }
 
-    /// Also run one processor pass when the runner goes live, to resume
-    /// to-do items left pending by a crash or an earlier failed pass. The
-    /// pass runs after catch-up has finished, never during replay. Off by
-    /// default (matching the Python coordinator, which drains only on live
-    /// events).
+    /// Run one processor pass when the runner goes live, to resume to-do
+    /// items left pending by a crash or an earlier failed pass. The pass runs
+    /// after catch-up has finished, never during replay. On by default: a
+    /// crash after committing a live event but before its pass would
+    /// otherwise strand the item until the next live event. Requires
+    /// `process_pending` to be idempotent (durable dedup), as ADR-025 does.
     pub fn drain_pending_on_live_start(mut self, enabled: bool) -> Self {
         self.drain_on_live_start = enabled;
         self
@@ -664,6 +665,12 @@ where
                 Ok(event) => event,
                 Err(err) => break Err(err),
             };
+            // Backends may match the feed prefix loosely (Postgres uses SQL
+            // LIKE); enforce exact prefix semantics so foreign events never
+            // reach the projection or advance its checkpoint.
+            if !event.aggregate_id.starts_with(&self.key.feed) {
+                continue;
+            }
             let ctx = DispatchContext {
                 is_catching_up: event.global_nonce <= boundary,
                 global_nonce: event.global_nonce,

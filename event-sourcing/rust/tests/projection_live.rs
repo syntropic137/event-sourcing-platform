@@ -917,7 +917,9 @@ async fn live_processor_never_runs_during_replay() {
     let mut runner =
         ProjectionRunner::new(f.port.clone(), store.clone(), TodoProjection, &f.tenant);
     let notifier = Notifier::new(&store, runner.key(), 0);
-    runner = runner.with_live_processor(notifier.clone());
+    runner = runner
+        .with_live_processor(notifier.clone())
+        .drain_pending_on_live_start(false);
     let mut progress = runner.progress();
     let cancel = CancellationToken::new();
     let task = tokio::spawn({
@@ -955,7 +957,8 @@ async fn failed_processor_pass_is_retried_without_new_events() {
     let notifier = Notifier::new(&store, runner.key(), 2);
     runner = runner
         .with_live_processor(notifier.clone())
-        .with_processor_retry_delay(Duration::from_millis(20));
+        .with_processor_retry_delay(Duration::from_millis(20))
+        .drain_pending_on_live_start(false);
     let mut progress = runner.progress();
     let cancel = CancellationToken::new();
     let task = tokio::spawn({
