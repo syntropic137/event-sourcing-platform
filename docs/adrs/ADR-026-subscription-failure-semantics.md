@@ -31,6 +31,10 @@ the checkpoint.
    status channel the protocol does not have. Ending the stream with a
    retryable status is explicit and works with every client.
 
+Scope: this decision covers query failures (#350). Stored rows that cannot be
+decoded are still logged and skipped here; issue #351 replaces that with a
+data-integrity error under the same "stop, never skip" rule.
+
 ## Consumer contract (at-least-once)
 
 - `from_global_nonce` is **inclusive**. Events arrive in `global_nonce` order.
