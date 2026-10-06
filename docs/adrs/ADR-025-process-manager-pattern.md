@@ -94,6 +94,28 @@ allowed is a violation.
 - ProcessManager extends CheckpointedProjection, so existing checkpoint infrastructure is reused
 - The `context` parameter on `handle_event()` is optional for backwards compatibility
 
+## Amendment: drains run off the cursor (syntropic137/syntropic137#1528)
+
+The coordinator originally awaited `process_pending()` inline after a
+live event. Every projection at head shares one subscription track and so
+one cursor, so a single slow ProcessManager (6-25s per drain in
+production) held every read model on that track to its pace.
+
+`process_pending()` now runs on a per-ProcessManager drain task
+(`event_sourcing/subscriptions/drain.py`). The coordinator wakes it after
+the live event is handled and checkpointed, and never awaits it. Wakes
+coalesce, drains are single-flight per ProcessManager, and a failed drain
+is logged without stopping the task. The catch-up gate is re-checked
+on the ProcessManager's track immediately before each call, so a wake
+raised while live and consumed after the track re-entered catch-up does
+nothing. Rebuilding a ProcessManager, or re-planning it onto a catching-up
+track, cancels its in-flight drain first. `stop()` cancels and awaits all
+drains, and so does any exit from `start()`.
+
+Consequence: returning from `dispatch_event()` no longer means
+`process_pending()` has run. Tooling that observes it waits on
+`SubscriptionCoordinator.wait_for_process_managers()`.
+
 ## References
 
 - Martin Dilger, *Understanding Event Sourcing*, Ch. 37

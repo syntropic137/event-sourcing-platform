@@ -191,6 +191,23 @@ jobs:
   python_sdk_fast:
     name: SDK (Python) • qa-fast
     runs-on: ubuntu-latest
+    # The event-store contract suite (tests/contract) holds MemoryEventStoreClient
+    # to the real server. It runs against eventstore-bin built from THIS commit,
+    # on both backends; under CI an unset ESP_EVENT_STORE_ADDRESS fails (#344).
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+        env:
+          POSTGRES_USER: eventstore
+          POSTGRES_PASSWORD: eventstore-ci
+          POSTGRES_DB: eventstore
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U eventstore"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
@@ -206,17 +223,61 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "event-sourcing/python/uv.lock"
 
-      - name: Python SDK QA
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: "event-store -> target"
+          shared-key: "event-store-bin"
+          cache-targets: true
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Build event store server
+        working-directory: event-store
+        run: cargo build -p eventstore-bin
+
+      - name: Start event store servers (memory + postgres backends)
+        working-directory: event-store
+        env:
+          DATABASE_URL: postgres://eventstore:eventstore-ci@localhost:5432/eventstore
+        run: |
+          BACKEND=memory BIND_ADDR=127.0.0.1:50051 nohup ./target/debug/eventstore-bin > "$RUNNER_TEMP/es-memory.log" 2>&1 &
+          BACKEND=postgres BIND_ADDR=127.0.0.1:50052 nohup ./target/debug/eventstore-bin > "$RUNNER_TEMP/es-postgres.log" 2>&1 &
+          for port in 50051 50052; do
+            timeout 60 bash -c "until (exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null; do sleep 0.5; done" \
+              || { echo "event store on :$port did not start"; cat "$RUNNER_TEMP"/es-*.log; exit 1; }
+            echo "event store listening on :$port"
+          done
+
+      - name: Python SDK QA (contract vs memory-backend server)
+        env:
+          ESP_EVENT_STORE_ADDRESS: 127.0.0.1:50051
         run: make -C event-sourcing/python qa
+
+      - name: Event store contract vs postgres-backend server
+        working-directory: event-sourcing/python
+        env:
+          ESP_EVENT_STORE_ADDRESS: 127.0.0.1:50052
+        run: uv run pytest tests/contract -m integration -v --no-cov -p no:cacheprovider
+
+      - name: Event store server logs
+        if: failure()
+        run: cat "$RUNNER_TEMP"/es-*.log
 
       - name: Object ratchet — no increases allowed
         if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          git fetch origin ${{ github.base_ref }} --depth=1
+          git fetch origin "$BASE_REF" --depth=1
           branch_max=$(grep '^OBJECT_RATCHET_MAX[[:space:]]*:=' event-sourcing/python/Makefile | head -n1 | grep -oE '[0-9]+')
-          base_max=$(git show origin/${{ github.base_ref }}:event-sourcing/python/Makefile \
+          base_max=$(git show "origin/${BASE_REF}:event-sourcing/python/Makefile" \
             | grep '^OBJECT_RATCHET_MAX[[:space:]]*:=' | head -n1 | grep -oE '[0-9]+')
-          echo "Base (${{ github.base_ref }}): ${base_max}  PR branch: ${branch_max}"
+          echo "Base (${BASE_REF}): ${base_max}  PR branch: ${branch_max}"
           if [ "$branch_max" -gt "$base_max" ]; then
             echo "❌ OBJECT_RATCHET_MAX increased from ${base_max} → ${branch_max}."
             echo "The ratchet only goes down. Replace object annotations with concrete types."

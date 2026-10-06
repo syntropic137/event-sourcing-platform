@@ -428,11 +428,7 @@ impl RequireAggregatesInDomainRootRule {
             .and_then(|n| n.to_str())
             .map(|name| {
                 // Remove extension and "Aggregate" suffix
-                name.split('.')
-                    .next()
-                    .unwrap_or(name)
-                    .trim_end_matches("Aggregate")
-                    .to_string()
+                name.split('.').next().unwrap_or(name).trim_end_matches("Aggregate").to_string()
             })
             .unwrap_or_default()
     }
@@ -466,7 +462,8 @@ impl ValidationRule for RequireAggregatesInDomainRootRule {
                         let path = entry.path();
                         if path.is_file() && self.is_aggregate_file(&path, ctx) {
                             let agg_name = self.extract_aggregate_name(&path);
-                            let suggested_folder = domain_path.join(format!("aggregate_{}", agg_name.to_lowercase()));
+                            let suggested_folder =
+                                domain_path.join(format!("aggregate_{}", agg_name.to_lowercase()));
                             let suggested_path = suggested_folder.join(path.file_name().unwrap());
 
                             report.errors.push(ValidationIssue {
@@ -501,7 +498,8 @@ impl ValidationRule for RequireAggregatesInDomainRootRule {
                         let path = entry.path();
                         if path.is_file() && self.is_aggregate_file(&path, ctx) {
                             let agg_name = self.extract_aggregate_name(&path);
-                            let suggested_folder = domain_path.join(format!("aggregate_{}", agg_name.to_lowercase()));
+                            let suggested_folder =
+                                domain_path.join(format!("aggregate_{}", agg_name.to_lowercase()));
                             let suggested_path = suggested_folder.join(path.file_name().unwrap());
 
                             report.errors.push(ValidationIssue {
@@ -571,10 +569,8 @@ impl RequireAggregatesInDomainRootRule {
             if let Ok(entries) = std::fs::read_dir(path) {
                 for entry in entries.flatten() {
                     let entry_path = entry.path();
-                    let subfolder_name = entry_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("");
+                    let subfolder_name =
+                        entry_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
                     if entry_path.is_dir()
                         && subfolder_name != "commands"
@@ -1328,53 +1324,6 @@ impl ValidationRule for RequireAggregateFolderConventionRule {
 }
 
 impl RequireAggregateFolderConventionRule {
-    fn check_aggregates_in_domain_root(
-        &self,
-        domain_path: &Path,
-        context_name: &str,
-        ctx: &ValidationContext,
-        report: &mut EnhancedValidationReport,
-    ) -> Result<()> {
-        if let Ok(entries) = std::fs::read_dir(domain_path) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-
-                if path.is_file() && self.is_aggregate_file(&path, ctx) {
-                    let file_name = path.file_name().unwrap().to_string_lossy();
-
-                    // Extract aggregate name from file name (e.g., "WorkspaceAggregate.py" -> "workspace")
-                    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    let aggregate_name =
-                        file_stem.strip_suffix("Aggregate").unwrap_or(file_stem).to_lowercase();
-
-                    let suggested_folder = format!("aggregate_{aggregate_name}");
-                    let suggested_path = domain_path.join(&suggested_folder).join(&*file_name);
-
-                    report.warnings.push(ValidationIssue {
-                        path: path.clone(),
-                        code: self.code().to_string(),
-                        severity: Severity::Warning,
-                        message: format!(
-                            "Aggregate '{file_name}' in context '{context_name}' is directly in domain/ root. \
-                             Per ADR-020, aggregates should be in aggregate_<name>/ folders \
-                             for better organization and co-location of related entities/VOs."
-                        ),
-                        suggestions: vec![Suggestion::manual(format!(
-                            "Move to aggregate_* folder:\n\
-                             mkdir -p {}\n\
-                             git mv {} {}",
-                            domain_path.join(&suggested_folder).display(),
-                            path.display(),
-                            suggested_path.display()
-                        ))],
-                    });
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     fn check_aggregate_folder_contents(
         &self,
         domain_path: &Path,
@@ -1879,12 +1828,14 @@ mod tests {
 
         assert!(RequireCommandsInDomainRule
             .is_command_file(Path::new("domain/commands/foo_command.rs"), &ctx));
-        assert!(RequireEventsInDomainRule
-            .is_event_file(Path::new("domain/events/bar_event.rs"), &ctx));
+        assert!(
+            RequireEventsInDomainRule.is_event_file(Path::new("domain/events/bar_event.rs"), &ctx)
+        );
         assert!(RequireAggregatesInDomainRootRule
             .is_aggregate_file(Path::new("domain/baz_aggregate.rs"), &ctx));
-        assert!(RequirePortsInPortsFolderRule
-            .is_port_file(Path::new("ports/knowledge_port.rs"), &ctx));
+        assert!(
+            RequirePortsInPortsFolderRule.is_port_file(Path::new("ports/knowledge_port.rs"), &ctx)
+        );
     }
 
     #[test]
@@ -1895,8 +1846,7 @@ mod tests {
         let ctx = ValidationContext::new(config, root);
 
         // Wrong extension is not a Rust artifact.
-        assert!(!RequireCommandsInDomainRule
-            .is_command_file(Path::new("foo_command.py"), &ctx));
+        assert!(!RequireCommandsInDomainRule.is_command_file(Path::new("foo_command.py"), &ctx));
         // A plain module file is not an artifact.
         assert!(!RequireEventsInDomainRule.is_event_file(Path::new("mod.rs"), &ctx));
         // PascalCase-only file is not detected under the snake_case convention.
@@ -1912,10 +1862,8 @@ mod tests {
         let ctx = ValidationContext::new(config, root);
 
         // Under snake_case, both `*_port` and the legacy `*Port` stems match.
-        assert!(RequirePortsInPortsFolderRule
-            .is_port_file(Path::new("ports/github_port.rs"), &ctx));
-        assert!(RequirePortsInPortsFolderRule
-            .is_port_file(Path::new("ports/GitHubPort.rs"), &ctx));
+        assert!(RequirePortsInPortsFolderRule.is_port_file(Path::new("ports/github_port.rs"), &ctx));
+        assert!(RequirePortsInPortsFolderRule.is_port_file(Path::new("ports/GitHubPort.rs"), &ctx));
     }
 
     #[test]
@@ -1943,10 +1891,7 @@ mod tests {
         assert_eq!(report.errors[0].code, "VSA025");
         // The message and suggestion reflect the snake_case `_port` convention.
         assert!(report.errors[0].message.contains("_port"));
-        assert!(report.errors[0]
-            .path
-            .to_string_lossy()
-            .ends_with("knowledge_repo.rs"));
+        assert!(report.errors[0].path.to_string_lossy().ends_with("knowledge_repo.rs"));
     }
 
     #[test]
@@ -1957,16 +1902,14 @@ mod tests {
         let config = create_test_config(root.clone(), "typescript");
         let ctx = ValidationContext::new(config, root);
 
-        assert!(RequireCommandsInDomainRule
-            .is_command_file(Path::new("CreateFooCommand.ts"), &ctx));
-        assert!(RequireEventsInDomainRule
-            .is_event_file(Path::new("FooCreatedEvent.ts"), &ctx));
-        assert!(RequireAggregatesInDomainRootRule
-            .is_aggregate_file(Path::new("FooAggregate.ts"), &ctx));
+        assert!(RequireCommandsInDomainRule.is_command_file(Path::new("CreateFooCommand.ts"), &ctx));
+        assert!(RequireEventsInDomainRule.is_event_file(Path::new("FooCreatedEvent.ts"), &ctx));
+        assert!(
+            RequireAggregatesInDomainRootRule.is_aggregate_file(Path::new("FooAggregate.ts"), &ctx)
+        );
         assert!(RequirePortsInPortsFolderRule.is_port_file(Path::new("FooPort.ts"), &ctx));
 
         // snake_case stems are NOT matched under the pascal_case default.
-        assert!(!RequireCommandsInDomainRule
-            .is_command_file(Path::new("foo_command.ts"), &ctx));
+        assert!(!RequireCommandsInDomainRule.is_command_file(Path::new("foo_command.ts"), &ctx));
     }
 }
