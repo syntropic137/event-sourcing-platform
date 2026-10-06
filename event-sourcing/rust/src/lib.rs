@@ -103,7 +103,8 @@
 //! - [`event`] - Event definitions and metadata handling
 //! - [`repository`] - Event store repository: load/replay, save with optimistic
 //!   concurrency, idempotent retry of unknown-outcome saves
-//! - [`projection`] - Projection building and read model management
+//! - [`projection`] - Checkpointed projection runner (catch-up, live, resume,
+//!   rebuild) with transactional and external checkpoint stores
 //! - [`client`] - gRPC event store client (layered on `eventstore-sdk-rs`) and
 //!   the [`client::EventStorePort`] trait used for testing and decoration
 

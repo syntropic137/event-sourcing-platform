@@ -142,9 +142,9 @@ impl RecordedEvent {
 
     /// Convert a wire event. Fails if metadata is missing.
     pub fn from_proto(data: proto::EventData) -> Result<Self> {
-        let m = data.meta.ok_or_else(|| {
-            Error::Repository(anyhow::anyhow!("event without metadata in feed"))
-        })?;
+        let m = data
+            .meta
+            .ok_or_else(|| Error::Repository(anyhow::anyhow!("event without metadata in feed")))?;
         Ok(Self {
             event_id: m.event_id,
             event_type: m.event_type,
@@ -409,7 +409,9 @@ impl<S: Clone + Default + Send + Sync> ProjectionStore for InMemoryProjectionSto
     }
 
     async fn begin(&self, key: &CheckpointKey) -> Result<InMemoryTx<S>> {
-        Ok(InMemoryTx { state: self.state(key) })
+        Ok(InMemoryTx {
+            state: self.state(key),
+        })
     }
 
     async fn commit(&self, tx: InMemoryTx<S>, key: &CheckpointKey, position: u64) -> Result<()> {
@@ -584,7 +586,10 @@ where
             .await?;
         self.publish(true);
 
-        let drain = self.processor.clone().map(|p| Drain::spawn(p, cancel.child_token()));
+        let drain = self
+            .processor
+            .clone()
+            .map(|p| Drain::spawn(p, cancel.child_token()));
         let result = loop {
             let item = tokio::select! {
                 biased;

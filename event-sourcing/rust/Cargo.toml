@@ -54,6 +54,7 @@ eventstore-backend-memory = { path = "../../event-store/eventstore-backend-memor
 eventstore-backend-postgres = { path = "../../event-store/eventstore-backend-postgres" }
 eventstore-bin = { path = "../../event-store/eventstore-bin" }
 portpicker = "0.1.1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
 
 [features]
 default = []

@@ -250,7 +250,11 @@ async fn resumes_from_persisted_checkpoint() {
         &f.tenant,
     );
     second.catch_up().await.unwrap();
-    assert_eq!(probe2.calls.load(Ordering::SeqCst), 0, "nothing reprocessed");
+    assert_eq!(
+        probe2.calls.load(Ordering::SeqCst),
+        0,
+        "nothing reprocessed"
+    );
 
     let g3 = append(&f.client, &f.tenant, "a", 3, "Deposited", 4).await;
     assert_eq!(second.catch_up().await.unwrap(), g3);
@@ -389,7 +393,11 @@ async fn failed_handler_stops_without_advancing_and_resumes() {
         other => panic!("expected ProjectionFailed, got {other:?}"),
     }
     assert_eq!(store.load_checkpoint(&key).await.unwrap(), Some(g1));
-    assert_eq!(store.state(&key).by_account["a"], 1, "failed event rolled back");
+    assert_eq!(
+        store.state(&key).by_account["a"],
+        1,
+        "failed event rolled back"
+    );
 
     // Restart with a fixed handler: continues at the failed event.
     let probe = Probe::default();
@@ -446,8 +454,7 @@ async fn subscription_errors_and_end_of_stream_propagate() {
         (SubscribeFault::Error, tonic::Code::Internal),
         (SubscribeFault::End, tonic::Code::Unavailable),
     ] {
-        let port: Arc<dyn EventStorePort> =
-            Arc::new(FaultySubscribePort(f.client.clone(), fault));
+        let port: Arc<dyn EventStorePort> = Arc::new(FaultySubscribePort(f.client.clone(), fault));
         let store = Arc::new(MemStore::new());
         let mut runner = ProjectionRunner::new(
             port,
@@ -461,10 +468,7 @@ async fn subscription_errors_and_end_of_stream_propagate() {
             .expect_err("stream failure must surface");
         assert_eq!(err.status_code(), Some(code), "{err:?}");
         // Catch-up work before the failure stays committed.
-        assert_eq!(
-            store.load_checkpoint(runner.key()).await.unwrap(),
-            Some(g1)
-        );
+        assert_eq!(store.load_checkpoint(runner.key()).await.unwrap(), Some(g1));
     }
 }
 
@@ -485,7 +489,11 @@ impl ProjectionStore for CrashOnCommit {
         self.inner.begin(key).await
     }
     async fn commit(&self, tx: Self::Tx, key: &CheckpointKey, position: u64) -> Result<()> {
-        if self.crash_at.compare_exchange(position, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+        if self
+            .crash_at
+            .compare_exchange(position, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
             return Err(Error::from(tonic::Status::unavailable("crash")));
         }
         self.inner.commit(tx, key, position).await
@@ -566,7 +574,11 @@ impl CheckpointStore for CrashOnSave {
         self.inner.load(key).await
     }
     async fn save(&self, key: &CheckpointKey, position: u64) -> Result<()> {
-        if self.crash_at.compare_exchange(position, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+        if self
+            .crash_at
+            .compare_exchange(position, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
             return Err(Error::from(tonic::Status::unavailable("crash")));
         }
         self.inner.save(key, position).await
@@ -621,7 +633,7 @@ impl CheckpointedProjection<ExtStore> for IndexProjection {
 #[tokio::test]
 async fn restart_between_processing_and_checkpoint_external_is_idempotent() {
     let f = fixture().await;
-    append(&f.client, &f.tenant, "a", 1, "Deposited", 1).await;
+    let g1 = append(&f.client, &f.tenant, "a", 1, "Deposited", 1).await;
     let g2 = append(&f.client, &f.tenant, "a", 2, "Deposited", 2).await;
     let g3 = append(&f.client, &f.tenant, "a", 3, "Deposited", 4).await;
     let store = Arc::new(ExternalCheckpoints::new(CrashOnSave {
@@ -639,9 +651,16 @@ async fn restart_between_processing_and_checkpoint_external_is_idempotent() {
         &f.tenant,
     );
     let key = runner.key().clone();
-    runner.catch_up().await.expect_err("crash before checkpoint");
-    assert_eq!(index.docs.lock().unwrap().len(), 2, "external write happened");
-    assert_eq!(store.load_checkpoint(&key).await.unwrap(), Some(g2 - 1));
+    runner
+        .catch_up()
+        .await
+        .expect_err("crash before checkpoint");
+    assert_eq!(
+        index.docs.lock().unwrap().len(),
+        2,
+        "external write happened"
+    );
+    assert_eq!(store.load_checkpoint(&key).await.unwrap(), Some(g1));
 
     let mut restarted = ProjectionRunner::new(
         f.port.clone(),
@@ -652,7 +671,11 @@ async fn restart_between_processing_and_checkpoint_external_is_idempotent() {
         &f.tenant,
     );
     assert_eq!(restarted.catch_up().await.unwrap(), g3);
-    assert_eq!(index.writes.load(Ordering::SeqCst), 4, "event 2 redelivered");
+    assert_eq!(
+        index.writes.load(Ordering::SeqCst),
+        4,
+        "event 2 redelivered"
+    );
     let docs = index.docs.lock().unwrap();
     assert_eq!(docs.len(), 3, "idempotent upsert: no duplicate documents");
     assert_eq!(docs.values().sum::<i64>(), 7);
@@ -698,9 +721,18 @@ async fn tenants_and_projections_have_independent_positions() {
     a_other.catch_up().await.unwrap();
     let a3 = append(&f.client, &f.tenant, "a", 3, "Deposited", 4).await;
     a_balances.catch_up().await.unwrap();
-    assert_eq!(store.load_checkpoint(a_balances.key()).await.unwrap(), Some(a3));
-    assert_eq!(store.load_checkpoint(a_other.key()).await.unwrap(), Some(a2));
-    assert_eq!(store.load_checkpoint(b_balances.key()).await.unwrap(), Some(b1));
+    assert_eq!(
+        store.load_checkpoint(a_balances.key()).await.unwrap(),
+        Some(a3)
+    );
+    assert_eq!(
+        store.load_checkpoint(a_other.key()).await.unwrap(),
+        Some(a2)
+    );
+    assert_eq!(
+        store.load_checkpoint(b_balances.key()).await.unwrap(),
+        Some(b1)
+    );
 }
 
 #[tokio::test]
@@ -734,7 +766,15 @@ async fn rebuild_is_equivalent_and_versions_build_independently() {
     let f = fixture().await;
     for (i, amount) in [3, 5, 7, 11].into_iter().enumerate() {
         let id = if i % 2 == 0 { "a" } else { "b" };
-        append(&f.client, &f.tenant, id, (i / 2 + 1) as u64, "Deposited", amount).await;
+        append(
+            &f.client,
+            &f.tenant,
+            id,
+            (i / 2 + 1) as u64,
+            "Deposited",
+            amount,
+        )
+        .await;
     }
     let store = Arc::new(MemStore::new());
     let mut v1 = ProjectionRunner::new(
@@ -834,7 +874,8 @@ async fn live_processor_never_runs_during_replay() {
         last = append(&f.client, &f.tenant, "a", nonce, "Deposited", 1).await;
     }
     let store = Arc::new(TodoStore::new());
-    let mut runner = ProjectionRunner::new(f.port.clone(), store.clone(), TodoProjection, &f.tenant);
+    let mut runner =
+        ProjectionRunner::new(f.port.clone(), store.clone(), TodoProjection, &f.tenant);
     let notifier = Arc::new(Notifier {
         passes: AtomicUsize::new(0),
         sent: Mutex::new(vec![]),
@@ -851,7 +892,11 @@ async fn live_processor_never_runs_during_replay() {
 
     wait_for(&mut progress, |p| p.is_live && p.position == last).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(notifier.passes.load(Ordering::SeqCst), 0, "no side effects in replay");
+    assert_eq!(
+        notifier.passes.load(Ordering::SeqCst),
+        0,
+        "no side effects in replay"
+    );
 
     append(&f.client, &f.tenant, "a", 6, "Deposited", 1).await;
     tokio::time::timeout(Duration::from_secs(5), async {
