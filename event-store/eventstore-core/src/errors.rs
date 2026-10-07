@@ -5,6 +5,10 @@ use thiserror::Error;
 
 use eventstore_proto::gen as proto;
 
+/// gRPC trailing-metadata key carrying the `global_nonce` of an undecodable
+/// stored event on a `DATA_LOSS` status (decimal ASCII).
+pub const UNDECODABLE_GLOBAL_NONCE_KEY: &str = "esp-undecodable-global-nonce";
+
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("not found: {0}")]
@@ -76,8 +80,12 @@ impl StoreError {
                 tonic::Status::new(Code::ResourceExhausted, msg.clone())
             }
             StoreError::Unavailable(msg) => tonic::Status::new(Code::Unavailable, msg.clone()),
-            StoreError::UndecodableEvent { .. } => {
-                tonic::Status::new(Code::DataLoss, self.to_string())
+            StoreError::UndecodableEvent { global_nonce, .. } => {
+                // The position is also sent as metadata so clients need not
+                // parse the message (e.g. to find the head, or to skip it).
+                let mut metadata = tonic::metadata::MetadataMap::new();
+                metadata.insert(UNDECODABLE_GLOBAL_NONCE_KEY, (*global_nonce).into());
+                tonic::Status::with_metadata(Code::DataLoss, self.to_string(), metadata)
             }
             StoreError::Internal(err) => tonic::Status::new(Code::Internal, err.to_string()),
         }
@@ -104,5 +112,12 @@ mod tests {
         .to_status();
         assert_eq!(status.code(), tonic::Code::DataLoss);
         assert!(status.message().contains("global_nonce 42"), "{status:?}");
+        let nonce = status
+            .metadata()
+            .get(UNDECODABLE_GLOBAL_NONCE_KEY)
+            .expect("position metadata")
+            .to_str()
+            .unwrap();
+        assert_eq!(nonce, "42");
     }
 }
