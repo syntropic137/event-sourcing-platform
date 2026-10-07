@@ -12,6 +12,14 @@ import type {
   SubscribeResponse,
 } from "./gen/eventstore/v1/eventstore.js";
 import { EventMetadata } from "./gen/eventstore/v1/eventstore.js";
+import {
+  LEGACY_SERVER_INFO,
+  assertCapabilities,
+  assertMinVersion,
+  fromServerInfoResponse,
+  isUnimplemented,
+  type ServerInfo,
+} from "./server-info.js";
 import { streamToAsyncIterator } from "./stream-iterator.js";
 
 export interface ClientOptions {
@@ -59,6 +67,48 @@ export class EventStoreClientTS {
         resolve(resp);
       });
     });
+  }
+
+  /**
+   * Server version, backend, and capability flags. A server older than
+   * v0.17.0 answers UNIMPLEMENTED; that resolves to a legacy ServerInfo
+   * (legacy: true, no capabilities) rather than rejecting. Other errors reject.
+   */
+  serverInfo(): Promise<ServerInfo> {
+    return new Promise((resolve, reject) => {
+      this.client.getServerInfo({}, (err, resp) => {
+        if (err) {
+          if (isUnimplemented(err)) return resolve({ ...LEGACY_SERVER_INFO, capabilities: [] });
+          return reject(err);
+        }
+        resolve(fromServerInfoResponse(resp));
+      });
+    });
+  }
+
+  /**
+   * Reject with CompatibilityError unless the server advertises every
+   * capability in `required`. Legacy servers advertise none.
+   */
+  async requireCapabilities(required: readonly string[]): Promise<ServerInfo> {
+    const info = await this.serverInfo();
+    assertCapabilities(info, required);
+    return info;
+  }
+
+  /**
+   * Reject with CompatibilityError unless the server version is >= `min`.
+   * Legacy servers always fail. Prefer requireCapabilities.
+   */
+  async requireMinVersion(min: string): Promise<ServerInfo> {
+    const info = await this.serverInfo();
+    assertMinVersion(info, min);
+    return info;
+  }
+
+  /** Close the underlying channel. */
+  close(): void {
+    this.client.close();
   }
 
   /**

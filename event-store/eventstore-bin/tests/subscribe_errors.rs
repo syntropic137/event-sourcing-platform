@@ -32,6 +32,21 @@ async fn postgres_subscription_query_failure_reaches_client_as_unavailable() {
     let mut client = EventStoreClient::connect(format!("http://{addr}"))
         .await
         .expect("connect client");
+
+    // The same server that surfaces the failure below advertises it.
+    let info = client
+        .get_server_info(eventstore_proto::gen::GetServerInfoRequest {})
+        .await
+        .expect("GetServerInfo needs no database")
+        .into_inner();
+    assert_eq!(info.backend, "postgres");
+    for cap in [
+        eventstore_core::capabilities::SUBSCRIPTION_ERRORS_SURFACED,
+        eventstore_core::capabilities::UNDECODABLE_EVENTS_SURFACED,
+    ] {
+        assert!(info.capabilities.iter().any(|c| c == cap), "{cap}");
+    }
+
     let mut stream = client
         .subscribe(SubscribeRequest {
             tenant_id: "tenant".into(),

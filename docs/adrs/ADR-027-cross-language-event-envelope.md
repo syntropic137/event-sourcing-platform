@@ -74,7 +74,8 @@ reads; Rust writes, TS/Python read).
 
 ## Known deviations in existing SDKs
 
-Recorded so they can be fixed without changing the canonical envelope:
+Recorded so they can be fixed without changing the canonical envelope.
+Tracked in #382 (TS/Python envelope deviations).
 
 - **TypeScript payload echoes class fields.** `BaseDomainEvent.toJson()`
   serializes the instance, so `eventType` and `schemaVersion` (class fields)

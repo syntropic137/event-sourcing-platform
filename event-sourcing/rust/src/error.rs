@@ -118,6 +118,16 @@ pub enum Error {
         received: u64,
     },
 
+    /// The event store does not meet a stated capability or version floor
+    /// (`EventStoreClient::require_capabilities` / `require_min_version`).
+    #[error("{0}")]
+    Incompatible(eventstore_sdk_rs::CompatibilityError),
+
+    /// Invalid client configuration (endpoint, TLS material, credentials).
+    /// Never contains secret values.
+    #[error("{0}")]
+    Config(String),
+
     /// Repository error
     #[error("Repository error: {0}")]
     Repository(#[from] anyhow::Error),

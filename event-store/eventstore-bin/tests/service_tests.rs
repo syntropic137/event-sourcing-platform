@@ -17,6 +17,17 @@ use tonic::{Request, Response, Status};
 
 const TENANT: &str = "tenant-service";
 
+/// Every capability both built-in backends advertise. Each is tied to a
+/// behavior test: commit order (memory `live_order.rs`, postgres
+/// `it_commit_order.rs`), subscription errors (`subscribe_errors.rs`,
+/// `it_subscribe_faults.rs`, memory lag test), undecodable events
+/// (`subscribe_errors.rs`, `it_subscribe_undecodable.rs`).
+const ALL_CAPABILITIES: [&str; 3] = [
+    eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE,
+    eventstore_core::capabilities::SUBSCRIPTION_ERRORS_SURFACED,
+    eventstore_core::capabilities::UNDECODABLE_EVENTS_SURFACED,
+];
+
 struct Service {
     store: Arc<dyn EventStoreTrait>,
 }
@@ -89,6 +100,21 @@ async fn service_append_and_read_with_postgres_backend() {
     assert_eq!(out.events.len(), 2);
     assert_eq!(out.events[0].payload, b"pg1");
     assert_eq!(out.events[1].payload, b"pg2");
+
+    // GetServerInfo reports the Postgres backend and its #337 guarantee.
+    let info = client
+        .get_server_info(proto::GetServerInfoRequest {})
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(info.backend, "postgres");
+    for cap in ALL_CAPABILITIES {
+        assert!(
+            info.capabilities.iter().any(|c| c == cap),
+            "postgres must advertise {cap}: {:?}",
+            info.capabilities
+        );
+    }
 }
 
 #[tonic::async_trait]
@@ -127,6 +153,15 @@ impl EventStore for Service {
             .await
             .map(Response::new)
             .map_err(|e| e.to_status())
+    }
+
+    async fn get_server_info(
+        &self,
+        _request: Request<proto::GetServerInfoRequest>,
+    ) -> Result<Response<proto::GetServerInfoResponse>, Status> {
+        Ok(Response::new(eventstore_bin::server_info(
+            self.store.as_ref(),
+        )))
     }
 
     type SubscribeStream =
@@ -193,6 +228,29 @@ fn make_event(
             ..Default::default()
         }),
         payload: payload.to_vec(),
+    }
+}
+
+#[tokio::test]
+async fn service_get_server_info_memory_backend() {
+    let (endpoint, _jh) = spawn_server().await;
+    let mut client = EventStoreClient::connect(endpoint).await.unwrap();
+
+    let info = client
+        .get_server_info(proto::GetServerInfoRequest {})
+        .await
+        .expect("GetServerInfo should be implemented")
+        .into_inner();
+
+    assert_eq!(info.server_version, eventstore_bin::SERVER_VERSION);
+    assert_eq!(info.api_version, eventstore_core::API_VERSION);
+    assert_eq!(info.backend, "memory");
+    for cap in ALL_CAPABILITIES {
+        assert!(
+            info.capabilities.iter().any(|c| c == cap),
+            "memory must advertise {cap}: {:?}",
+            info.capabilities
+        );
     }
 }
 
