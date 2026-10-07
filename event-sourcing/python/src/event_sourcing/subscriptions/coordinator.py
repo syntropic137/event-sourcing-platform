@@ -614,7 +614,10 @@ class SubscriptionCoordinator:
             # projections whose checkpoint an operator moved past it resume
             # (ADR-026). Anyone still before it hits the error again on
             # subscribe, which is the intended stop.
-            logger.warning(
+            # Once per position: while halted there, re-checks repeat it.
+            already_halted_here = self._halt is not None and self._halt.global_nonce == e.global_nonce
+            logger.log(
+                logging.DEBUG if already_halted_here else logging.WARNING,
                 "Head event is undecodable; using its position as the live boundary",
                 extra={"global_nonce": e.global_nonce},
             )

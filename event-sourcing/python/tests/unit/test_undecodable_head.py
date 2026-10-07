@@ -12,6 +12,7 @@ retried forever.
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
@@ -109,6 +110,29 @@ class TestGrpcClientMapsDataLoss:
             async for _ in client.subscribe(from_global_nonce=0):
                 pass
         assert info.value.global_nonce == 7
+
+
+    async def test_undecodable_is_raised_without_client_error_logs(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The typed error is the signal; the coordinator logs one ERROR per
+        # position. The client must not add an ERROR per attempt (#360).
+        async def stream() -> AsyncIterator[object]:
+            raise _data_loss(7)
+            yield  # pragma: no cover
+
+        client = GrpcEventStoreClient(address="localhost:50051")
+        client._stub = MagicMock()
+        client._stub.Subscribe = MagicMock(return_value=stream())
+        client._stub.ReadAll = MagicMock(side_effect=_data_loss(7))
+        client._stub.ReadStream = MagicMock(side_effect=_data_loss(7))
+        with caplog.at_level(logging.DEBUG, logger="event_sourcing.client.grpc_client"):
+            with pytest.raises(UndecodableEventError):
+                async for _ in client.subscribe(from_global_nonce=0):
+                    pass
+            with pytest.raises(UndecodableEventError):
+                await client.read_all(from_global_nonce=0)
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
 
 
 class CorruptHeadStore:
@@ -375,6 +399,17 @@ class TestDataLossHaltsInsteadOfRetrying:
             run.store.publish(CORRUPT_HEAD + 1)
             await run.until(lambda: CORRUPT_HEAD + 1 in run.projections["behind"].handled)
             assert run.coordinator.is_healthy
+
+    async def test_recheck_mode_logs_one_error_per_position(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG, logger="event_sourcing"):
+            async with _Running({"behind": CORRUPT_HEAD - 2}, recheck=0.02) as run:
+                await run.until(lambda: len(run.store.blocked_attempts) >= 5)
+        loud = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert [r.levelno for r in loud] == [logging.WARNING, logging.ERROR], [
+            r.getMessage() for r in loud
+        ]
 
     async def test_recheck_mode_resumes_after_row_repair(self) -> None:
         async with _Running({"behind": CORRUPT_HEAD - 2}, recheck=0.05) as run:
