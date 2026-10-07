@@ -27,7 +27,8 @@
   tags: [base, system]
 
 - name: Include gateway TLS tasks (#301)
-  ansible.builtin.include_tasks: gateway-tls.yml
+  # import (static), so the tags below reach every task in the file.
+  ansible.builtin.import_tasks: gateway-tls.yml
   when: esp_gateway_tls | bool
   tags: [docker, compose, deploy, tls]
 

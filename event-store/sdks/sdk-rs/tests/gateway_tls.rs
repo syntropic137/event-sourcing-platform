@@ -81,9 +81,17 @@ fn tls_dir(tag: &str) -> PathBuf {
 async fn spawn_store() -> u16 {
     let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let svc = EventStoreServer::new(eventstore_bin::Service {
-        store: eventstore_backend_memory::InMemoryStore::new(),
-    });
+    // The gateway must strip the credential before the (unauthenticated,
+    // plaintext) upstream hop; any request still carrying it is rejected.
+    let svc = EventStoreServer::with_interceptor(
+        eventstore_bin::Service {
+            store: eventstore_backend_memory::InMemoryStore::new(),
+        },
+        |req: tonic::Request<()>| match req.metadata().get("authorization") {
+            Some(_) => Err(Status::permission_denied("authorization leaked upstream")),
+            None => Ok(req),
+        },
+    );
     tokio::spawn(
         Server::builder()
             .add_service(svc)
@@ -273,11 +281,20 @@ async fn sdk_through_tls_gateway() {
     let (ca2, cert2, key2) = pki();
     write_pair(&dir, &cert2, &key2);
     let mut rotated = wait_ready(|| client(port, &ca2)).await;
-    rotated.append(append("after-rotate", 0)).await.unwrap();
     client(port, &ca)
         .connect()
         .await
         .expect_err("old CA must no longer validate the rotated cert");
+
+    // The subscription opened before the reload survives it (graceful
+    // reload: old workers keep serving established connections).
+    rotated.append(append("live-2", 0)).await.unwrap();
+    let msg = timeout(Duration::from_secs(10), sub.message())
+        .await
+        .expect("event after reload within 10s")
+        .expect("stream ok after reload")
+        .expect("stream still open after reload");
+    assert_eq!(msg.event.unwrap().meta.unwrap().aggregate_id, "live-2");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -312,5 +329,9 @@ async fn gateway_fails_closed_without_certificate() {
         "ESP_GATEWAY_PUBLISH_BIND=0.0.0.0",
         &img,
     ]);
+    assert!(!out.status.success(), "{out:?}");
+
+    // ...and so is an unknown publish address.
+    let out = docker(&["run", "--rm", "-e", "ESP_GATEWAY_TLS=off", &img]);
     assert!(!out.status.success(), "{out:?}");
 }

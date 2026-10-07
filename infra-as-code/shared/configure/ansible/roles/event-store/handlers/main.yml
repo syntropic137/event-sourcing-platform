@@ -6,10 +6,14 @@
     daemon_reload: true
 
 # The gateway also polls for cert changes; this makes an Ansible-pushed cert
-# take effect immediately. Not fatal if the container is not up yet (it
-# reads the new files when it starts).
+# take effect immediately. Skipped if the container is not running (it
+# reads the files on start, and fails closed if they are bad); a pair that
+# fails `nginx -t` in a running gateway fails the deploy.
 - name: Reload gateway TLS
-  ansible.builtin.command:
-    cmd: docker exec event-store-gateway sh -c "nginx -t -q && nginx -s reload"
-  failed_when: false
+  ansible.builtin.shell:
+    cmd: |
+      if [ "$(docker inspect -f '{{ '{{' }}.State.Running{{ '}}' }}' event-store-gateway 2>/dev/null)" != "true" ]; then
+        echo "gateway not running, skip reload"; exit 0
+      fi
+      docker exec event-store-gateway sh -c 'nginx -t -q && nginx -s reload'
   changed_when: true

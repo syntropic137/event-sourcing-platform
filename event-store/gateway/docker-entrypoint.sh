@@ -26,6 +26,8 @@ if [ -n "${ESP_GATEWAY_PASSWORD:-}" ]; then
     cat > /etc/nginx/auth/auth.conf <<EOF
 auth_basic "Event Store";
 auth_basic_user_file /etc/nginx/auth/htpasswd;
+# The credential stops here: the upstream has no auth and must never see it.
+grpc_set_header Authorization "";
 EOF
     echo "gateway: Basic Auth ENABLED on port 8081 (user=$ESP_GATEWAY_USER)"
 else
@@ -58,12 +60,13 @@ EOF
 off)
     # Plaintext only for a loopback-published port. Compose passes the host
     # bind address as ESP_GATEWAY_PUBLISH_BIND so a LAN-exposed plaintext
-    # gateway is refused instead of silently leaking credentials.
+    # gateway is refused instead of silently leaking credentials. Unset
+    # counts as non-loopback (fail closed).
     case "${ESP_GATEWAY_PUBLISH_BIND:-}" in
-    "" | 127.* | ::1 | "[::1]" | localhost) ;;
+    127.* | ::1 | "[::1]" | localhost) ;;
     *)
         [ "${ESP_GATEWAY_ALLOW_PLAINTEXT_EXTERNAL:-false}" = "true" ] ||
-            die "ESP_GATEWAY_TLS=off with the port published on '$ESP_GATEWAY_PUBLISH_BIND' would send Basic Auth credentials in plaintext. Enable TLS, bind to 127.0.0.1, or set ESP_GATEWAY_ALLOW_PLAINTEXT_EXTERNAL=true if TLS is terminated in front of the gateway."
+            die "ESP_GATEWAY_TLS=off with the port published on '${ESP_GATEWAY_PUBLISH_BIND:-<unknown, set ESP_GATEWAY_PUBLISH_BIND>}' would send Basic Auth credentials in plaintext. Enable TLS, bind to 127.0.0.1, or set ESP_GATEWAY_ALLOW_PLAINTEXT_EXTERNAL=true if TLS is terminated in front of the gateway."
         ;;
     esac
     echo "listen 8081;" > /etc/nginx/auth/listen.conf

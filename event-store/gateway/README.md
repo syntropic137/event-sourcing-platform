@@ -26,7 +26,7 @@ for the prior-art pattern this follows.
 | `ESP_GATEWAY_TLS_CERT` | `/etc/nginx/tls/fullchain.pem` | Server cert chain (PEM, leaf first) |
 | `ESP_GATEWAY_TLS_KEY` | `/etc/nginx/tls/privkey.pem` | Private key (PEM) |
 | `ESP_GATEWAY_TLS_RELOAD_INTERVAL` | `300` | Seconds between checks for a changed cert/key; a change triggers `nginx -t` then a graceful reload. `0` disables the watcher. |
-| `ESP_GATEWAY_PUBLISH_BIND` | *(unset)* | Host address the port is published on (compose passes `ESP_GATEWAY_BIND`). With TLS off, a non-loopback value aborts startup. |
+| `ESP_GATEWAY_PUBLISH_BIND` | *(unset)* | Host address the port is published on (compose passes `ESP_GATEWAY_BIND`). With TLS off, a non-loopback or unset value aborts startup. |
 | `ESP_GATEWAY_ALLOW_PLAINTEXT_EXTERNAL` | `false` | Override the check above, only when TLS is terminated in front of the gateway on a path you trust. |
 
 ## Usage
@@ -56,6 +56,10 @@ For another host pass the out dir and names, e.g.
 `gen-self-signed.sh /etc/event-store/tls es.lan 10.0.0.5`. Give clients
 `ca.pem`. The Proxmox Ansible path does this on the VM by default and fetches
 the CA to `infra-as-code/proxmox/configure/ansible/envs/local/gateway-ca.pem`.
+The cert is valid for 825 days; a playbook run within 30 days of expiry
+reissues it. The CA key is not kept, so a reissue means a new CA that
+clients must trust again (delete `/etc/event-store/tls` on the VM to force a
+reissue, e.g. after changing names). Use Let's Encrypt where that matters.
 
 ### Production: Let's Encrypt
 

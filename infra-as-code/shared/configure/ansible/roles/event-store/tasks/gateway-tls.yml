@@ -39,15 +39,31 @@
   diff: false
   notify: Reload gateway TLS
 
+- name: Check whether the self-signed gateway certificate needs (re)issuing
+  # Missing, or expiring within 30 days. The generator discards its CA key,
+  # so a reissue means a new CA: clients must trust the newly fetched one.
+  # Delete esp_gateway_tls_dir to force a reissue (e.g. changed names).
+  ansible.builtin.command:
+    cmd: >-
+      openssl x509 -checkend 2592000 -noout
+      -in {{ (esp_gateway_tls_dir ~ '/fullchain.pem') | quote }}
+  register: gateway_self_signed_check
+  changed_when: false
+  failed_when: false
+  when:
+    - esp_gateway_tls_self_signed | bool
+    - esp_gateway_tls_cert_src | length == 0
+
 - name: Generate a private CA and gateway certificate on the host
   ansible.builtin.script:
     cmd: >-
       gen-self-signed.sh {{ esp_gateway_tls_dir | quote }}
       {{ esp_gateway_tls_names | map('quote') | join(' ') }}
-    creates: "{{ esp_gateway_tls_dir }}/fullchain.pem"
   when:
     - esp_gateway_tls_self_signed | bool
     - esp_gateway_tls_cert_src | length == 0
+    - gateway_self_signed_check.rc != 0
+  notify: Reload gateway TLS
 
 - name: Fetch the private CA for clients
   ansible.builtin.fetch:
