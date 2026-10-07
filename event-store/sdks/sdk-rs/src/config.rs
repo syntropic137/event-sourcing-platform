@@ -486,8 +486,17 @@ mod tests {
 
     #[test]
     fn https_endpoint_gets_tls_connector() {
-        // Endpoint construction succeeds with TLS for https.
-        ClientConfig::new("https://es:443").endpoint().unwrap();
+        // Endpoint construction succeeds with TLS for https. Uses a custom CA
+        // so the test does not depend on the host's trust store.
+        let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = params
+            .self_signed(&rcgen::KeyPair::generate().unwrap())
+            .unwrap();
+        ClientConfig::new("https://es:443")
+            .tls(TlsConfig::new().ca_certificate_pem(ca.pem()))
+            .endpoint()
+            .unwrap();
     }
 
     #[test]
