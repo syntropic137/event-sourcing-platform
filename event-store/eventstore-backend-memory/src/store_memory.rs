@@ -161,6 +161,16 @@ fn normalize_event(
 
 #[async_trait]
 impl EventStore for InMemoryStore {
+    fn backend_kind(&self) -> &'static str {
+        "memory"
+    }
+
+    fn capabilities(&self) -> Vec<&'static str> {
+        // Appends allocate global nonces and publish them under the same
+        // write lock, so visibility order equals allocation order.
+        vec![eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE]
+    }
+
     async fn append(&self, req: AppendRequest) -> Result<AppendResponse, StoreError> {
         if req.tenant_id.is_empty() {
             return Err(StoreError::Unauthenticated(

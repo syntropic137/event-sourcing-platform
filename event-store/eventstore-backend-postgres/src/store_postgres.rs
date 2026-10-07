@@ -263,6 +263,17 @@ fn map_db_error(e: sqlx::Error) -> StoreError {
 
 #[async_trait]
 impl EventStoreTrait for PostgresStore {
+    fn backend_kind(&self) -> &'static str {
+        "postgres"
+    }
+
+    fn capabilities(&self) -> Vec<&'static str> {
+        // #337: appends take a per-tenant transaction-scoped advisory lock
+        // before allocating global nonces, so within a tenant they become
+        // visible in commit order.
+        vec![eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE]
+    }
+
     async fn append(&self, req: proto::AppendRequest) -> Result<proto::AppendResponse, StoreError> {
         if req.tenant_id.is_empty() {
             return Err(StoreError::Unauthenticated(
