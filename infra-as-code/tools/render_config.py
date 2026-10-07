@@ -24,22 +24,32 @@ def load_yaml(path: Path) -> dict:
         return yaml.safe_load(handle)
 
 
-def write_json(path: Path, data: dict) -> None:
+def _open_private(path: Path):
+    """Open `path` for writing as owner-only (0600).
+
+    Rendered artifacts carry secrets (Postgres/gateway passwords, Proxmox
+    token), so they must not inherit a umask-022 world-readable mode. chmod
+    also covers files that already existed with a looser mode.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    return os.fdopen(fd, "w", encoding="utf-8")
+
+
+def write_json(path: Path, data: dict) -> None:
+    with _open_private(path) as handle:
         json.dump(data, handle, indent=2)
         handle.write("\n")
 
 
 def write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    with _open_private(path) as handle:
         handle.write(content)
 
 
 def write_yaml(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    with _open_private(path) as handle:
         yaml.safe_dump(data, handle, sort_keys=False)
 
 
@@ -101,12 +111,27 @@ def _build_aws_ansible_config(cfg: dict, ansible_env_dir: Path) -> None:
     postgres_cfg = cfg["postgres"]
     event_cfg = cfg["event_store"]
     ansible_cfg = cfg["ansible"]
+    gateway_cfg = cfg.get("gateway", {})
 
     backend_type = postgres_cfg.get("type", "postgres")
     backend_url = postgres_cfg.get("database_url_secret_arn", "")
     database_lookup = backend_url
     if backend_url.startswith("arn:"):
         database_lookup = "{{ lookup('aws_secretsmanager', '%s') }}" % backend_url
+
+    # Gateway credentials (ADR-024) - eventstore-bin has no auth of its own;
+    # the nginx gateway enforces Basic Auth using this credential, and it is
+    # the only component this deployment publishes to the network. A missing
+    # secret_arn must fail rendering, not silently fall back to the role's
+    # default "changeme" password on a network-exposed service.
+    gateway_secret_arn = gateway_cfg.get("secret_arn", "")
+    if not gateway_secret_arn:
+        raise SystemExit(
+            "config error: 'gateway.secret_arn' is required (ADR-024) - "
+            "the gateway is the only publicly reachable port in this "
+            "deployment and must not fall back to a default password"
+        )
+    gateway_password_lookup = "{{ lookup('aws_secretsmanager', '%s') }}" % gateway_secret_arn
 
     service_environment = {
         "BACKEND": backend_type,
@@ -131,6 +156,8 @@ def _build_aws_ansible_config(cfg: dict, ansible_env_dir: Path) -> None:
         "service_name": ansible_cfg["service"]["name"],
         "install_dir": ansible_cfg["service"].get("install_dir", "/opt/event-store"),
         "service_description": ansible_cfg["service"].get("description", "Event Store Service"),
+        "esp_gateway_user": gateway_cfg.get("user", "admin"),
+        "esp_gateway_password": gateway_password_lookup,
     }
     write_yaml(ansible_env_dir / "group_vars" / "all.yml", group_vars_payload)
 
@@ -244,7 +271,22 @@ ansible_python_interpreter=/usr/bin/python3
 
     postgres_cfg = ansible_cfg.get("postgres", {})
     eventstore_cfg = ansible_cfg.get("eventstore", {})
+    gateway_cfg = ansible_cfg.get("gateway", {})
     service_cfg = ansible_cfg.get("service", {})
+
+    # Gateway credentials (ADR-024) - eventstore-bin has no auth of its own;
+    # the gateway is the only component this deployment publishes to the
+    # network. A missing/default password must fail rendering, not silently
+    # deploy a network-exposed service with a known credential.
+    gateway_password = gateway_cfg.get("password", "")
+    if not gateway_password or gateway_password == "changeme":
+        raise SystemExit(
+            "config error: 'ansible.gateway.password' is missing or left as "
+            "the default 'changeme' (ADR-024) - the gateway is the only "
+            "publicly reachable port in this deployment and must not use a "
+            "predictable credential. Set ESP_GATEWAY_PASSWORD in .env and "
+            "regenerate via generate-config.sh."
+        )
 
     ansible_vars = {
         "# PostgreSQL configuration": None,
@@ -258,6 +300,9 @@ ansible_python_interpreter=/usr/bin/python3
         "eventstore_grpc_port": eventstore_cfg.get("grpc_port", 50051),
         "eventstore_backend": eventstore_cfg.get("backend", "postgres"),
         "binary_url": eventstore_cfg.get("binary_url", ""),
+        "# Gateway configuration (ADR-024)": None,
+        "esp_gateway_user": gateway_cfg.get("user", "admin"),
+        "esp_gateway_password": gateway_password,
         "# Service configuration": None,
         "service_user": service_cfg.get("user", "eventstore"),
         "service_group": service_cfg.get("group", "eventstore"),

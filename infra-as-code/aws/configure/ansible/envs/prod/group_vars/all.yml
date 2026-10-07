@@ -11,6 +11,14 @@ environment_overrides: {}
 
 backend_secret_arn: arn:aws:secretsmanager:us-west-2:123456789012:secret:event-store/prod/database
 
+# Gateway configuration (ADR-024) - eventstore-bin has no auth of its own;
+# the nginx gateway enforces Basic Auth using these credentials. Same
+# Secrets Manager pattern as backend_secret_arn above - do not hardcode a
+# plaintext password here.
+gateway_secret_arn: arn:aws:secretsmanager:us-west-2:123456789012:secret:event-store/prod/gateway
+esp_gateway_user: admin
+esp_gateway_password: "{{ lookup('aws_secretsmanager', gateway_secret_arn) }}"
+
 binary_url: "https://example-bucket.s3.us-west-2.amazonaws.com/event-store/latest/event-store"
 binary_checksum: "sha256:REPLACE_ME"
 service_user: eventstore

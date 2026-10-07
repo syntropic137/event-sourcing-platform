@@ -37,3 +37,11 @@ eventstore_database_url: "postgres://{{ postgres_user }}:{{ postgres_password }}
 
 # Deploy local PostgreSQL with Docker Compose
 use_local_postgres: true
+
+# Gateway configuration (ADR-024) - eventstore-bin has no authn/authz of its
+# own; `gateway` (nginx) is the only service this stack publishes to the
+# host, and it enforces Basic Auth using these credentials.
+# Override esp_gateway_password in group_vars with Ansible Vault - the
+# "changeme" default here must never reach a real deployment.
+esp_gateway_user: admin
+esp_gateway_password: "changeme"  # Override in group_vars with Ansible Vault

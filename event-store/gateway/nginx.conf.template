@@ -1,0 +1,105 @@
+# Event Store gRPC Gateway
+# See: event-store/gateway/README.md, docs/adrs/ADR-024-nginx-gateway-two-port-grpc-auth.md
+#
+# Two server blocks, mirroring the two-port model used elsewhere in the
+# Syntropic137 ecosystem (see ADR-024 for the prior-art reference):
+#
+#   Port 80   — Docker-internal only, NOT published to the host. Used by
+#               same-network services and health checks. No auth: network
+#               isolation is the security boundary here.
+#   Port 8081 — External / published access. HTTP Basic Auth required
+#               whenever ESP_GATEWAY_PASSWORD is set. This is the only
+#               port that should ever be exposed beyond the Docker network.
+#
+# docker-entrypoint.sh generates /etc/nginx/auth/htpasswd and renders this
+# template (envsubst) into /etc/nginx/nginx.conf before nginx starts.
+
+user nginx;
+worker_processes auto;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    # Docker's embedded DNS. Required so `set $upstream ...` below is
+    # re-resolved periodically instead of nginx caching the upstream
+    # container's IP for the life of the worker process - otherwise a
+    # recreated event-store container (new IP) leaves the gateway serving
+    # 502s until nginx itself restarts.
+    resolver 127.0.0.11 valid=10s;
+
+    # eventstore-bin/tonic has no request size limit of its own; nginx's
+    # 1m default would reject legitimate large Append batches that the
+    # direct (pre-gateway) endpoint accepted. Let the upstream enforce
+    # limits instead.
+    client_max_body_size 0;
+
+    # Subscribe is a long-lived server-streaming RPC that can sit idle
+    # (no events) far longer than nginx's 60s grpc_read_timeout default.
+    # Keep idle subscriptions alive rather than nginx killing them.
+    grpc_read_timeout 24h;
+
+    # ------------------------------------------------------------------
+    # PORT 80 — Docker network only (no auth). Do not publish this port.
+    # ------------------------------------------------------------------
+    server {
+        listen 80;
+        http2 on;
+        server_name _;
+
+        location / {
+            set $upstream ${ESP_UPSTREAM};
+            grpc_pass grpc://$upstream;
+            error_page 502 = /error502grpc;
+        }
+
+        location = /error502grpc {
+            internal;
+            default_type application/grpc;
+            add_header grpc-status 14;
+            add_header grpc-message "upstream unavailable";
+            return 200;
+        }
+    }
+
+    # ------------------------------------------------------------------
+    # PORT 8081 — External access. Basic Auth enforced when configured.
+    # ------------------------------------------------------------------
+    server {
+        listen 8081;
+        http2 on;
+        server_name _;
+
+        include /etc/nginx/auth/auth.conf;
+
+        location / {
+            set $upstream ${ESP_UPSTREAM};
+            grpc_pass grpc://$upstream;
+            error_page 502 = /error502grpc;
+            # auth_basic's 401 is a text/html HTTP error, which gRPC clients
+            # surface as INTERNAL ("invalid compression flag") rather than
+            # UNAUTHENTICATED. Answer with a proper gRPC status instead.
+            error_page 401 = /error401grpc;
+        }
+
+        # `return` runs in nginx's rewrite phase, before the access phase
+        # where auth_basic is checked, so this location cannot be used to
+        # reach the upstream and does not itself re-trigger the 401.
+        location = /error401grpc {
+            internal;
+            default_type application/grpc;
+            add_header grpc-status 16;
+            add_header grpc-message "unauthenticated";
+            return 200;
+        }
+
+        location = /error502grpc {
+            internal;
+            default_type application/grpc;
+            add_header grpc-status 14;
+            add_header grpc-message "upstream unavailable";
+            return 200;
+        }
+    }
+}

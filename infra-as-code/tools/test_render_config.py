@@ -53,6 +53,10 @@ AWS_CONFIG: dict = {
         "ssh_allowed_cidrs": ["0.0.0.0/0"],
     },
     "security": {"iam_instance_profile": "es-profile"},
+    "gateway": {
+        "secret_arn": "arn:aws:secretsmanager:us-east-1:123:secret/gateway",
+        "user": "admin",
+    },
 }
 
 PROXMOX_CONFIG: dict = {
@@ -97,6 +101,10 @@ PROXMOX_CONFIG: dict = {
             "backend": "postgres",
             "binary_url": "https://example.com/es-bin",
             "rust_log": "debug",
+        },
+        "gateway": {
+            "user": "admin",
+            "password": "test-gateway-password",
         },
         "service": {
             "user": "eventstore",
@@ -203,6 +211,8 @@ class TestRenderAws:
         gv = yaml.safe_load(group_vars_path.read_text())
         assert gv["binary_url"] == "https://example.com/binary"
         assert gv["service_user"] == "es"
+        assert gv["esp_gateway_user"] == "admin"
+        assert gv["esp_gateway_password"].startswith("{{ lookup('aws_secretsmanager'")
 
         inventory_path = tmp_path / "aws" / "configure" / "ansible" / "envs" / "staging" / "inventory.ini"
         assert inventory_path.exists()
@@ -357,6 +367,27 @@ class TestBuildProxmoxAnsibleConfig:
         assert gv["binary_url"] == "https://example.com/es-bin"
         assert gv["service_environment"]["RUST_LOG"] == "debug"
         assert gv["docker_compose_dir"] == "/opt/es/docker"
+        assert gv["esp_gateway_user"] == "admin"
+        assert gv["esp_gateway_password"] == "test-gateway-password"
+
+    def test_missing_gateway_password_raises(self, tmp_path: Path) -> None:
+        cfg = {**PROXMOX_CONFIG}
+        cfg["ansible"] = {**cfg["ansible"], "gateway": {"user": "admin"}}
+        ansible_dir = tmp_path / "ansible" / "envs" / "local"
+
+        with pytest.raises(SystemExit, match="gateway.password"):
+            render_config._build_proxmox_ansible_config(cfg, ansible_dir)
+
+    def test_default_changeme_gateway_password_raises(self, tmp_path: Path) -> None:
+        cfg = {**PROXMOX_CONFIG}
+        cfg["ansible"] = {
+            **cfg["ansible"],
+            "gateway": {"user": "admin", "password": "changeme"},
+        }
+        ansible_dir = tmp_path / "ansible" / "envs" / "local"
+
+        with pytest.raises(SystemExit, match="gateway.password"):
+            render_config._build_proxmox_ansible_config(cfg, ansible_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -393,3 +424,28 @@ class TestBuildAwsAnsibleConfig:
             (ansible_dir / "group_vars" / "all.yml").read_text()
         )
         assert gv["service_environment"]["DATABASE_URL"] == "postgres://user:pass@host/db"
+
+    def test_missing_gateway_secret_arn_raises(self, tmp_path: Path) -> None:
+        cfg = {**AWS_CONFIG, "gateway": {"user": "admin"}}
+        ansible_dir = tmp_path / "ansible" / "envs" / "staging"
+
+        with pytest.raises(SystemExit, match="gateway.secret_arn"):
+            render_config._build_aws_ansible_config(cfg, ansible_dir)
+
+
+class TestPrivateFileModes:
+    """Rendered artifacts hold secrets; they must be owner-only (0600)."""
+
+    @pytest.mark.parametrize("writer", ["write_json", "write_yaml", "write_text"])
+    def test_writers_create_0600(self, tmp_path: Path, writer: str) -> None:
+        path = tmp_path / "nested" / "out"
+        payload = "x" if writer == "write_text" else {"esp_gateway_password": "s"}
+        getattr(render_config, writer)(path, payload)
+        assert path.stat().st_mode & 0o777 == 0o600
+
+    def test_existing_world_readable_file_is_tightened(self, tmp_path: Path) -> None:
+        path = tmp_path / "all.yml"
+        path.write_text("old")
+        path.chmod(0o644)
+        render_config.write_yaml(path, {"k": "v"})
+        assert path.stat().st_mode & 0o777 == 0o600
