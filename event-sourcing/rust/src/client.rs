@@ -50,6 +50,18 @@ pub trait EventStorePort: Send + Sync {
 
     /// Subscribe to the tenant's global log from a position (inclusive).
     async fn subscribe(&self, req: proto::SubscribeRequest) -> Result<EventDataStream>;
+
+    /// The server's version and capability flags, used by
+    /// [`ProjectionRunner`](crate::projection::ProjectionRunner)'s capability
+    /// guard.
+    ///
+    /// The default reports [`ServerInfo::legacy`] (no capabilities), so a
+    /// port that does not implement it fails closed: a runner with the
+    /// default guard refuses to start. Decorators (fault injection, metrics)
+    /// should forward this call to the port they wrap.
+    async fn server_info(&self) -> Result<ServerInfo> {
+        Ok(ServerInfo::legacy())
+    }
 }
 
 /// gRPC event store client backed by the low-level `eventstore-sdk-rs` client.
@@ -148,6 +160,10 @@ impl EventStorePort for EventStoreClient {
             Ok(resp) => resp.event.map(Ok),
             Err(status) => Some(Err(Error::from(status))),
         })))
+    }
+
+    async fn server_info(&self) -> Result<ServerInfo> {
+        EventStoreClient::server_info(self).await
     }
 }
 

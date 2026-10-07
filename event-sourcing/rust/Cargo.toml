@@ -71,3 +71,7 @@ path = "examples/order_processing.rs"
 [[example]]
 name = "repository"
 path = "examples/repository.rs"
+
+[[example]]
+name = "supervised_projection"
+path = "examples/supervised_projection.rs"

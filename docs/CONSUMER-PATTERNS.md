@@ -284,6 +284,50 @@ async def test_dispatch_is_idempotent():
 
 ---
 
+## Rust SDK
+
+The Rust SDK (`event-sourcing/rust`) has the same two consumer sides,
+with Rust names:
+
+| Concept | Python | Rust |
+|---------|--------|------|
+| Projection | `CheckpointedProjection.handle_event()` | `CheckpointedProjection::handle(&mut tx, event, ctx)` |
+| ProcessManager processor | `ProcessManager.process_pending()` | `LiveProcessor::process_pending()` attached with `ProjectionRunner::with_live_processor` |
+| Replay awareness | `DispatchContext.is_catching_up` | `DispatchContext::is_catching_up` |
+| Supervision | `SubscriptionCoordinator.start()` | `ProjectionRunner::run_supervised(cancel, BackoffPolicy)` |
+| Halt on `DATA_LOSS` | `SubscriptionHaltedError`, `halted` | `Error::DataLoss { global_nonce }`, `RunnerHealth::halted_at` |
+| Re-check while halted | `undecodable_recheck_interval` | `with_undecodable_recheck(interval)` |
+| Health | `is_healthy` | `runner.health()` (`RunnerHealth::is_healthy()`, `state`, `lag()`, `last_error`) |
+
+One `ProjectionRunner` drives one projection (and optionally its
+processor) over one tenant's log. The rules are the Python ones:
+
+- `handle()` writes read-model rows or to-do records through the store
+  transaction; it never performs side effects. The runner commits the
+  writes and the checkpoint together.
+- `process_pending()` runs on its own task, one pass at a time, only after
+  a committed live event (or once when going live), never during replay.
+  It must be idempotent (durable dedup). A pass that returns an error is
+  retried with backoff; a pass that panics stops the runner with
+  `Error::LiveProcessorPanicked` (or is retried with
+  `ProcessorPanicPolicy::Restart`), so a dead processor is never silent.
+- `run_supervised` reconnects from the checkpoint on transient failures
+  (`UNAVAILABLE`, lagging subscriptions, transport and Postgres connection
+  errors) with jittered exponential backoff, and halts on `DATA_LOSS`
+  without moving the checkpoint past the undecodable event. While halted
+  the processor is held: no side effects run until the halt clears.
+  Everything else (handler errors, fencing, an incompatible server)
+  stops with a typed error.
+- The runner refuses an event store that does not advertise
+  `commit_ordered_global_nonce`, `subscription_errors_surfaced` and
+  `undecodable_events_surfaced` (opt out with
+  `without_capability_check()`).
+
+See `event-sourcing/rust/examples/supervised_projection.rs` and the
+[Rust SDK guide](../docs-site/docs/event-sourcing/sdks/rust/rust-sdk.md).
+
+---
+
 ## References
 
 - Martin Dilger, *Understanding Event Sourcing*, Ch. 37: Processor To-Do List
