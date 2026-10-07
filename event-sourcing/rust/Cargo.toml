@@ -26,10 +26,14 @@ serde_json = "1.0"
 uuid = { version = "1.0", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
-# gRPC client for event store
+# gRPC client for event store. The high-level SDK is layered on the
+# low-level client (eventstore-sdk-rs) rather than duplicating it.
 tonic = "0.14"
 prost = "0.14"
 prost-types = "0.14"
+eventstore-proto = { path = "../../event-store/eventstore-proto" }
+eventstore-sdk-rs = { path = "../../event-store/sdks/sdk-rs" }
+tokio-stream = "0.1"
 
 # Logging
 tracing = "0.1"
@@ -40,8 +44,12 @@ tokio-test = "0.4"
 mockall = "0.14"
 rstest = "0.26"
 
-# Event store integration
-eventstore-proto = { path = "../../event-store/eventstore-proto" }
+# Live-server tests and examples spawn the real gRPC event store in-process
+eventstore-core = { path = "../../event-store/eventstore-core" }
+eventstore-backend-memory = { path = "../../event-store/eventstore-backend-memory" }
+eventstore-backend-postgres = { path = "../../event-store/eventstore-backend-postgres" }
+eventstore-bin = { path = "../../event-store/eventstore-bin" }
+portpicker = "0.1.1"
 
 [features]
 default = []
@@ -53,3 +61,7 @@ path = "examples/basic_aggregate.rs"
 [[example]]
 name = "order_processing"
 path = "examples/order_processing.rs"
+
+[[example]]
+name = "repository"
+path = "examples/repository.rs"
