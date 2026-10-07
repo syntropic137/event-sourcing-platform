@@ -380,20 +380,24 @@ async fn request_timeout_fires_against_black_hole() {
 async fn connect_timeout_fires_against_black_hole() {
     // TCP connects but the TLS handshake stalls (no ServerHello), so an
     // eager connect can only end via the connect timeout.
+    // A custom CA and an IP endpoint keep OS trust-store loading and DNS
+    // (both slow on some hosts) out of the measured interval.
     let (port, hole) = black_hole().await;
+    let cfg = ClientConfig::new(format!("https://127.0.0.1:{port}"))
+        .tls(
+            TlsConfig::new()
+                .ca_certificate_pem(pki_ca_only())
+                .domain_name("localhost"),
+        )
+        .connect_timeout(Duration::from_millis(300));
     let start = Instant::now();
-    let err = timeout(
-        Duration::from_secs(5),
-        ClientConfig::new(format!("https://localhost:{port}"))
-            .connect_timeout(Duration::from_millis(300))
-            .connect(),
-    )
-    .await
-    .expect("connect must not hang")
-    .expect_err("stalled handshake must fail");
+    let err = timeout(Duration::from_secs(5), cfg.connect())
+        .await
+        .expect("connect must not hang")
+        .expect_err("stalled handshake must fail");
     let elapsed = start.elapsed();
     assert!(
-        elapsed >= Duration::from_millis(250) && elapsed < Duration::from_millis(1500),
+        elapsed >= Duration::from_millis(250) && elapsed < Duration::from_secs(2),
         "{elapsed:?} {err:?}"
     );
     hole.abort();
