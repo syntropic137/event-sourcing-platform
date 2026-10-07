@@ -80,6 +80,32 @@ Now the same "stop, never skip" rule applies:
      probe maps `DATA_LOSS` on the head event to its position (via
      `UndecodableEventError.global_nonce`) instead of failing.
 3. **Verify.** Reconnect; the subscription passes `N` (or resumes at `N + 1`).
+   With the Python `SubscriptionCoordinator`: in the default mode call
+   `start()` again; with `undecodable_recheck_interval` set it re-checks on
+   its own. `halted` returns to `None` once it is past `N`.
+
+### Python `SubscriptionCoordinator` on `DATA_LOSS` (#360)
+
+`DATA_LOSS` is not retried with the transient-error backoff. On an
+`UndecodableEventError` from any track the coordinator halts:
+
+- Every track is cancelled. No checkpoint is moved past `N`: no projection
+  was handed the event. ProcessManager drains are stopped, so no side effect
+  runs while halted.
+- It logs one `ERROR` per position and sets `halted` to a
+  `SubscriptionHaltedError` (`.global_nonce`, message points here);
+  `is_healthy` is `False`. Alert on either.
+- Default (`undecodable_recheck_interval=None`): `start()` raises the
+  `SubscriptionHaltedError`. Fix the cause, then call `start()` again.
+- `undecodable_recheck_interval=<seconds>`: `start()` stays running, halted,
+  and re-plans at that fixed pace (logging at `DEBUG`), resuming on its own
+  after the operator acts.
+- `halted` clears only when a plan needs nothing at or below `N` (every
+  projection was moved past it), or every track that started at or below `N`
+  delivered an event at or past `N` (the row decodes again). A partial
+  checkpoint move leaves it halted.
+
+`UNAVAILABLE` and other errors are still retried with exponential backoff.
 
 ## Consumer contract (at-least-once)
 
@@ -104,7 +130,7 @@ Now the same "stop, never skip" rule applies:
 | gRPC server (`eventstore-bin`) | Logs the error, maps it with `StoreError::to_status()`, ends the response stream with that status. |
 | Rust SDK (`sdk-rs`) | `tonic::Streaming` yields `Err(Status)` with `Code::Unavailable`, or `Code::DataLoss` for an undecodable event (position in trailing metadata `esp-undecodable-global-nonce`). |
 | TypeScript SDK (`sdk-ts`) | The async iterator rejects with the gRPC error (`code` 14 `UNAVAILABLE`, or 15 `DATA_LOSS`). Messages and a terminal error/end that arrive while the consumer is busy are buffered and delivered on later `next()` calls (`streamToAsyncIterator`), so a failure is never lost between reads. |
-| Python (`event_sourcing` `GrpcEventStoreClient.subscribe`) | Raises `EventStoreError`; for `DATA_LOSS` with a position, the subclass `UndecodableEventError` (`.global_nonce`). `SubscriptionCoordinator` retries with exponential backoff and resumes each projection from its saved checkpoint. |
+| Python (`event_sourcing` `GrpcEventStoreClient.subscribe`) | Raises `EventStoreError`; for `DATA_LOSS` with a position, the subclass `UndecodableEventError` (`.global_nonce`). `SubscriptionCoordinator` retries `UNAVAILABLE` with exponential backoff and resumes each projection from its saved checkpoint; on `UndecodableEventError` it halts with `SubscriptionHaltedError` instead (see above). |
 
 ## Consequences
 
@@ -115,9 +141,10 @@ Now the same "stop, never skip" rule applies:
   reconnect from the saved checkpoint.
 - An undecodable row halts every consumer that reaches it until an operator
   acts. That is intended: a visible stop beats a silently incomplete
-  projection. The Python coordinator retries `DATA_LOSS` with backoff like any
-  other error, so it stays stopped at the position and logs each attempt,
-  until an operator repairs the row or moves checkpoints past it.
+  projection. The Python coordinator halts at the position with a typed
+  `SubscriptionHaltedError` and one `ERROR` log, rather than retrying and
+  logging every attempt (#360), until an operator repairs the row or moves
+  checkpoints past it.
 - `it_subscribe_undecodable.rs` stores a decoder-invalid row between valid rows
   (replay and live) and an all-invalid batch, and checks that nothing is
   delivered past it and reconnecting fails at the same position.

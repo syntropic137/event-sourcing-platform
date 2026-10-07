@@ -19,7 +19,7 @@ import logging
 import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, NamedTuple, Protocol, TypedDict
+from typing import TYPE_CHECKING, NamedTuple, Protocol, TypedDict, cast
 
 from event_sourcing.core.checkpoint import (
     CheckpointedProjection,
@@ -28,7 +28,7 @@ from event_sourcing.core.checkpoint import (
     ProjectionCheckpointStore,
     ProjectionResult,
 )
-from event_sourcing.core.errors import UndecodableEventError
+from event_sourcing.core.errors import SubscriptionHaltedError, UndecodableEventError
 from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.subscriptions.drain import ProcessManagerDrain
 
@@ -84,6 +84,28 @@ DEFAULT_NEAR_HEAD_WINDOW = 1000
 # next replay. Checkpoints a projection saves itself in handle_event() are
 # untouched, so its data and position stay atomic.
 CATCH_UP_SKIP_CHECKPOINT_INTERVAL = 500
+
+
+def _find_undecodable(error: BaseException) -> UndecodableEventError | None:
+    """The undecodable-event error in ``error``, unwrapping TaskGroup groups.
+
+    One failing track fails the whole TaskGroup, so the store's DATA_LOSS
+    arrives inside an ExceptionGroup, possibly beside other tracks' errors.
+    If several tracks hit undecodable rows, the lowest position is reported:
+    it is the one every projection before it must get past first.
+    """
+    if isinstance(error, UndecodableEventError):
+        return error
+    if isinstance(error, BaseExceptionGroup):
+        group = cast("BaseExceptionGroup[BaseException]", error)
+        found = [
+            nested
+            for nested in (_find_undecodable(inner) for inner in group.exceptions)
+            if nested is not None
+        ]
+        if found:
+            return min(found, key=lambda nested: nested.global_nonce)
+    return None
 
 
 @dataclass
@@ -228,6 +250,7 @@ class SubscriptionCoordinator:
         projections: list[CheckpointedProjection],
         replay_concurrency: int = DEFAULT_REPLAY_CONCURRENCY,
         near_head_window: int = DEFAULT_NEAR_HEAD_WINDOW,
+        undecodable_recheck_interval: float | None = None,
     ) -> None:
         """
         Initialize the subscription coordinator.
@@ -242,21 +265,41 @@ class SubscriptionCoordinator:
                 at or below the live boundary catches up on the near-head
                 track (one more connection, only while such projections
                 exist) rather than a replay track. 0 disables it.
+            undecodable_recheck_interval: What to do when the store reports
+                an undecodable stored event (gRPC DATA_LOSS, ADR-026). None
+                (default): halt, and start() raises SubscriptionHaltedError.
+                A number of seconds: stay halted inside start() (``halted``
+                set, ``is_healthy`` False) and re-check at that fixed pace,
+                resuming on its own once an operator has repaired the row or
+                moved the checkpoints. Either way it is never retried with
+                the transient-error backoff.
 
         Raises:
             ValueError: If replay_concurrency is below 1, which would leave a
-                behind projection with no track to replay on, or if
-                near_head_window is negative.
+                behind projection with no track to replay on, if
+                near_head_window is negative, or if
+                undecodable_recheck_interval is not positive.
         """
         if replay_concurrency < 1:
             raise ValueError(f"replay_concurrency must be at least 1, got {replay_concurrency}")
         if near_head_window < 0:
             raise ValueError(f"near_head_window must not be negative, got {near_head_window}")
+        if undecodable_recheck_interval is not None and not undecodable_recheck_interval > 0:
+            raise ValueError(
+                "undecodable_recheck_interval must be positive or None, "
+                f"got {undecodable_recheck_interval}"
+            )
 
         self._event_store = event_store
         self._checkpoint_store = checkpoint_store
         self._replay_concurrency = replay_concurrency
         self._near_head_window = near_head_window
+        self._undecodable_recheck_interval = undecodable_recheck_interval
+        # Set while stopped at an undecodable event (#360). Cleared once a
+        # plan needs nothing at or below its position, or every track that
+        # did has delivered an event at or past it (the row was repaired).
+        self._halt: SubscriptionHaltedError | None = None
+        self._halt_pending_tracks: set[str] = set()
         # A track planned before rebuild_projection() is still running after
         # it. Nothing it does to that projection may land after the rebuild
         # deletes the checkpoint, or the rebuild resumes past history. So every
@@ -316,8 +359,17 @@ class SubscriptionCoordinator:
 
     @property
     def is_healthy(self) -> bool:
-        """True if the coordinator is running and has no active error."""
-        return self._running and self._last_error is None
+        """True if the coordinator is running, has no active error, and is not halted."""
+        return self._running and self._last_error is None and self._halt is None
+
+    @property
+    def halted(self) -> SubscriptionHaltedError | None:
+        """The halt at an undecodable stored event (ADR-026), or None.
+
+        Stays set across a restart until the coordinator has got past the
+        position, so a health check sees the stop until it is really fixed.
+        """
+        return self._halt
 
     @property
     def projections(self) -> dict[str, CheckpointedProjection]:
@@ -365,8 +417,17 @@ class SubscriptionCoordinator:
         """
         Start the subscription coordinator with exponential-backoff retry.
 
-        Retries on any transient error (e.g. RST_STREAM, connection reset).
-        Stops only on explicit stop() or CancelledError.
+        Retries on any transient error (e.g. UNAVAILABLE, RST_STREAM,
+        connection reset) with exponential backoff. An undecodable stored
+        event (gRPC DATA_LOSS) is not transient: retrying fails at the same
+        position, so the coordinator halts there instead (#360, ADR-026). See
+        ``undecodable_recheck_interval`` for what halting means.
+
+        Raises:
+            SubscriptionHaltedError: On an undecodable stored event, when
+                ``undecodable_recheck_interval`` is None. ``halted`` holds the
+                same error. Fix it as its message says, then call start()
+                again.
         """
         if self._running:
             logger.warning("Subscription coordinator already running")
@@ -387,6 +448,14 @@ class SubscriptionCoordinator:
                 except Exception as e:
                     if not self._running:
                         break
+                    undecodable = _find_undecodable(e)
+                    if undecodable is not None:
+                        halt = await self._halt_at(undecodable)
+                        if self._undecodable_recheck_interval is None:
+                            self._running = False
+                            raise halt from undecodable
+                        await asyncio.sleep(self._undecodable_recheck_interval)
+                        continue
                     self._last_error = e
                     logger.warning(
                         "Subscription error — retrying in %.1fs",
@@ -402,6 +471,59 @@ class SubscriptionCoordinator:
             await self._close_drains(self._drains)
 
         logger.info("Subscription coordinator stopped")
+
+    async def _halt_at(self, undecodable: UndecodableEventError) -> SubscriptionHaltedError:
+        """Enter the halted state at ``undecodable``'s position.
+
+        Every track is already cancelled (one failing track fails the plan)
+        and nothing saves a checkpoint past the position: no projection was
+        handed the event. ProcessManager drains are stopped too, so no side
+        effect runs while the read model is stuck. A live one is woken again
+        by the next plan.
+        """
+        await self._close_drains(self._drains)
+        previous = self._halt
+        halt = SubscriptionHaltedError(undecodable.global_nonce, self._undecodable_recheck_interval)
+        self._halt = halt
+        # Nothing can clear it until a new plan says what still needs N.
+        self._halt_pending_tracks = set()
+        extra: dict[str, str | int | float | None] = {
+            "global_nonce": undecodable.global_nonce,
+            "recheck_interval": self._undecodable_recheck_interval,
+        }
+        if previous is None or previous.global_nonce != halt.global_nonce:
+            logger.error("%s", halt.message, extra=extra)
+        else:
+            # Same stop, re-checked: one ERROR per position, not per attempt.
+            logger.debug("Still halted at undecodable stored event", extra=extra)
+        return halt
+
+    def _plan_halt_clearance(self, tracks: list[_SubscriptionTrack]) -> None:
+        """Clear the halt, or note which tracks must pass its position first.
+
+        A track starting above the position cannot meet it again. One at or
+        below it has a projection that has not passed it: the halt holds
+        until that track delivers an event at or past the position, which
+        happens only once the row decodes again.
+        """
+        if self._halt is None:
+            return
+        position = self._halt.global_nonce
+        self._halt_pending_tracks = {
+            track.name for track in tracks if track.from_position <= position
+        }
+        if not self._halt_pending_tracks:
+            self._clear_halt()
+
+    def _clear_halt(self) -> None:
+        if self._halt is None:
+            return
+        logger.info(
+            "Resumed past undecodable stored event",
+            extra={"global_nonce": self._halt.global_nonce},
+        )
+        self._halt = None
+        self._halt_pending_tracks = set()
 
     async def _subscribe_loop(self) -> None:
         """
@@ -426,6 +548,7 @@ class SubscriptionCoordinator:
 
         self._live_boundary_nonce = await self._read_head_nonce()
         self._tracks = await self._plan_tracks(self._live_boundary_nonce)
+        self._plan_halt_clearance(self._tracks)
 
         # Items left pending before a restart must not wait for the next live
         # event to be noticed: wake every ProcessManager that is live already.
@@ -458,6 +581,14 @@ class SubscriptionCoordinator:
                 break
             self._last_error = None
             await self._dispatch_to_track(track, envelope)
+            if (
+                self._halt is not None
+                and track.name in self._halt_pending_tracks
+                and (envelope.metadata.global_nonce or 0) >= self._halt.global_nonce
+            ):
+                self._halt_pending_tracks.discard(track.name)
+                if not self._halt_pending_tracks:
+                    self._clear_halt()
 
     async def _read_head_nonce(self) -> int:
         """

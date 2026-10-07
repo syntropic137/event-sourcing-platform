@@ -293,6 +293,21 @@ jobs:
         if: failure()
         run: cat "$RUNNER_TEMP"/es-*.log
 
+      # #367: the generated stubs must import from an installed package, and
+      # must be what the pinned generator produces from the current proto.
+      - name: sdk-py stubs up to date
+        run: |
+          make -C event-store gen-py
+          if [ -n "$(git status --porcelain -- event-store/sdks/sdk-py)" ]; then
+            git status --porcelain -- event-store/sdks/sdk-py
+            git diff -- event-store/sdks/sdk-py
+            echo "sdk-py stubs are stale: run 'make -C event-store gen-py' and commit"
+            exit 1
+          fi
+
+      - name: sdk-py import smoke test (installed package)
+        run: make -C event-store smoke-py-import
+
       - name: Object ratchet — no increases allowed
         if: github.event_name == 'pull_request'
         env:

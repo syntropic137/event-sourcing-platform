@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from eventstore.v1 import eventstore_pb2 as eventstore_dot_v1_dot_eventstore__pb2
+from . import eventstore_pb2 as eventstore_dot_v1_dot_eventstore__pb2
 
 GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__

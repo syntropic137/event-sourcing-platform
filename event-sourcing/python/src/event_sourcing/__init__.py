@@ -22,6 +22,7 @@ from event_sourcing.core.errors import (
     EventStoreError,
     InvalidAggregateStateError,
     StreamAlreadyExistsError,
+    SubscriptionHaltedError,
     UndecodableEventError,
 )
 from event_sourcing.core.event import (
@@ -148,4 +149,5 @@ __all__ = [
     "InvalidAggregateStateError",
     "EventStoreError",
     "UndecodableEventError",
+    "SubscriptionHaltedError",
 ]
