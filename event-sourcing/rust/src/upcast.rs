@@ -188,6 +188,26 @@ impl Upcasters {
             .is_some()
     }
 
+    /// The type and version the chain from `(event_type, event_version)`
+    /// ends at, without running any step. Steps are keyed by type and
+    /// version only, so the target does not depend on the payload. `None`
+    /// for a chain that loops or is longer than 64 steps (where
+    /// [`upcast`](Self::upcast) fails).
+    pub fn target<'a>(&'a self, event_type: &'a str, event_version: u32) -> Option<(&'a str, u32)> {
+        let mut ty = event_type;
+        let mut version = wire::normalize_version(event_version);
+        for _ in 0..=MAX_STEPS {
+            match self.step(ty, version) {
+                None => return Some((ty, version)),
+                Some(step) => {
+                    ty = &step.to_type;
+                    version = step.to_version;
+                }
+            }
+        }
+        None
+    }
+
     /// Run the chain from `(event_type, event_version)`; returns the final
     /// type, version and payload (unchanged when no step matches).
     pub fn upcast(
@@ -422,6 +442,31 @@ mod tests {
             cycle.upcast("A", 1, json!({})),
             Err(Error::Upcast { .. })
         ));
+    }
+
+    #[test]
+    fn target_follows_the_chain_without_running_it() {
+        let never = Upcasters::new()
+            .rename("Credited", 1, "Deposited", 1, |_| panic!("ran"))
+            .register("Deposited", 1, 2, |_| panic!("ran"));
+        let t = |ty: &'static str, v| never.target(ty, v);
+        assert_eq!(t("Credited", 1), Some(("Deposited", 2)));
+        assert_eq!(t("Credited", 0), Some(("Deposited", 2)));
+        assert_eq!(t("Deposited", 2), Some(("Deposited", 2)));
+        assert_eq!(t("Other", 0), Some(("Other", 1)));
+        let cycle = Upcasters::new()
+            .rename("A", 1, "B", 1, Ok)
+            .rename("B", 1, "A", 1, Ok);
+        assert_eq!(cycle.target("A", 1), None);
+        // A chain of exactly MAX_STEPS steps is not a cycle.
+        let long =
+            (1..=MAX_STEPS as u32).fold(Upcasters::new(), |u, v| u.register("E", v, v + 1, Ok));
+        assert_eq!(long.target("E", 1), Some(("E", MAX_STEPS as u32 + 1)));
+        assert!(long.upcast("E", 1, json!({})).is_ok());
+        // One more step: no target, and upcast fails.
+        let longer = long.register("E", MAX_STEPS as u32 + 1, MAX_STEPS as u32 + 2, Ok);
+        assert_eq!(longer.target("E", 1), None);
+        assert!(longer.upcast("E", 1, json!({})).is_err());
     }
 
     #[test]

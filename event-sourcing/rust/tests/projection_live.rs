@@ -46,6 +46,19 @@ async fn append(
     amount: i64,
 ) -> u64 {
     let payload = serde_json::to_vec(&Deposited { amount }).unwrap();
+    append_raw(client, tenant, aggregate_id, nonce, event_type, 1, payload).await
+}
+
+/// Append one event with an explicit version and payload bytes.
+async fn append_raw(
+    client: &EventStoreClient,
+    tenant: &str,
+    aggregate_id: &str,
+    nonce: u64,
+    event_type: &str,
+    event_version: u32,
+    payload: Vec<u8>,
+) -> u64 {
     client
         .append(proto::AppendRequest {
             tenant_id: tenant.into(),
@@ -60,7 +73,7 @@ async fn append(
                     aggregate_type: "Account".into(),
                     aggregate_nonce: nonce,
                     event_type: event_type.into(),
-                    event_version: 1,
+                    event_version,
                     content_type: "application/json".into(),
                     tenant_id: tenant.into(),
                     ..Default::default()
@@ -269,6 +282,8 @@ async fn failing_upcaster_stops_the_runner_without_advancing() {
     let f = fixture().await;
     let g1 = append(&f.client, &f.tenant, "a", 1, "Deposited", 10).await;
     let g2 = append(&f.client, &f.tenant, "a", 2, "Credited", 5).await;
+    // A later event must not be checkpointed past the failure.
+    append(&f.client, &f.tenant, "a", 3, "Deposited", 1).await;
 
     let upcasters = Upcasters::new().rename("Credited", 1, "Deposited", 1, |_| {
         Err(Error::domain("cannot migrate"))
@@ -293,6 +308,99 @@ async fn failing_upcaster_stops_the_runner_without_advancing() {
         }
         other => panic!("unexpected {other:?}"),
     }
+    assert_eq!(store.load_checkpoint(runner.key()).await.unwrap(), Some(g1));
+}
+
+#[tokio::test]
+async fn unhandled_type_is_skipped_before_upcasting() {
+    // #396: an upcaster on a type the projection ignores never runs, so its
+    // failure cannot stop the runner; the event is checkpointed past.
+    let f = fixture().await;
+    append(&f.client, &f.tenant, "a", 1, "Deposited", 10).await;
+    let g2 = append(&f.client, &f.tenant, "a", 2, "Withdrawn", 3).await;
+    // Renamed to a type the projection does not handle either.
+    let g3 = append(&f.client, &f.tenant, "a", 3, "Debited", 4).await;
+    // Stored type the projection handles, renamed to one it ignores.
+    let g4 = append_raw(&f.client, &f.tenant, "a", 4, "Deposited", 2, b"{}".to_vec()).await;
+    // Ignored type with a payload that is not JSON: never parsed.
+    let g5 = append_raw(
+        &f.client,
+        &f.tenant,
+        "a",
+        5,
+        "Withdrawn",
+        1,
+        b"not json".to_vec(),
+    )
+    .await;
+    // Stored type the projection ignores, renamed to one it handles.
+    let g6 = append(&f.client, &f.tenant, "a", 6, "Credited", 5).await;
+    // Ignored final event: checkpointed with no later handled event.
+    let g7 = append(&f.client, &f.tenant, "a", 7, "Withdrawn", 2).await;
+
+    let fail = |_| Err(Error::domain("cannot migrate"));
+    let upcasters = Upcasters::new()
+        .register("Withdrawn", 1, 2, fail)
+        .rename("Debited", 1, "Withdrawn", 1, fail)
+        .rename("Deposited", 2, "Archived", 1, fail)
+        .rename("Credited", 1, "Deposited", 1, Ok);
+    let probe = Probe::default();
+    let store = Arc::new(MemStore::new());
+    let mut runner = ProjectionRunner::new(
+        f.port.clone(),
+        store.clone(),
+        BalanceProjection::new(&probe),
+        &f.tenant,
+    )
+    .with_upcasters(upcasters);
+    assert_eq!(runner.catch_up().await.unwrap(), g7);
+    assert_eq!(store.load_checkpoint(runner.key()).await.unwrap(), Some(g7));
+    assert!(probe
+        .contexts
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|c| c.global_nonce == g6));
+    assert_eq!(store.state(runner.key()).by_account["a"], 15);
+    let seen: Vec<u64> = probe
+        .contexts
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| c.global_nonce)
+        .collect();
+    assert!(
+        [g2, g3, g4, g5].iter().all(|g| !seen.contains(g)),
+        "{seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn upcast_cycle_on_an_unhandled_type_still_stops_the_runner() {
+    // A cycle has no target, so the chain runs and fails (parity with
+    // Python `Upcasters.target()` returning None).
+    let f = fixture().await;
+    let g1 = append(&f.client, &f.tenant, "a", 1, "Deposited", 10).await;
+    let g2 = append(&f.client, &f.tenant, "a", 2, "Ping", 1).await;
+    append(&f.client, &f.tenant, "a", 3, "Deposited", 1).await;
+
+    let upcasters = Upcasters::new()
+        .rename("Ping", 1, "Pong", 1, Ok)
+        .rename("Pong", 1, "Ping", 1, Ok);
+    let store = Arc::new(MemStore::new());
+    let mut runner = ProjectionRunner::new(
+        f.port.clone(),
+        store.clone(),
+        BalanceProjection::new(&Probe::default()),
+        &f.tenant,
+    )
+    .with_upcasters(upcasters);
+    let err = runner.catch_up().await.expect_err("cycle");
+    assert!(
+        matches!(&err, Error::ProjectionFailed { global_nonce, source, .. }
+            if *global_nonce == g2 && matches!(**source, Error::Upcast { .. })),
+        "{err:?}"
+    );
     assert_eq!(store.load_checkpoint(runner.key()).await.unwrap(), Some(g1));
 }
 
