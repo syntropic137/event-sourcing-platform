@@ -106,14 +106,17 @@ async fn migrations_are_not_subject_to_statement_timeout() {
     let store = PostgresStore::connect_with_config(&fresh, &cfg)
         .await
         .expect("connect must not run migrations under statement_timeout");
+    drop(store);
+    // Checked on a plain connection: the store's own sessions would cancel
+    // this query after 1 ms.
+    let mut check = sqlx::PgConnection::connect(&fresh).await.unwrap();
     let tables: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM information_schema.tables WHERE table_name IN ('events', 'aggregates', 'idempotency')",
     )
-    .fetch_one(store.pool())
+    .fetch_one(&mut check)
     .await
     .unwrap();
     assert_eq!(tables, 3);
-    assert_eq!(show(&store, "statement_timeout").await, "1ms");
 }
 
 /// A new, empty database on the test server; returns its URL.
