@@ -36,7 +36,7 @@ The SDK is alpha: breaking changes may land in minor versions and are listed und
 ### Fixed
 
 - `EventStoreClient::connect("https://...")` no longer becomes `http://https://...`; it now connects over TLS (#373).
-- `ProjectionRunner` filters by the type after upcasting before running upcasters (ADR-027): an event the projection does not handle is checkpointed past without upcasting, so a failing upcaster on an ignored type no longer stops the runner. New `Upcasters::target(event_type, version)` returns the chain's final type and version without running it (`None` for a cycle), like Python's `Upcasters.target()` (#396).
+- `ProjectionRunner` filters by the type after upcasting before running upcasters (ADR-027): an event the projection does not handle is checkpointed past without upcasting, so a failing upcaster on an ignored type no longer stops the runner. New `Upcasters::target(event_type, version)` returns the chain's final type and version without running it (`None` for a cycle or a chain over 64 steps), like Python's `Upcasters.target()` (#396).
 
 ### Breaking
 

@@ -65,7 +65,6 @@
 //!   runner wakes the processor only after committing a *live* event, never
 //!   while catching up.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
@@ -1135,17 +1134,16 @@ where
             .upcasters
             .target(&event.event_type, event.event_version)
         {
-            Some((ty, _)) => self.projection.handles(&ty),
+            Some((ty, _)) => self.projection.handles(ty),
             None => true,
         };
         let upcast = if wanted {
-            self.upcasters.upcast_recorded(event).map_err(failed)?
+            Some(self.upcasters.upcast_recorded(event).map_err(failed)?)
         } else {
-            Cow::Borrowed(event)
+            None
         };
-        let event = upcast.as_ref();
         let mut tx = self.store.begin(&self.key).await?;
-        if wanted {
+        if let Some(event) = upcast.as_deref() {
             self.projection
                 .handle(&mut tx, event, ctx)
                 .await

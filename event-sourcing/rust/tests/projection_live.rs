@@ -46,6 +46,19 @@ async fn append(
     amount: i64,
 ) -> u64 {
     let payload = serde_json::to_vec(&Deposited { amount }).unwrap();
+    append_raw(client, tenant, aggregate_id, nonce, event_type, 1, payload).await
+}
+
+/// Append one event with an explicit version and payload bytes.
+async fn append_raw(
+    client: &EventStoreClient,
+    tenant: &str,
+    aggregate_id: &str,
+    nonce: u64,
+    event_type: &str,
+    event_version: u32,
+    payload: Vec<u8>,
+) -> u64 {
     client
         .append(proto::AppendRequest {
             tenant_id: tenant.into(),
@@ -60,7 +73,7 @@ async fn append(
                     aggregate_type: "Account".into(),
                     aggregate_nonce: nonce,
                     event_type: event_type.into(),
-                    event_version: 1,
+                    event_version,
                     content_type: "application/json".into(),
                     tenant_id: tenant.into(),
                     ..Default::default()
@@ -269,6 +282,8 @@ async fn failing_upcaster_stops_the_runner_without_advancing() {
     let f = fixture().await;
     let g1 = append(&f.client, &f.tenant, "a", 1, "Deposited", 10).await;
     let g2 = append(&f.client, &f.tenant, "a", 2, "Credited", 5).await;
+    // A later event must not be checkpointed past the failure.
+    append(&f.client, &f.tenant, "a", 3, "Deposited", 1).await;
 
     let upcasters = Upcasters::new().rename("Credited", 1, "Deposited", 1, |_| {
         Err(Error::domain("cannot migrate"))
@@ -305,14 +320,27 @@ async fn unhandled_type_is_skipped_before_upcasting() {
     let g2 = append(&f.client, &f.tenant, "a", 2, "Withdrawn", 3).await;
     // Renamed to a type the projection does not handle either.
     let g3 = append(&f.client, &f.tenant, "a", 3, "Debited", 4).await;
+    // Stored type the projection handles, renamed to one it ignores.
+    let g4 = append_raw(&f.client, &f.tenant, "a", 4, "Deposited", 2, b"{}".to_vec()).await;
+    // Ignored type with a payload that is not JSON: never parsed.
+    let g5 = append_raw(
+        &f.client,
+        &f.tenant,
+        "a",
+        5,
+        "Withdrawn",
+        1,
+        b"not json".to_vec(),
+    )
+    .await;
     // Stored type the projection ignores, renamed to one it handles.
-    let g4 = append(&f.client, &f.tenant, "a", 4, "Credited", 5).await;
+    let g6 = append(&f.client, &f.tenant, "a", 6, "Credited", 5).await;
 
+    let fail = |_| Err(Error::domain("cannot migrate"));
     let upcasters = Upcasters::new()
-        .register("Withdrawn", 1, 2, |_| Err(Error::domain("cannot migrate")))
-        .rename("Debited", 1, "Withdrawn", 1, |_| {
-            Err(Error::domain("cannot migrate"))
-        })
+        .register("Withdrawn", 1, 2, fail)
+        .rename("Debited", 1, "Withdrawn", 1, fail)
+        .rename("Deposited", 2, "Archived", 1, fail)
         .rename("Credited", 1, "Deposited", 1, Ok);
     let probe = Probe::default();
     let store = Arc::new(MemStore::new());
@@ -323,8 +351,8 @@ async fn unhandled_type_is_skipped_before_upcasting() {
         &f.tenant,
     )
     .with_upcasters(upcasters);
-    assert_eq!(runner.catch_up().await.unwrap(), g4);
-    assert_eq!(store.load_checkpoint(runner.key()).await.unwrap(), Some(g4));
+    assert_eq!(runner.catch_up().await.unwrap(), g6);
+    assert_eq!(store.load_checkpoint(runner.key()).await.unwrap(), Some(g6));
     assert_eq!(store.state(runner.key()).by_account["a"], 15);
     let seen: Vec<u64> = probe
         .contexts
@@ -333,7 +361,10 @@ async fn unhandled_type_is_skipped_before_upcasting() {
         .iter()
         .map(|c| c.global_nonce)
         .collect();
-    assert!(!seen.contains(&g2) && !seen.contains(&g3), "{seen:?}");
+    assert!(
+        [g2, g3, g4, g5].iter().all(|g| !seen.contains(g)),
+        "{seen:?}"
+    );
 }
 
 #[tokio::test]
@@ -343,6 +374,7 @@ async fn upcast_cycle_on_an_unhandled_type_still_stops_the_runner() {
     let f = fixture().await;
     let g1 = append(&f.client, &f.tenant, "a", 1, "Deposited", 10).await;
     let g2 = append(&f.client, &f.tenant, "a", 2, "Ping", 1).await;
+    append(&f.client, &f.tenant, "a", 3, "Deposited", 1).await;
 
     let upcasters = Upcasters::new()
         .rename("Ping", 1, "Pong", 1, Ok)
