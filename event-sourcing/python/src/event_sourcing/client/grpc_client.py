@@ -18,6 +18,7 @@ from event_sourcing.core.errors import (
     ConcurrencyConflictError,
     EventStoreError,
     StreamAlreadyExistsError,
+    UndecodableEventError,
 )
 from event_sourcing.core.event import (
     DomainEvent,
@@ -29,6 +30,30 @@ from event_sourcing.decorators.events import resolve_event_type
 from event_sourcing.proto.eventstore.v1 import eventstore_pb2, eventstore_pb2_grpc
 
 logger = logging.getLogger(__name__)
+
+# Trailing-metadata key the event store sets on DATA_LOSS for an undecodable
+# stored event (eventstore-core UNDECODABLE_GLOBAL_NONCE_KEY).
+UNDECODABLE_GLOBAL_NONCE_KEY = "esp-undecodable-global-nonce"
+
+
+def _undecodable_global_nonce(error: grpc.RpcError) -> int | None:
+    """global_nonce of the undecodable stored event, if `error` reports one."""
+    try:
+        if error.code() != grpc.StatusCode.DATA_LOSS:
+            return None
+        for key, value in error.trailing_metadata() or ():
+            if key == UNDECODABLE_GLOBAL_NONCE_KEY:
+                return int(value)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return None
+
+
+def _raise_if_undecodable(error: grpc.RpcError, context: str) -> None:
+    """Raise UndecodableEventError when the store reports an undecodable event."""
+    nonce = _undecodable_global_nonce(error)
+    if nonce is not None:
+        raise UndecodableEventError(nonce, f"{context}: {error}", error) from error
 
 
 class GrpcEventStoreClient:
@@ -134,6 +159,7 @@ class GrpcEventStoreClient:
 
         except grpc.RpcError as e:
             logger.error(f"gRPC error reading stream: {e}")
+            _raise_if_undecodable(e, "Failed to read stream")
             raise EventStoreError(f"Failed to read stream: {e}") from e
 
     async def append_events(
@@ -395,6 +421,7 @@ class GrpcEventStoreClient:
 
         except grpc.RpcError as e:
             logger.error(f"gRPC error in ReadAll: {e}")
+            _raise_if_undecodable(e, "Failed to read all events")
             raise EventStoreError(f"Failed to read all events: {e}") from e
 
     async def read_all_events_from(
@@ -469,4 +496,5 @@ class GrpcEventStoreClient:
                 logger.info("Subscription cancelled")
                 return
             logger.error(f"gRPC error in subscription: {e}")
+            _raise_if_undecodable(e, "Subscription failed")
             raise EventStoreError(f"Subscription failed: {e}") from e
