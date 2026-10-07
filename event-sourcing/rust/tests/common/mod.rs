@@ -5,6 +5,7 @@
 
 #![allow(dead_code)]
 
+pub mod proxy;
 pub mod xlang;
 
 use std::net::SocketAddr;
@@ -12,7 +13,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use event_sourcing_rust::client::{proto, EventDataStream, EventStoreClient, EventStorePort};
+use event_sourcing_rust::client::{
+    proto, EventDataStream, EventStoreClient, EventStorePort, ServerInfo,
+};
 use event_sourcing_rust::error::{Error, Result};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -156,5 +159,9 @@ impl EventStorePort for FaultyPort {
 
     async fn subscribe(&self, req: proto::SubscribeRequest) -> Result<EventDataStream> {
         self.inner.subscribe(req).await
+    }
+
+    async fn server_info(&self) -> Result<ServerInfo> {
+        self.inner.server_info().await
     }
 }

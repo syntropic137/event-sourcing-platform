@@ -14,6 +14,7 @@ The Rust event sourcing SDK (`event-sourcing/rust`, crate `event-sourcing-rust`)
 | Checkpointed projection runner (catch-up, live, resume, rebuild) | Supported |
 | Postgres projection store (`postgres` feature) | Supported |
 | Process-manager processor (live-only side effects) | Supported |
+| Supervised runner (reconnect with backoff, DATA_LOSS halt, health, capability guard) | Supported |
 | TLS, timeouts, keepalive, Basic/Bearer credentials (`ClientConfig`) | Supported |
 | Cross-language wire format (reads and writes TypeScript/Python streams) | Supported |
 | Upcasters (on load and in projections) | Supported |
@@ -175,10 +176,41 @@ runner.run(cancel.clone()).await?; // catch-up, then live, until cancelled or an
 - **Atomic commit**: per event the runner calls `begin`, `handle(&mut tx, ..)`, then `commit(tx, key, position)`. `PostgresProjectionStore` (and `InMemoryProjectionStore`) commit read-model writes and the checkpoint in one transaction; a handler error rolls both back. Commits that do not advance the checkpoint are rejected, fencing off a second runner on the same key.
 - **External read models** (search, vector stores): use `ExternalCheckpoints`. The checkpoint is saved after the handler; a crash in between redelivers the event, so handlers must be idempotent (upsert by event id).
 - **Ordering requirement**: the event store must deliver live events in global-nonce commit order (`commit_ordered_global_nonce`, #366). A live event below the last applied position that is not provably a duplicate stops the runner with `Error::OutOfOrderDelivery` instead of being skipped.
-- **Feed prefixes** may not contain `\`, `%` or `_` until subscription prefixes are escaped by the backend (#361); `run` rejects them.
-- **Errors propagate**: handler failures (`Error::ProjectionFailed`), commit failures, and subscription stream errors or end-of-stream stop the runner with an error. The checkpoint stays at the last committed event.
+- **Feed prefixes** are matched literally, including `\`, `%` and `_` (#361). A feed containing `\` additionally requires the server's `literal_subscription_prefix` capability (older Postgres servers used the prefix as a `LIKE` pattern, where `\` can miss events).
+- **Errors propagate**: handler failures (`Error::ProjectionFailed`), commit failures, and subscription stream errors or end-of-stream stop `run` with an error. The checkpoint stays at the last committed event. Use `run_supervised` (below) to reconnect.
 - **Rebuild**: `runner.rebuild()` resets that key's data and checkpoint only (in one transaction for transactional stores; checkpoint first for external ones). Stop other runners on the key first. Bump `version()` to build a new read model next to the old one.
 - **Side effects**: projections must be pure. Write to-do records in `handle` and attach a `LiveProcessor` with `with_live_processor`; it runs on its own task and is woken only by committed live events, never during replay (process-manager pattern, ADR-025). Failed passes retry with backoff, and one pass runs when going live (after replay) to resume items stranded by a crash; disable with `drain_pending_on_live_start(false)`. `process_pending` must be idempotent.
+- **Processor panics** never go unnoticed: by default a panicking pass (or a processor task that ends unexpectedly) stops the runner with `Error::LiveProcessorPanicked`; `on_processor_panic(ProcessorPanicPolicy::Restart)` logs it and retries the pass with the processor backoff instead. On cancellation the in-flight pass may finish within `with_processor_shutdown_grace` (default 10 s), then it is cancelled; when the runner fails or halts it is cancelled at once (idempotency makes this safe), so a pass blocked on an external service cannot delay a halt.
+
+### Supervision
+
+Services run the runner under `run_supervised`, which owns reconnects:
+
+```rust
+let mut runner = ProjectionRunner::new(Arc::new(client), store, OrderSummary, "tenant-a")
+    .with_live_processor(notifier);
+let health = runner.health(); // watch::Receiver<RunnerHealth> for readiness/metrics
+let policy = BackoffPolicy::new(Duration::from_millis(500), Duration::from_secs(30));
+match runner.run_supervised(cancel, policy).await {
+    Ok(RunExit::Cancelled { .. }) => {}
+    Err(Error::DataLoss { global_nonce, .. }) => { /* alert: operator action needed (ADR-026) */ }
+    Err(err) => { /* bug or misconfiguration: handler, fencing, incompatible server, panic */ }
+}
+```
+
+| Failure | Behavior |
+|---------|----------|
+| `UNAVAILABLE`, `RESOURCE_EXHAUSTED` (lagging subscription), `DEADLINE_EXCEEDED`, transport errors, Postgres projection-store connection loss (also when a handler hits it through the store transaction) | Reconnect from the persisted checkpoint after a jittered exponential backoff (`BackoffPolicy`: initial, cap, multiplier, jitter, optional `with_max_retries`). The backoff resets after progress. Committed events are skipped on redelivery: nothing lost, nothing applied twice. |
+| `DATA_LOSS` (undecodable stored event, position from the `esp-undecodable-global-nonce` trailer) | Never retried with backoff, never skipped. The runner applies every valid event before it, halts with the checkpoint just below it, logs one `ERROR` per position, sets `RunnerHealth::halted_at` and holds the `LiveProcessor`. Default: returns `Error::DataLoss { global_nonce, .. }`. With `with_undecodable_recheck(interval)` it stays halted and re-checks at that fixed pace, resuming on its own once the row is repaired or the checkpoint was moved past it. |
+| Handler or upcast error (`ProjectionFailed`), fencing (`CheckpointFenced`), incompatible server (`Incompatible`), `OutOfOrderDelivery`, processor panic, decode errors | Stop with the typed error. |
+
+Cancellation is prompt, including during a backoff or re-check wait and during stalled read-only calls (capability probe, reads, opening the subscription); an event being applied is finished or rolled back, never half-committed.
+
+**Operator recovery from `DATA_LOSS`** (ADR-026): repair the row or deploy an event store that decodes it; or, if it is unrecoverable, set this consumer's checkpoint to `global_nonce` (it resumes at `global_nonce + 1`), then restart the runner (or wait for the re-check). If the undecodable event is the tenant head, the head probe uses its position as the live boundary, so a runner moved past it still goes live.
+
+**Health** (`RunnerHealth`): `state` (`Starting`, `CatchingUp`, `Live`, `Backoff { attempt, delay }`, `Halted { global_nonce }`, `Stopped`, `Failed`), `position`, `live_boundary`, `lag()` (while catching up), `halted_at`, `last_error`, `consecutive_failures`, `restarts`, and `is_healthy()` for readiness probes.
+
+**Capability guard**: `run`, `catch_up` and every supervised reconnect first require the server to advertise `commit_ordered_global_nonce`, `subscription_errors_surfaced` and `undecodable_events_surfaced` (`REQUIRED_CAPABILITIES`). Legacy servers, and custom `EventStorePort` decorators that do not forward `server_info`, are refused with `Error::Incompatible` (not retried). Narrow the set with `with_required_capabilities([...])` or opt out with `without_capability_check()`.
 
 ## Examples
 
@@ -187,6 +219,7 @@ cd event-sourcing/rust
 cargo run --example basic_aggregate
 cargo run --example order_processing
 cargo run --example repository   # live gRPC event store (in-process unless EVENT_STORE_ADDR is set)
+cargo run --example supervised_projection   # projection service: supervision, live processor, health
 ```
 
 ## Related

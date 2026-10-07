@@ -27,8 +27,8 @@
 //!   Live delivery relies on the server doing the same (the
 //!   `literal_subscription_prefix` capability, #361); servers before v0.17.0
 //!   used the prefix as an unescaped SQL `LIKE` pattern on Postgres, where a
-//!   prefix containing `\` can miss events. Check the capability with
-//!   `GetServerInfo` before using such a prefix against an unknown server.
+//!   prefix containing `\` can miss events. With the capability guard on
+//!   (default), a feed containing `\` also requires that capability.
 //! * **Atomicity**: for each event the runner calls
 //!   [`ProjectionStore::begin`], [`CheckpointedProjection::handle`], then
 //!   [`ProjectionStore::commit`] with the event's position. A transactional
@@ -42,8 +42,17 @@
 //!   between the two redelivers the event on restart, so the handler **must**
 //!   be idempotent (upsert keyed by event id or aggregate id + nonce).
 //! * **Errors propagate**: a failing handler, a failing commit, a failing or
-//!   ended subscription stream stops the runner with an error. The runner
-//!   never skips an event it failed to process.
+//!   ended subscription stream stops [`ProjectionRunner::run`] with an error.
+//!   The runner never skips an event it failed to process.
+//! * **Supervision**: [`ProjectionRunner::run_supervised`] reconnects from the
+//!   checkpoint after transient failures (jittered [`BackoffPolicy`]), halts
+//!   at an undecodable stored event with [`Error::DataLoss`] instead of
+//!   skipping or retrying it (ADR-026), and stops with typed errors on
+//!   everything else. [`ProjectionRunner::health`] reports state, position,
+//!   lag, halt and last error.
+//! * **Capability guard**: `run` and `catch_up` first require the event
+//!   store to advertise [`REQUIRED_CAPABILITIES`] (opt out with
+//!   [`ProjectionRunner::without_capability_check`]).
 //! * **Cancellation** is cooperative through a `CancellationToken` and takes
 //!   effect between events; an in-flight event is finished or rolled back,
 //!   never half-committed.
@@ -59,25 +68,46 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
-use tokio::sync::{watch, Notify};
+use tokio::sync::watch;
 use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 
-use crate::client::{proto, EventStorePort};
+use crate::client::{capabilities, proto, CompatibilityError, EventStorePort};
 use crate::error::{Error, Result};
 use crate::event::{DomainEvent, SerializedEvent};
 use crate::upcast::Upcasters;
 use crate::wire;
 
+mod drain;
 #[cfg(feature = "postgres")]
 mod postgres;
+mod supervisor;
+use drain::Drain;
+pub use drain::ProcessorPanicPolicy;
 #[cfg(feature = "postgres")]
 pub use postgres::PostgresProjectionStore;
+pub use supervisor::{BackoffPolicy, RunnerHealth, RunnerState};
+
+/// Capabilities a [`ProjectionRunner`] requires of the event store by
+/// default (see [`ProjectionRunner::with_required_capabilities`]):
+///
+/// * `commit_ordered_global_nonce`: live events arrive in commit order, so
+///   skipping duplicates by position never drops an event (#366).
+/// * `subscription_errors_surfaced`: a failed backend query ends the stream
+///   with `UNAVAILABLE` instead of looking like "no new events" (ADR-026).
+/// * `undecodable_events_surfaced`: an undecodable stored event ends the
+///   stream with `DATA_LOSS` instead of being skipped (ADR-026).
+pub const REQUIRED_CAPABILITIES: [&str; 3] = [
+    capabilities::COMMIT_ORDERED_GLOBAL_NONCE,
+    capabilities::SUBSCRIPTION_ERRORS_SURFACED,
+    capabilities::UNDECODABLE_EVENTS_SURFACED,
+];
 
 /// Identity of a projection's position in a feed.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -366,10 +396,11 @@ impl<C: CheckpointStore> ProjectionStore for ExternalCheckpoints<C> {
 }
 
 fn fence_error(key: &CheckpointKey, stored: u64, position: u64) -> Error {
-    Error::Repository(anyhow::anyhow!(
-        "checkpoint for {key} is at {stored}; refusing to commit {position} \
-         (another runner owns this key, or the event was already processed)"
-    ))
+    Error::CheckpointFenced {
+        projection: key.to_string(),
+        stored,
+        position,
+    }
 }
 
 /// In-memory [`CheckpointStore`] for tests and single-process use.
@@ -545,9 +576,22 @@ pub struct ProjectionRunner<P, S: ProjectionStore> {
     processor: Option<Arc<dyn LiveProcessor>>,
     drain_on_live_start: bool,
     processor_retry: Duration,
+    processor_shutdown_grace: Duration,
     upcasters: Upcasters,
     position: u64,
     progress: watch::Sender<RunnerProgress>,
+    required_capabilities: Vec<String>,
+    panic_policy: ProcessorPanicPolicy,
+    undecodable_recheck: Option<Duration>,
+    /// Position of the undecodable event the runner is halted at.
+    halted_at: Option<u64>,
+    /// Holds live processor passes while halted.
+    paused: Arc<AtomicBool>,
+    health: watch::Sender<RunnerHealth>,
+    /// Checkpoint loaded by the current attempt (progress detection).
+    loaded_position: u64,
+    /// When the current attempt went live.
+    live_since: Option<Instant>,
 }
 
 impl<P, S> ProjectionRunner<P, S>
@@ -573,10 +617,82 @@ where
             processor: None,
             drain_on_live_start: true,
             processor_retry: Duration::from_secs(1),
+            processor_shutdown_grace: Duration::from_secs(10),
             upcasters: Upcasters::new(),
             position: 0,
             progress,
+            required_capabilities: REQUIRED_CAPABILITIES.map(String::from).to_vec(),
+            panic_policy: ProcessorPanicPolicy::default(),
+            undecodable_recheck: None,
+            halted_at: None,
+            paused: Arc::new(AtomicBool::new(false)),
+            health: watch::channel(RunnerHealth::default()).0,
+            loaded_position: 0,
+            live_since: None,
         }
+    }
+
+    /// Capabilities the event store must advertise before the runner reads
+    /// anything (checked at the start of every `run`, `catch_up` and
+    /// supervised reconnect). Default: [`REQUIRED_CAPABILITIES`]. A server
+    /// missing one (including a legacy server, or a custom
+    /// [`EventStorePort`] that does not forward `server_info`) is refused
+    /// with [`Error::Incompatible`], which is not retried.
+    pub fn with_required_capabilities<I, C>(mut self, capabilities: I) -> Self
+    where
+        I: IntoIterator<Item = C>,
+        C: Into<String>,
+    {
+        self.required_capabilities = capabilities.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Opt out of the capability guard. Only for event stores you have
+    /// verified out of band: without `commit_ordered_global_nonce` live
+    /// events can be skipped, and without the `*_surfaced` capabilities
+    /// failures and undecodable events can be hidden (ADR-026).
+    pub fn without_capability_check(mut self) -> Self {
+        self.required_capabilities.clear();
+        self
+    }
+
+    /// On cancellation, how long an in-flight [`LiveProcessor`] pass may run
+    /// before it is cancelled (default 10 s), so a stalled external call
+    /// cannot block shutdown. When the runner fails or halts, the pass is
+    /// cancelled at once. `process_pending` is idempotent, so the next live
+    /// pass redoes whatever was interrupted.
+    pub fn with_processor_shutdown_grace(mut self, grace: Duration) -> Self {
+        self.processor_shutdown_grace = grace;
+        self
+    }
+
+    /// What to do when a [`LiveProcessor`] pass panics. Default
+    /// [`ProcessorPanicPolicy::Stop`]: the runner stops with
+    /// [`Error::LiveProcessorPanicked`].
+    pub fn on_processor_panic(mut self, policy: ProcessorPanicPolicy) -> Self {
+        self.panic_policy = policy;
+        self
+    }
+
+    /// Under [`run_supervised`](Self::run_supervised), stay halted at an
+    /// undecodable stored event (`DATA_LOSS`) and re-check every `interval`
+    /// instead of returning [`Error::DataLoss`]. The runner resumes on its
+    /// own once an operator repaired the row or moved the checkpoint past
+    /// it (ADR-026). Intervals below 10 ms are raised to 10 ms.
+    pub fn with_undecodable_recheck(mut self, interval: Duration) -> Self {
+        self.undecodable_recheck = Some(interval.max(Duration::from_millis(10)));
+        self
+    }
+
+    /// Health updates: state, position, live boundary, halt, last error,
+    /// failures. Cheap to clone and poll from a readiness endpoint.
+    pub fn health(&self) -> watch::Receiver<RunnerHealth> {
+        self.health.subscribe()
+    }
+
+    /// Position of the undecodable stored event this runner is halted at.
+    pub fn halted_at(&self) -> Option<u64> {
+        self.halted_at
     }
 
     /// Only consume aggregates whose id starts with `prefix`. Part of the
@@ -672,32 +788,78 @@ where
     /// Process every event up to the current head, then return the
     /// committed position. Does not subscribe.
     pub async fn catch_up(&mut self) -> Result<u64> {
-        self.catch_up_until(&CancellationToken::new()).await?;
-        Ok(self.position)
+        let never = CancellationToken::new();
+        let result = async {
+            self.check_capabilities(&never).await?;
+            self.catch_up_until(&never).await
+        }
+        .await;
+        match result {
+            Ok(_) => {
+                self.set_state(RunnerState::Stopped);
+                Ok(self.position)
+            }
+            Err(err) => {
+                self.record_failure(&err);
+                Err(err)
+            }
+        }
     }
 
     /// Catch up, then consume live events until `cancel` fires or an error
     /// occurs. Errors are returned, never swallowed; the checkpoint stays at
     /// the last event that committed.
     pub async fn run(&mut self, cancel: CancellationToken) -> Result<RunExit> {
-        let Some(boundary) = self.catch_up_until(&cancel).await? else {
+        let result = self.run_attempt(&cancel).await;
+        match &result {
+            Ok(_) => self.set_state(RunnerState::Stopped),
+            Err(err) => self.record_failure(err),
+        }
+        result
+    }
+
+    /// One attempt of [`run`](Self::run): capability check, catch-up, live.
+    async fn run_attempt(&mut self, cancel: &CancellationToken) -> Result<RunExit> {
+        self.loaded_position = self.position;
+        self.live_since = None;
+        if !self.check_capabilities(cancel).await? {
+            return Ok(RunExit::Cancelled {
+                position: self.position,
+            });
+        }
+        let Some(boundary) = self.catch_up_until(cancel).await? else {
             return Ok(RunExit::Cancelled {
                 position: self.position,
             });
         };
 
-        let mut stream = self
-            .events
-            .subscribe(proto::SubscribeRequest {
-                tenant_id: self.key.tenant_id.clone(),
-                aggregate_id_prefix: self.key.feed.clone(),
-                from_global_nonce: self.position + 1,
-            })
-            .await?;
+        let subscribe = self.events.subscribe(proto::SubscribeRequest {
+            tenant_id: self.key.tenant_id.clone(),
+            aggregate_id_prefix: self.key.feed.clone(),
+            from_global_nonce: self.position + 1,
+        });
+        let Some(stream) = or_cancelled(cancel, subscribe).await else {
+            return Ok(RunExit::Cancelled {
+                position: self.position,
+            });
+        };
+        let mut stream = stream?;
         self.publish(true);
+        self.live_since = Some(Instant::now());
+        self.health.send_modify(|h| {
+            h.state = RunnerState::Live;
+            h.consecutive_failures = 0;
+        });
 
-        let drain = self.processor.clone().map(|p| {
-            let drain = Drain::spawn(p, cancel.child_token(), self.processor_retry);
+        let mut drain = self.processor.clone().map(|p| {
+            let drain = Drain::spawn(
+                p,
+                cancel.child_token(),
+                self.processor_retry,
+                self.paused.clone(),
+                self.panic_policy,
+                self.key.to_string(),
+            );
             if self.drain_on_live_start {
                 drain.wake();
             }
@@ -707,6 +869,12 @@ where
             let item = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => break Ok(RunExit::Cancelled { position: self.position }),
+                message = processor_panicked(&mut drain) => {
+                    break Err(Error::LiveProcessorPanicked {
+                        projection: self.key.to_string(),
+                        message,
+                    })
+                }
                 item = stream.next() => item,
             };
             let data = match item {
@@ -722,6 +890,12 @@ where
                 Ok(event) => event,
                 Err(err) => break Err(err),
             };
+            if self.observe(event.global_nonce) {
+                // Halt cleared: wake the processor held while halted.
+                if let Some(drain) = &drain {
+                    drain.wake();
+                }
+            }
             // Servers before `literal_subscription_prefix` (#361) may match
             // the feed prefix loosely (unescaped SQL LIKE); enforce exact
             // prefix semantics so foreign events never reach the projection
@@ -759,31 +933,119 @@ where
         };
         self.publish(false);
         if let Some(drain) = drain {
-            drain.stop().await;
+            // Cancelled: let the in-flight pass finish. Failed or halted:
+            // cancel it now (Python #380 does the same), so a pass blocked on
+            // an external service cannot delay the halt or keep a side
+            // effect running past it. A processor failure racing with either
+            // is still surfaced: a dead processor never goes unnoticed.
+            let died = match result {
+                Ok(_) => drain.stop(self.processor_shutdown_grace).await,
+                Err(_) => drain.abort().await,
+            };
+            if let Some(message) = died {
+                if !matches!(result, Err(Error::LiveProcessorPanicked { .. })) {
+                    if let Err(other) = &result {
+                        tracing::error!(
+                            projection = %self.key,
+                            error = %other,
+                            "runner error superseded by a live processor panic"
+                        );
+                    }
+                    return Err(Error::LiveProcessorPanicked {
+                        projection: self.key.to_string(),
+                        message,
+                    });
+                }
+            }
         }
         result
     }
 
+    /// Fail with [`Error::Incompatible`] unless the event store advertises
+    /// every required capability.
+    /// Returns false if cancelled first.
+    async fn check_capabilities(&mut self, cancel: &CancellationToken) -> Result<bool> {
+        if self.required_capabilities.is_empty() {
+            return Ok(true);
+        }
+        self.set_state(RunnerState::Starting);
+        let Some(info) = or_cancelled(cancel, self.events.server_info()).await else {
+            return Ok(false);
+        };
+        let info = info?;
+        let mut required: Vec<&str> = self
+            .required_capabilities
+            .iter()
+            .map(String::as_str)
+            .collect();
+        // Older servers use the prefix as an unescaped SQL LIKE pattern, where
+        // `\` escapes the next character and live events can be missed (#361).
+        if self.key.feed.contains('\\') {
+            required.push(capabilities::LITERAL_SUBSCRIPTION_PREFIX);
+        }
+        let missing = info.missing_capabilities(&required);
+        if missing.is_empty() {
+            return Ok(true);
+        }
+        Err(Error::Incompatible(
+            CompatibilityError::MissingCapabilities {
+                server_version: info.server_version,
+                missing,
+            },
+        ))
+    }
+
     /// Returns the live boundary, or `None` if cancelled.
     async fn catch_up_until(&mut self, cancel: &CancellationToken) -> Result<Option<u64>> {
-        self.position = self.store.load_checkpoint(&self.key).await?.unwrap_or(0);
+        let Some(loaded) = or_cancelled(cancel, self.store.load_checkpoint(&self.key)).await else {
+            return Ok(None);
+        };
+        self.position = loaded?.unwrap_or(0);
+        self.loaded_position = self.position;
         self.publish(false);
-        let boundary = self.head().await?;
+        // An operator moved the checkpoint to (or past) the halt position.
+        self.observe(self.position);
+        let Some(boundary) = or_cancelled(cancel, self.head()).await else {
+            return Ok(None);
+        };
+        let boundary = boundary?;
+        self.health.send_modify(|h| {
+            h.state = RunnerState::CatchingUp;
+            h.live_boundary = Some(boundary);
+        });
 
         let mut from = self.position + 1;
+        // Page size in effect. Drops to 1 below an undecodable event, so the
+        // valid events before it are applied and the checkpoint reaches the
+        // event just before it (ADR-026: an operator skip then skips only
+        // the undecodable event).
+        let mut limit = self.page_size;
+        let mut slow_until = 0;
         while from <= boundary {
             if cancel.is_cancelled() {
                 return Ok(None);
             }
-            let page = self
-                .events
-                .read_all(proto::ReadAllRequest {
-                    tenant_id: self.key.tenant_id.clone(),
-                    from_global_nonce: from,
-                    max_count: self.page_size,
-                    forward: true,
-                })
-                .await?;
+            if from > slow_until {
+                limit = self.page_size;
+            }
+            let read = self.events.read_all(proto::ReadAllRequest {
+                tenant_id: self.key.tenant_id.clone(),
+                from_global_nonce: from,
+                max_count: limit,
+                forward: true,
+            });
+            let Some(read) = or_cancelled(cancel, read).await else {
+                return Ok(None);
+            };
+            let page = match read {
+                Ok(page) => page,
+                Err(Error::DataLoss { global_nonce, .. }) if global_nonce > from && limit > 1 => {
+                    limit = 1;
+                    slow_until = global_nonce;
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
             let Some(last) = page.events.last().and_then(|e| e.meta.as_ref()) else {
                 break;
             };
@@ -796,6 +1058,7 @@ where
                 if event.global_nonce > boundary {
                     break;
                 }
+                self.observe(event.global_nonce);
                 if !event.aggregate_id.starts_with(&self.key.feed) {
                     continue;
                 }
@@ -815,7 +1078,7 @@ where
     }
 
     async fn head(&self) -> Result<u64> {
-        let page = self
+        let page = match self
             .events
             .read_all(proto::ReadAllRequest {
                 tenant_id: self.key.tenant_id.clone(),
@@ -823,7 +1086,27 @@ where
                 max_count: 1,
                 forward: false,
             })
-            .await?;
+            .await
+        {
+            Ok(page) => page,
+            // The probe reads only the highest row, so the undecodable event
+            // is the head: its position is the boundary. A runner whose
+            // checkpoint an operator moved past it resumes; one still before
+            // it stops there when catch-up reaches it (ADR-026).
+            Err(Error::DataLoss { global_nonce, .. }) => {
+                if self.halted_at == Some(global_nonce) {
+                    tracing::debug!(projection = %self.key, global_nonce, "head event is undecodable");
+                } else {
+                    tracing::warn!(
+                        projection = %self.key,
+                        global_nonce,
+                        "head event is undecodable; using its position as the live boundary"
+                    );
+                }
+                return Ok(global_nonce);
+            }
+            Err(err) => return Err(err),
+        };
         Ok(page
             .events
             .first()
@@ -866,87 +1149,101 @@ where
             position: self.position,
             is_live,
         });
-    }
-}
-
-/// Background task running a [`LiveProcessor`] one pass at a time.
-struct Drain {
-    wake: Arc<Notify>,
-    stop: CancellationToken,
-    handle: Option<tokio::task::JoinHandle<()>>,
-}
-
-impl Drain {
-    fn spawn(processor: Arc<dyn LiveProcessor>, stop: CancellationToken, retry: Duration) -> Self {
-        const MAX_RETRY: Duration = Duration::from_secs(30);
-        let wake = Arc::new(Notify::new());
-        let task_wake = wake.clone();
-        let task_stop = stop.clone();
-        let handle = tokio::spawn(async move {
-            // Some(delay) while the last pass failed: retry after `delay`
-            // even if no new live event arrives.
-            let mut retry_after: Option<Duration> = None;
-            loop {
-                match retry_after {
-                    None => tokio::select! {
-                        biased;
-                        _ = task_stop.cancelled() => return,
-                        _ = task_wake.notified() => {}
-                    },
-                    Some(delay) => tokio::select! {
-                        biased;
-                        _ = task_stop.cancelled() => return,
-                        _ = task_wake.notified() => {}
-                        _ = tokio::time::sleep(delay) => {}
-                    },
-                }
-                match processor.process_pending().await {
-                    Ok(_) => retry_after = None,
-                    Err(err) => {
-                        // Pending items stay pending and are retried.
-                        tracing::warn!(error = %err, "live processor pass failed");
-                        retry_after = Some(match retry_after {
-                            None => retry,
-                            Some(d) => (d * 2).min(MAX_RETRY),
-                        });
-                    }
-                }
+        let position = self.position;
+        let committed = position > self.loaded_position;
+        self.health.send_if_modified(|h| {
+            let changed = h.position != position || (committed && h.consecutive_failures != 0);
+            h.position = position;
+            if committed {
+                h.consecutive_failures = 0;
             }
+            changed
         });
-        Self {
-            wake,
-            stop,
-            handle: Some(handle),
+    }
+
+    fn set_state(&self, state: RunnerState) {
+        self.health.send_if_modified(|h| {
+            let changed = h.state != state;
+            h.state = state;
+            changed
+        });
+    }
+
+    /// Record a failed attempt in health; enter the halt on `DATA_LOSS`.
+    fn record_failure(&mut self, err: &Error) {
+        let message = err.to_string();
+        self.health.send_modify(|h| {
+            h.last_error = Some(message);
+            h.consecutive_failures = h.consecutive_failures.saturating_add(1);
+        });
+        match err.data_loss_position() {
+            Some(global_nonce) => self.enter_halt(global_nonce, err),
+            None => self.set_state(RunnerState::Failed),
         }
     }
 
-    fn wake(&self) {
-        // Stores one permit: wake-ups during a pass coalesce into one more.
-        self.wake.notify_one();
+    /// Halt at an undecodable event: hold the live processor, report it, and
+    /// log one `ERROR` per position (re-checks log at `DEBUG`).
+    fn enter_halt(&mut self, global_nonce: u64, err: &Error) {
+        if self.halted_at == Some(global_nonce) {
+            tracing::debug!(projection = %self.key, global_nonce, "still halted at undecodable stored event");
+        } else {
+            tracing::error!(
+                projection = %self.key,
+                global_nonce,
+                position = self.position,
+                "{err}"
+            );
+        }
+        self.halted_at = Some(global_nonce);
+        self.paused.store(true, Ordering::SeqCst);
+        self.health.send_modify(|h| {
+            h.halted_at = Some(global_nonce);
+            h.state = RunnerState::Halted { global_nonce };
+        });
     }
 
-    /// Let the current pass finish, then stop.
-    async fn stop(mut self) {
-        self.stop.cancel();
-        // Await through a reference: if this future is dropped mid-wait
-        // (run() aborted during shutdown), `Drain` still owns the handle and
-        // `Drop` aborts the task instead of detaching it.
-        if let Some(handle) = self.handle.as_mut() {
-            let _ = handle.await;
+    /// Note that the store delivered position `global_nonce` (or that the
+    /// checkpoint is there). Clears the halt once the runner is at or past
+    /// its position; returns true if it did.
+    fn observe(&mut self, global_nonce: u64) -> bool {
+        match self.halted_at {
+            Some(halt) if global_nonce >= halt => {
+                tracing::info!(
+                    projection = %self.key,
+                    global_nonce = halt,
+                    "resumed past undecodable stored event"
+                );
+                self.halted_at = None;
+                self.paused.store(false, Ordering::SeqCst);
+                self.health.send_modify(|h| h.halted_at = None);
+                true
+            }
+            _ => false,
         }
-        self.handle = None;
     }
 }
 
-impl Drop for Drain {
-    /// `run()` was dropped or aborted without a graceful stop: the processor
-    /// must not outlive its runner. Cancel and abort the task (an interrupted
-    /// pass is safe because `process_pending` is idempotent).
-    fn drop(&mut self) {
-        self.stop.cancel();
-        if let Some(handle) = self.handle.take() {
-            handle.abort();
-        }
+/// Await `fut` unless `cancel` fires first. Only for calls that commit
+/// nothing (reads, capability probe, opening a subscription), so dropping
+/// them mid-flight is harmless.
+async fn or_cancelled<T>(
+    cancel: &CancellationToken,
+    fut: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => None,
+        value = fut => Some(value),
+    }
+}
+
+/// Resolves when the live processor panicked (under
+/// [`ProcessorPanicPolicy::Stop`]); never without a processor.
+async fn processor_panicked(drain: &mut Option<Drain>) -> String {
+    match drain {
+        Some(drain) => drain.panicked().await,
+        None => std::future::pending().await,
     }
 }
 
