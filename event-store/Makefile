@@ -89,9 +89,10 @@ recovery-drill:
 	@run_id="$${DRILL_RUN_ID:-drill-$$(date +%s)-$$$$}"; status=0; \
 	 echo "Recovery drill run id: $$run_id"; \
 	 DRILL_RUN_ID="$$run_id" cargo test -p eventstore-bin $(DRILL_TESTS) -- --ignored --test-threads=1 $(DRILL_ARGS) || status=$$?; \
-	 ids=$$(docker ps -aq --filter "label=esp-recovery-drill=$$run_id"); \
+	 ids=$$(docker ps -aq --filter "label=esp-recovery-drill=$$run_id") || { echo "Could not list drill containers"; ids=""; [ $$status -ne 0 ] || status=3; }; \
 	 if [ -n "$$ids" ] && [ -n "$${DRILL_KEEP_CONTAINERS:-}" ]; then echo "DRILL_KEEP_CONTAINERS set: keeping $$ids (make recovery-drill-clean removes them)"; \
-	 elif [ -n "$$ids" ]; then echo "Removing leftover drill containers: $$ids"; docker rm -f -v $$ids >/dev/null; fi; \
+	 elif [ -n "$$ids" ]; then echo "Removing leftover drill containers: $$ids"; \
+	   docker rm -f -v $$ids >/dev/null || { echo "Failed to remove drill containers: $$ids"; [ $$status -ne 0 ] || status=3; }; fi; \
 	 exit $$status
 
 # Remove containers left by any interrupted drill run (label-scoped).

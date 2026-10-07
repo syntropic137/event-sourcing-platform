@@ -72,8 +72,9 @@ async fn db_outage_during_replay_surfaces_and_resume_from_checkpoint_completes()
     let cp = consumer.checkpoint().await;
     assert!(cp > 0);
 
-    // It restarts while the database is reachable but stalls: the replay
-    // query is sent and held, then every connection is cut.
+    // It restarts while the database path stalls: the replay traffic is
+    // held by the proxy (it never reaches Postgres), then every connection
+    // is cut, so the replay query fails on the wire.
     rig.proxy.hold();
     let sent_before = rig.proxy.client_bytes();
     let run2 = {

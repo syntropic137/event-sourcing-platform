@@ -353,7 +353,9 @@ async fn kill_storm_during_writes_reconciles_exactly_once() {
         })
     };
 
-    // Kill at fixed progress points, only while an append call is in flight,
+    // Kill at fixed progress points, only while a client append call is in
+    // flight (it may not have reached the server yet; the server-side
+    // boundaries are pinned deterministically by the drills above),
     // after a varying delay so the kill lands at different points of it.
     let mut kills_in_flight = 0;
     for k in 0..KILLS {
