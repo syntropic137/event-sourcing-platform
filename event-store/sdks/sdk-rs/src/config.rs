@@ -271,6 +271,12 @@ impl ClientConfig {
     /// Resolve the endpoint URI and whether it uses TLS.
     pub(crate) fn resolve(&self) -> Result<ResolvedEndpoint, ConfigError> {
         let raw = self.endpoint.trim();
+        if has_userinfo(raw) {
+            // Never echo the endpoint here: it contains a secret.
+            return Err(ConfigError::new(
+                "endpoint must not contain user:password@; use basic_auth() or credentials()",
+            ));
+        }
         if raw.is_empty() {
             return Err(ConfigError::new("endpoint is empty"));
         }
@@ -345,7 +351,7 @@ impl ClientConfig {
 impl fmt::Debug for ClientConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ClientConfig")
-            .field("endpoint", &self.endpoint)
+            .field("endpoint", &redact_userinfo(&self.endpoint))
             .field("tls", &self.tls)
             .field("connect_timeout", &self.connect_timeout)
             .field("request_timeout", &self.request_timeout)
@@ -367,6 +373,27 @@ impl fmt::Debug for ClientConfig {
 pub(crate) struct ResolvedEndpoint {
     pub(crate) uri: String,
     pub(crate) tls: bool,
+}
+
+/// True when the authority part of `endpoint` has `userinfo@`.
+fn has_userinfo(endpoint: &str) -> bool {
+    let rest = endpoint.split_once("://").map_or(endpoint, |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    authority.contains('@')
+}
+
+/// `endpoint` with any `userinfo@` replaced, for diagnostics.
+fn redact_userinfo(endpoint: &str) -> String {
+    if !has_userinfo(endpoint) {
+        return endpoint.to_string();
+    }
+    let (scheme, rest) = match endpoint.split_once("://") {
+        Some((s, r)) => (format!("{s}://"), r),
+        None => (String::new(), endpoint),
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let at = rest[..authority_end].rfind('@').map_or(0, |i| i + 1);
+    format!("{scheme}<redacted>@{}", &rest[at..])
 }
 
 fn is_loopback(host: &str) -> bool {
@@ -496,6 +523,26 @@ mod tests {
             .unwrap();
         assert_eq!(ep.get_connect_timeout(), None);
         assert_eq!(ep.get_tcp_keepalive(), None);
+    }
+
+    #[test]
+    fn userinfo_in_endpoint_rejected_and_redacted() {
+        for ep in [
+            "http://app:pw-secret@localhost:1",
+            "app:pw-secret@localhost:1",
+            "https://app:pw-secret@es:443/path",
+        ] {
+            let cfg = ClientConfig::new(ep);
+            let err = cfg.resolve().unwrap_err().to_string();
+            assert!(!err.contains("pw-secret"), "{err}");
+            let dbg = format!("{cfg:?}");
+            assert!(!dbg.contains("pw-secret"), "{dbg}");
+        }
+        assert_eq!(
+            redact_userinfo("https://u:p@es:443/x"),
+            "https://<redacted>@es:443/x"
+        );
+        assert!(!has_userinfo("https://es:443/a@b"));
     }
 
     #[test]

@@ -378,22 +378,24 @@ async fn request_timeout_fires_against_black_hole() {
 
 #[tokio::test]
 async fn connect_timeout_fires_against_black_hole() {
-    // An eager connect to a server that never completes the HTTP/2 handshake
-    // either fails within the connect timeout or (if the handshake does not
-    // wait for the server) succeeds; it must never hang.
+    // TCP connects but the TLS handshake stalls (no ServerHello), so an
+    // eager connect can only end via the connect timeout.
     let (port, hole) = black_hole().await;
     let start = Instant::now();
-    let res = timeout(
+    let err = timeout(
         Duration::from_secs(5),
-        ClientConfig::new(format!("127.0.0.1:{port}"))
+        ClientConfig::new(format!("https://localhost:{port}"))
             .connect_timeout(Duration::from_millis(300))
             .connect(),
     )
     .await
-    .expect("connect must not hang");
-    if res.is_err() {
-        assert!(start.elapsed() < Duration::from_secs(3));
-    }
+    .expect("connect must not hang")
+    .expect_err("stalled handshake must fail");
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(250) && elapsed < Duration::from_millis(1500),
+        "{elapsed:?} {err:?}"
+    );
     hole.abort();
 }
 
