@@ -432,7 +432,7 @@ After Terraform creates the VM:
      -H "authorization: Basic $TOKEN" \
      192.168.0.100:50051 list
    ```
-   Note: the example TS/Python/Rust SDK clients don't yet support injecting a Basic Auth header — `grpcurl` is currently the only verified way to exercise the gateway-protected port. Adding credential support to the SDKs is tracked as a follow-up.
+   Note: the Rust SDK supports Basic Auth via `ClientConfig::basic_auth` (see `event-store/gateway/README.md`). The TS/Python SDK clients don't yet; for those, `grpcurl` is the verified way to exercise the gateway-protected port. TS/Python credential support is tracked in #302.
 
 ## Security Checklist
 

@@ -50,7 +50,8 @@ docker run --rm --network event-sourcing-platform_eventstore-network \
   gateway:80 list
 
 # External published port, without credentials (fails when
-# ESP_GATEWAY_PASSWORD is set — expect a 401/Unauthorized, this one doesn't
+# ESP_GATEWAY_PASSWORD is set - expect gRPC status UNAUTHENTICATED (16);
+# the gateway maps nginx's 401 to a proper gRPC status. This one doesn't
 # need -proto since it never gets past the auth check)
 grpcurl -plaintext -H 'authorization: ' localhost:50051 list
 
@@ -66,10 +67,27 @@ grpcurl -plaintext \
   localhost:50051 list
 ```
 
+## Client SDK support
+
+- **Rust** (`event-store/sdks/sdk-rs`): supported. The client sends
+  `authorization: Basic ...` on every call and refuses to send credentials
+  over plaintext to a non-loopback host unless explicitly allowed:
+
+  ```rust
+  let client = ClientConfig::new("https://es.example.com:50051")
+      .basic_auth("admin", std::env::var("ESP_GATEWAY_PASSWORD")?)
+      .connect()
+      .await?;
+  // Plaintext to a remote host (no TLS in front of the gateway yet, #301):
+  // add `.allow_insecure_credentials(true)` and accept the risk.
+  ```
+
+- **TypeScript / Python**: not yet (tracked in #302). Use `grpcurl` as above.
+
 ## Known limitation
 
-`auth_basic` inspects headers before the gRPC call reaches the upstream, but
-per-call re-authentication over a single multiplexed HTTP/2 connection is
-weaker than mTLS or a per-RPC token check at the application layer. This is
-accepted as good-enough for a v1 trust boundary — see "What This Is Not" in
-the ADR.
+nginx evaluates `auth_basic` per HTTP/2 request, i.e. per gRPC call, before
+it reaches the upstream. The limitation is the credential model: one shared
+static credential, no per-tenant authorization, and no TLS in front of the
+gateway yet (#301), so the credential is only safe on a trusted network.
+Accepted for a v1 trust boundary; see "What This Is Not" in the ADR.

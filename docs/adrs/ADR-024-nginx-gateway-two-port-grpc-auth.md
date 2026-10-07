@@ -96,10 +96,10 @@ ADR when undertaken.
 - No automatic password generation/rotation tooling exists yet (unlike
   ADR-059's `npx` setup wizard) — this is a manual operator responsibility
   until such tooling exists here.
-- `auth_basic` authenticates the HTTP/2 connection/headers, not each
-  individual gRPC call independently within a multiplexed connection — see
-  the "Known limitation" note in `event-store/gateway/README.md`.
-- TLS termination in front of the gateway is not yet wired into this repo's
+- `auth_basic` is checked per HTTP/2 request (per gRPC call), but against a
+  single static credential with no per-tenant authorization; see the
+  "Known limitation" note in `event-store/gateway/README.md`.
+- TLS termination in front of the gateway (tracked in #301) is not yet wired into this repo's
   `docker-compose.yml` / `infra-as-code/` — Basic Auth credentials are only
   safe in transit once that's added (e.g. via a tunnel or load balancer that
   terminates TLS).
