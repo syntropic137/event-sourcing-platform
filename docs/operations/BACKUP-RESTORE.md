@@ -37,9 +37,10 @@ and on demand (`.github/workflows/recovery-drill.yml`).
 | `drill_restart::kill_storm_during_writes_reconciles_exactly_once` | Six SIGKILL/restart cycles under a writer that retries every command with its stable key: each command stored exactly once, every ack names its commit, projection matches. |
 | `drill_connectivity::db_outage_during_replay_surfaces_and_resume_from_checkpoint_completes` | Store-to-Postgres traffic held by a proxy once the replay starts (the request never reaches Postgres), then all connections cut: `UNAVAILABLE` naming `replay` and `resume from global_nonce <checkpoint+1>`, no caught-up marker, nothing delivered. Appends through the cut node fail visibly. Resume from checkpoint applies every event, including those another node wrote during the outage. |
 | `drill_connectivity::db_outage_during_live_consumption_surfaces_and_resume_completes` | Same for the live phase. |
-| `drill_connectivity::lagging_checkpoint_redelivery_and_eventstore_kill_yield_idempotent_projection` | Consumer checkpoints every 7 events: restarts redeliver already-applied events, which the projection skips; event store SIGKILLed under a live subscription ends the stream with an error. |
+| `drill_connectivity::lagging_checkpoint_redelivery_and_eventstore_kill_yield_idempotent_projection` | Consumer checkpoints every 7 events: restarts redeliver already-applied events, which the projection skips while still advancing the checkpoint (also with no new writes); event store SIGKILLed under a live subscription ends the stream with an error. |
 | `drill_backup::pg_dump_restore_to_fresh_instance_preserves_log_and_rebuilds_projection` | `pg_dump` / `pg_restore` into a separate fresh container; see below. |
 | `drill_backup::historical_versions_replay_only_with_retained_upcasters` | Historical event versions replay only with the consumer's upcasters; a missing one stops replay explicitly at the first such event. |
+| `drill_backup::external_projection_ahead_of_restored_log_is_detected_and_rebuilt` | A consumer outside the restored database whose checkpoint is behind the restored head but whose state is ahead of it: checkpoint-only resume gives wrong state; the applied high-water check plus rebuild gives the exact state. |
 
 ## Durability configuration
 
@@ -95,8 +96,10 @@ two or more headers may still refuse a retry; confirm by reading the stream.
   naming the phase and `resume from global_nonce N`, then ends; a failed
   replay never sends the caught-up marker (ADR-026) **(drilled with real
   connection loss)**. An undecodable stored row yields `DATA_LOSS` (#351).
-- Delivery is at least once. The consumer owns its checkpoint and resubscribes
-  with `from_global_nonce = checkpoint + 1`.
+- Delivery is at least once and, within one subscription, in strictly
+  increasing `global_nonce` order (every drill consumer asserts this). The
+  consumer owns its checkpoint and resubscribes with
+  `from_global_nonce = checkpoint + 1`.
 - To make results idempotent, apply each event and advance the checkpoint in
   one transaction, and/or dedupe on `event_id`. The drill projection does
   both; with a checkpoint saved only every 7 events, redelivered events are
@@ -190,13 +193,34 @@ Into a separate fresh container, against the source:
 ### Consumers after restoring an older backup
 
 Restoring rewinds the log to the backup point. Events committed after the
-backup are gone, and new appends will reuse their `global_nonce` values.
-A consumer whose checkpoint (or projection) lives **outside** the restored
-database and is ahead of the restored head would skip new events. For each
-such consumer, if `checkpoint > max(global_nonce)` of its tenant after the
-restore, rebuild its projection from zero (or from a projection snapshot
-taken no later than the backup). Consumers whose state is inside the
-restored database are rewound consistently with it.
+backup are gone, and new appends reuse their `global_nonce` values (and, for
+retried or re-issued commands, possibly their event ids and aggregate
+nonces) with different content.
+
+Consumers whose state and checkpoint live **inside** the restored database
+are rewound consistently with it. For a consumer whose state lives
+**outside** it, the checkpoint alone is not enough: the checkpoint may lag
+the state it describes. Example: applied through position 104, checkpoint
+saved at 98, restored head 100. The checkpoint looks safe, yet the
+projection holds effects of the lost events 101 to 104, and a dedupe ledger
+would skip new events that reuse their ids.
+
+For each such consumer, compute its **applied high-water mark**: the highest
+position whose effect is in its state (for example `max(global_nonce)` of
+its dedupe ledger, or a position stored with every state write). Then:
+
+- high-water mark `<=` restored head of its tenant: resume from its
+  checkpoint;
+- otherwise: rebuild its projection from zero (or from a projection
+  snapshot taken no later than the backup), or reconcile it against the
+  restored log. Do not resume from the checkpoint.
+
+A consumer that records only a checkpoint and no applied position cannot
+make this decision safely: rebuild it. **(drilled:**
+`drill_backup::external_projection_ahead_of_restored_log_is_detected_and_rebuilt`
+shows that checkpoint-only resume leaves lost effects and drops a new event
+that reuses a lost event id, and that the high-water check plus rebuild
+yields the exact state.**)**
 
 ## Historical event versions and upcasters
 

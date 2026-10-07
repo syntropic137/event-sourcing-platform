@@ -185,7 +185,7 @@ async fn lagging_checkpoint_redelivery_and_eventstore_kill_yield_idempotent_proj
     let mut es = EventStoreProc::start(&pg.url()).await;
     let tenant = unique("t-cp-lag");
     let (cmds, expected) = accounts_workload(&tenant, 6, 15);
-    append_all(&es.endpoint(), &cmds[..80]).await;
+    append_all(&es.endpoint(), &cmds[..40]).await;
 
     let mut consumer = Consumer::new(pool.clone(), "balances", &tenant).await;
     consumer.checkpoint_every = 7;
@@ -202,8 +202,19 @@ async fn lagging_checkpoint_redelivery_and_eventstore_kill_yield_idempotent_proj
     assert_eq!(applied_g.len(), 40);
     assert_eq!(consumer.checkpoint().await, applied_g[34] as u64);
 
-    // Resume: 5 redelivered events are skipped, then the store is killed
-    // under the live subscription.
+    // Restart with no new writes: the 5 redelivered events are skipped and
+    // still move the checkpoint to the head, so it does not stay behind.
+    let head40 = head(&pool, &tenant).await;
+    assert_eq!(head40, applied_g[39] as u64);
+    let reports = consumer.run_to(&es.endpoint(), head40).await;
+    let dups: usize = reports.iter().map(|r| r.duplicates_skipped).sum();
+    let applied: usize = reports.iter().map(|r| r.applied).sum();
+    assert_eq!((dups, applied), (5, 0), "{reports:?}");
+    assert_eq!(consumer.checkpoint().await, head40);
+
+    // More writes; resume, then the store is killed under the live
+    // subscription. Checkpoints again every 7 events, so they lag.
+    append_all(&es.endpoint(), &cmds[40..80]).await;
     let run2 = {
         let endpoint = es.endpoint();
         let pool = pool.clone();
@@ -220,7 +231,8 @@ async fn lagging_checkpoint_redelivery_and_eventstore_kill_yield_idempotent_proj
     .await;
     es.kill();
     let r2 = tokio::time::timeout(STEP, run2).await.unwrap().unwrap();
-    assert_eq!(r2.duplicates_skipped, 5, "{r2:?}");
+    assert_eq!(r2.duplicates_skipped, 0, "{r2:?}");
+    assert_eq!(r2.applied, 40, "{r2:?}");
     assert!(
         matches!(r2.outcome, Outcome::Failed(_)),
         "a killed store must end the stream with an error: {r2:?}"

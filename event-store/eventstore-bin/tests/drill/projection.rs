@@ -37,6 +37,14 @@ CREATE TABLE IF NOT EXISTS drill_applied (
     global_nonce BIGINT NOT NULL,
     PRIMARY KEY (projection, tenant_id, event_id)
 );
+-- Already created by the store migrations in the event-store database;
+-- needed here for a consumer whose state lives in a separate database.
+CREATE TABLE IF NOT EXISTS projection_checkpoints (
+    projection_name TEXT PRIMARY KEY,
+    global_position BIGINT NOT NULL,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    version         INTEGER NOT NULL DEFAULT 1
+);
 "#;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -224,6 +232,7 @@ impl Consumer {
         let mut since_checkpoint = 0u64;
         // Highest position this consumer has handled (applied or skipped).
         let mut progress = from - 1;
+        let mut last_delivered = 0u64;
         loop {
             if let Stop::AtGlobalNonce(target) = stop {
                 if progress >= target {
@@ -256,6 +265,13 @@ impl Consumer {
             };
             report.delivered += 1;
             let g = ev.meta.as_ref().map(|m| m.global_nonce).unwrap_or(0);
+            // One subscription delivers strictly increasing positions, starting
+            // at `from`.
+            assert!(
+                g >= from && g > last_delivered,
+                "out-of-order delivery: {g} after {last_delivered} (from {from})"
+            );
+            last_delivered = g;
             let save = since_checkpoint + 1 >= self.checkpoint_every;
             match self.apply(&ev, save).await {
                 Ok(true) => {
@@ -299,7 +315,12 @@ impl Consumer {
         .expect("dedupe insert")
         .rows_affected();
         if inserted == 0 {
-            tx.rollback().await.expect("rollback");
+            // Already applied earlier (at-least-once redelivery). Delivery is
+            // in order, so everything up to here is applied: move the
+            // checkpoint forward, or a lagging checkpoint never catches up
+            // when no new events arrive.
+            self.save_checkpoint(&mut tx, meta.global_nonce).await;
+            tx.commit().await.expect("commit");
             return Ok(false);
         }
         let account = &meta.aggregate_id;
@@ -323,20 +344,27 @@ impl Consumer {
             }
         }
         if save_checkpoint {
-            sqlx::query(
-                "INSERT INTO projection_checkpoints (projection_name, global_position)
-                 VALUES ($1, $2)
-                 ON CONFLICT (projection_name)
-                 DO UPDATE SET global_position = EXCLUDED.global_position, updated_at = NOW()",
-            )
-            .bind(self.checkpoint_name())
-            .bind(meta.global_nonce as i64)
-            .execute(&mut *tx)
-            .await
-            .expect("save checkpoint");
+            self.save_checkpoint(&mut tx, meta.global_nonce).await;
         }
         tx.commit().await.expect("commit");
         Ok(true)
+    }
+
+    /// Advance (never regress) the checkpoint to `position`.
+    async fn save_checkpoint(&self, tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, position: u64) {
+        sqlx::query(
+            "INSERT INTO projection_checkpoints (projection_name, global_position)
+             VALUES ($1, $2)
+             ON CONFLICT (projection_name) DO UPDATE
+             SET global_position = GREATEST(projection_checkpoints.global_position,
+                                            EXCLUDED.global_position),
+                 updated_at = NOW()",
+        )
+        .bind(self.checkpoint_name())
+        .bind(position as i64)
+        .execute(&mut **tx)
+        .await
+        .expect("save checkpoint");
     }
 
     async fn adjust(
@@ -363,6 +391,42 @@ impl Consumer {
 
     pub async fn state(&self) -> BTreeMap<String, AccountState> {
         state_of(&self.pool, &self.projection, &self.tenant).await
+    }
+
+    /// Highest position whose effect is in the projection state (the
+    /// dedupe ledger's high-water mark). Can be ahead of the checkpoint.
+    pub async fn applied_high_water(&self) -> u64 {
+        sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT max(global_nonce) FROM drill_applied WHERE projection = $1 AND tenant_id = $2",
+        )
+        .bind(&self.projection)
+        .bind(&self.tenant)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap()
+        .unwrap_or(0) as u64
+    }
+
+    /// Drop this projection's state, ledger and checkpoint (rebuild from 0).
+    pub async fn reset(&self) {
+        let mut tx = self.pool.begin().await.unwrap();
+        for sql in [
+            "DELETE FROM drill_balances WHERE projection = $1 AND tenant_id = $2",
+            "DELETE FROM drill_applied WHERE projection = $1 AND tenant_id = $2",
+        ] {
+            sqlx::query(sql)
+                .bind(&self.projection)
+                .bind(&self.tenant)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+        }
+        sqlx::query("DELETE FROM projection_checkpoints WHERE projection_name = $1")
+            .bind(self.checkpoint_name())
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
     }
 
     /// Number of distinct events applied (each at most once by construction).
@@ -460,4 +524,38 @@ pub async fn state_of(
         )
     })
     .collect()
+}
+
+/// Expected projection state for a command list, computed in memory with
+/// the full upcaster registry (independent of the store and subscription).
+pub fn fold(cmds: &[super::workload::Cmd]) -> BTreeMap<String, AccountState> {
+    let up = Upcasters::full();
+    let mut state: BTreeMap<String, AccountState> = BTreeMap::new();
+    for ev in cmds.iter().flat_map(|c| c.req.events.iter()) {
+        let account = ev.meta.as_ref().unwrap().aggregate_id.clone();
+        match up.decode(ev).expect("command events decode") {
+            DomainEvent::Opened { owner, currency } => {
+                state.insert(
+                    account,
+                    AccountState {
+                        owner,
+                        currency,
+                        balance_minor: 0,
+                        events_applied: 1,
+                    },
+                );
+            }
+            DomainEvent::Deposited { amount_minor } => {
+                let s = state.get_mut(&account).expect("opened");
+                s.balance_minor += amount_minor;
+                s.events_applied += 1;
+            }
+            DomainEvent::Withdrawn { amount_minor } => {
+                let s = state.get_mut(&account).expect("opened");
+                s.balance_minor -= amount_minor;
+                s.events_applied += 1;
+            }
+        }
+    }
+    state
 }

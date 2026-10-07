@@ -97,7 +97,12 @@ impl DisposablePg {
     }
 
     pub fn url(&self) -> String {
-        format!("postgres://{USER}:{PASSWORD}@127.0.0.1:{}/{DB}", self.port)
+        self.url_for(DB)
+    }
+
+    /// URL of another database in this container.
+    pub fn url_for(&self, db: &str) -> String {
+        format!("postgres://{USER}:{PASSWORD}@127.0.0.1:{}/{db}", self.port)
     }
 
     pub fn addr(&self) -> SocketAddr {

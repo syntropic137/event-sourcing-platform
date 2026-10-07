@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use drill::fixtures::historical;
 use drill::pg::{DisposablePg, DB, USER};
-use drill::projection::{checkpoint_of, state_of, Consumer, Outcome, Stop, Upcasters};
+use drill::projection::{checkpoint_of, fold, state_of, Consumer, Outcome, Stop, Upcasters};
 use drill::server::EventStoreProc;
 use drill::unique;
 use drill::workload::{
@@ -50,6 +50,137 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+/// `pg_dump --format=custom` of the source database to a host temp file.
+fn backup(src: &DisposablePg) -> (TempDir, PathBuf) {
+    let dir = TempDir(std::env::temp_dir().join(unique("esp-drill-dump")));
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let dump = dir.0.join("eventstore.dump");
+    src.exec(&[
+        "pg_dump",
+        "-U",
+        USER,
+        "-d",
+        DB,
+        "--format=custom",
+        "--file=/tmp/eventstore.dump",
+    ]);
+    src.copy_out("/tmp/eventstore.dump", &dump);
+    assert!(std::fs::metadata(&dump).unwrap().len() > 0);
+    (dir, dump)
+}
+
+/// Restore a dump into a new, empty container.
+async fn restore_fresh(dump: &std::path::Path) -> DisposablePg {
+    let dst = DisposablePg::start("backup-dst").await;
+    let pool = dst.pool().await;
+    let fresh: Option<String> = sqlx::query_scalar("SELECT to_regclass('public.events')::text")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(fresh, None, "restore target must be empty");
+    pool.close().await;
+    dst.copy_in(dump, "/tmp/eventstore.dump");
+    dst.exec(&[
+        "pg_restore",
+        "-U",
+        USER,
+        "-d",
+        DB,
+        "--exit-on-error",
+        "--single-transaction",
+        "--no-owner",
+        "/tmp/eventstore.dump",
+    ]);
+    dst
+}
+
+/// A consumer whose state lives outside the event-store database. The
+/// backup is taken, then more events commit and the consumer applies some
+/// of them while its checkpoint lags (every 7 events). After restoring the
+/// older backup the checkpoint is behind the restored head but the
+/// projection already holds effects of lost events. Resuming on the
+/// checkpoint alone keeps those effects and drops a new event that reuses a
+/// lost event id; the applied high-water mark detects it and a rebuild
+/// restores the exact state.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "recovery drill: needs Docker; run `make -C event-store recovery-drill`"]
+async fn external_projection_ahead_of_restored_log_is_detected_and_rebuilt() {
+    let src = DisposablePg::start("ext-src").await;
+    let src_pool = src.pool().await;
+    let src_es = EventStoreProc::start(&src.url()).await;
+    let consumer_db = DisposablePg::start("ext-consumer").await;
+    let ext_pool = consumer_db.pool().await;
+    let tenant = unique("t-ext");
+    let (cmds, _) = accounts_workload(&tenant, 4, 10);
+    let (backed_up, lost) = cmds.split_at(30);
+
+    append_all(&src_es.endpoint(), backed_up).await;
+    let (_dir, dump) = backup(&src);
+    let restored_head = head(&src_pool, &tenant).await;
+    append_all(&src_es.endpoint(), lost).await;
+
+    // Applies 34 events, checkpoint saved at 28: checkpoint <= restored head
+    // (30th event) < applied high-water mark (34th event).
+    let mut ext = Consumer::new(ext_pool.clone(), "external", &tenant).await;
+    ext.checkpoint_every = 7;
+    let r = ext.run(&src_es.endpoint(), Stop::AfterApplied(34)).await;
+    assert!(matches!(r.outcome, Outcome::Crashed), "{r:?}");
+    let checkpoint = ext.checkpoint().await;
+    let high_water = ext.applied_high_water().await;
+    assert!(checkpoint <= restored_head && restored_head < high_water);
+
+    let dst = restore_fresh(&dump).await;
+    let dst_pool = dst.pool().await;
+    assert_eq!(head(&dst_pool, &tenant).await, restored_head);
+    let dst_es = EventStoreProc::start(&dst.url()).await;
+
+    // A new command after the restore lands on a nonce (and event id) that a
+    // lost event used, with different content.
+    let next_nonce = backed_up
+        .iter()
+        .filter(|c| c.req.aggregate_id == "acct-000")
+        .count() as u64
+        + 1;
+    let post = deposit(&tenant, "acct-000", next_nonce, 777_777);
+    assert!(
+        lost.iter()
+            .any(|c| c.event_ids() == post.event_ids() && c.req.events != post.req.events),
+        "post-restore event reuses a lost event id with other content"
+    );
+    append_all(&dst_es.endpoint(), std::slice::from_ref(&post)).await;
+    let mut restored_log = backed_up.to_vec();
+    restored_log.push(post.clone());
+    let expected = fold(&restored_log);
+
+    // Checkpoint-only check says "resume"; the high-water mark says "rebuild".
+    assert!(checkpoint <= restored_head, "checkpoint alone looks safe");
+    assert!(
+        high_water > restored_head,
+        "applied high-water mark is past the restored head: rebuild required"
+    );
+
+    // Resuming on the checkpoint anyway yields wrong state: lost effects stay
+    // and the new event is skipped as an already-applied id.
+    ext.checkpoint_every = 1;
+    ext.run_to(&dst_es.endpoint(), head(&dst_pool, &tenant).await)
+        .await;
+    assert_ne!(
+        ext.state().await,
+        expected,
+        "checkpoint-only resume keeps lost effects"
+    );
+
+    // Rebuild from zero against the restored log.
+    ext.reset().await;
+    ext.run_to(&dst_es.endpoint(), head(&dst_pool, &tenant).await)
+        .await;
+    assert_eq!(ext.state().await, expected);
+    assert_eq!(
+        ext.applied_high_water().await,
+        head(&dst_pool, &tenant).await
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -93,41 +224,10 @@ async fn pg_dump_restore_to_fresh_instance_preserves_log_and_rebuilds_projection
         .max(head(&src_pool, &t_fix).await);
 
     // ---- Back up and restore into a separate fresh instance ------------
-    let dir = TempDir(std::env::temp_dir().join(unique("esp-drill-dump")));
-    std::fs::create_dir_all(&dir.0).unwrap();
-    let dump = dir.0.join("eventstore.dump");
-    src.exec(&[
-        "pg_dump",
-        "-U",
-        USER,
-        "-d",
-        DB,
-        "--format=custom",
-        "--file=/tmp/eventstore.dump",
-    ]);
-    src.copy_out("/tmp/eventstore.dump", &dump);
-    assert!(std::fs::metadata(&dump).unwrap().len() > 0);
-
-    let dst = DisposablePg::start("backup-dst").await;
+    let (_dir, dump) = backup(&src);
+    let dst = restore_fresh(&dump).await;
     assert_ne!(dst.name, src.name);
     let dst_pool = dst.pool().await;
-    let fresh: Option<String> = sqlx::query_scalar("SELECT to_regclass('public.events')::text")
-        .fetch_one(&dst_pool)
-        .await
-        .unwrap();
-    assert_eq!(fresh, None, "restore target must be empty");
-    dst.copy_in(&dump, "/tmp/eventstore.dump");
-    dst.exec(&[
-        "pg_restore",
-        "-U",
-        USER,
-        "-d",
-        DB,
-        "--exit-on-error",
-        "--single-transaction",
-        "--no-owner",
-        "/tmp/eventstore.dump",
-    ]);
 
     // ---- Byte-for-byte table comparison ---------------------------------
     for table in TABLES {
