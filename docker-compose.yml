@@ -20,7 +20,9 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "grpcurl", "-plaintext", "localhost:${GRPC_PORT:-50051}", "list"]
+      # The runtime image ships no grpcurl; a TCP probe on the configured
+      # port (same as the Ansible template) is what actually works here.
+      test: ["CMD", "bash", "-c", "</dev/tcp/localhost/${GRPC_PORT:-50051}"]
       interval: 30s
       timeout: 10s
       retries: 3

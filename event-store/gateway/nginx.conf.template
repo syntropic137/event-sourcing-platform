@@ -77,6 +77,21 @@ http {
             set $upstream ${ESP_UPSTREAM};
             grpc_pass grpc://$upstream;
             error_page 502 = /error502grpc;
+            # auth_basic's 401 is a text/html HTTP error, which gRPC clients
+            # surface as INTERNAL ("invalid compression flag") rather than
+            # UNAUTHENTICATED. Answer with a proper gRPC status instead.
+            error_page 401 = /error401grpc;
+        }
+
+        # `return` runs in nginx's rewrite phase, before the access phase
+        # where auth_basic is checked, so this location cannot be used to
+        # reach the upstream and does not itself re-trigger the 401.
+        location = /error401grpc {
+            internal;
+            default_type application/grpc;
+            add_header grpc-status 16;
+            add_header grpc-message "unauthenticated";
+            return 200;
         }
 
         location = /error502grpc {
