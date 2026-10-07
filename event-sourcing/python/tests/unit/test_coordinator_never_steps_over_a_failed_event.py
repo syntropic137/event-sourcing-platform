@@ -551,3 +551,63 @@ async def test_a_retry_pending_across_a_rebuild_does_not_skip_rebuilt_history() 
     # Rebuilt and not yet fed: nothing applied since the clear, no checkpoint.
     assert projection.applied == []
     assert await checkpoints.get_checkpoint(NAME) is None
+
+
+class DroppingEventStore(LiveEventStore):
+    """After ``drop()``, subscriptions open at that time reset after their next event."""
+
+    def __init__(self, history: int) -> None:
+        super().__init__(history)
+        self._dropped = False
+
+    def drop(self) -> None:
+        self._dropped = True
+
+    async def subscribe(self, from_global_nonce: int) -> AsyncIterator[EventEnvelope[DomainEvent]]:
+        opened_after_drop = self._dropped
+        async for envelope in super().subscribe(from_global_nonce):
+            yield envelope
+            if self._dropped and not opened_after_drop:
+                raise ConnectionError("connection reset")
+
+
+async def test_a_manager_recovering_at_the_head_after_a_reconnect_goes_live() -> None:
+    """Fail live event N, reconnect with head N: applying N reaches head, so the drain runs.
+
+    The re-plan snapshots head N and resumes the manager from N, so its track
+    starts catching up. N is the last historical event: once applied the
+    track is at head and must go live, not wait for an N+1 that may never come.
+    """
+    head = 1
+    fails_at = head + 1
+    manager = FlakyProcessManager(fails_at=fails_at, fail_times=1)
+    store = DroppingEventStore(history=head)
+    coordinator = SubscriptionCoordinator(
+        event_store=store, checkpoint_store=MemoryCheckpointStore(), projections=[manager]
+    )
+
+    running = asyncio.create_task(coordinator.start())
+    try:
+        async with asyncio.timeout(SETTLE_TIMEOUT_S):
+            while head not in manager.applied:
+                await asyncio.sleep(0.01)
+            # The live subscription resets right after the failed delivery,
+            # before the held retry (HELD_RETRY_INITIAL_DELAY) can run.
+            store.drop()
+            assert store.publish() == fails_at
+            while fails_at not in manager.applied:
+                await asyncio.sleep(0.01)
+            assert coordinator.held_projections == {}
+            await coordinator.wait_for_process_managers()
+            while manager.processed_after_recovery == 0:
+                await asyncio.sleep(0.01)
+    finally:
+        await coordinator.stop()
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+
+    assert manager.failures == 1
+    # Recovered on the re-plan, which put the live track above the head N.
+    assert fails_at + 1 in store.subscribed_from
+    assert manager.processed_while_held == 0
+    assert manager.processed_after_recovery >= 1

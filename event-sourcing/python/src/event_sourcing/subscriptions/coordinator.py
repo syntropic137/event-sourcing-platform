@@ -1074,22 +1074,13 @@ class SubscriptionCoordinator:
         """
         global_nonce = envelope.metadata.global_nonce or 0
         failures: list[ProjectionHandlerFailedError] = []
+        recovered_at_head = False
 
         # Transition: catch-up -> live when this track passes the boundary
         # nonce. Uses > (strictly greater): events at the boundary were
         # already in the store when we subscribed, so they are historical.
         if track.is_catching_up and global_nonce > self._live_boundary_nonce:
-            track.is_catching_up = False
-            logger.info(
-                "Subscription track transitioned to live mode",
-                extra={
-                    "track": track.name,
-                    "global_nonce": global_nonce,
-                    "live_boundary_nonce": self._live_boundary_nonce,
-                },
-            )
-            # Whatever the replay left on these to-do lists is now actionable.
-            self._wake_live_drains([track])
+            self._go_live(track, global_nonce)
 
         for name, projection in track.projections.items():
             held = self._held.get(name)
@@ -1132,6 +1123,10 @@ class SubscriptionCoordinator:
                 # Recovered: a live ProcessManager's to-do list is complete again.
                 if not track.is_catching_up:
                     self._wake(name)
+                elif global_nonce >= self._live_boundary_nonce:
+                    # Failed live, re-planned with the failed event as head:
+                    # applying it ends this track's history (below).
+                    recovered_at_head = True
 
         # Save the held-back skips periodically, and all of them once the
         # track has delivered the last historical event, so a projection that
@@ -1142,7 +1137,28 @@ class SubscriptionCoordinator:
         ):
             await self._save_skips(track, global_nonce)
 
+        # A projection held below a live event N, re-planned with head N
+        # (a reconnect, or a retry after one), is on a catching-up track that
+        # would only go live at N+1, which may never come: its drain would
+        # never run again. Applying N is the last historical event, so the
+        # track goes live now. Every member has taken N; nothing is replayed.
+        if recovered_at_head and track.is_catching_up:
+            self._go_live(track, global_nonce)
+
         return failures
+
+    def _go_live(self, track: _SubscriptionTrack, global_nonce: int) -> None:
+        track.is_catching_up = False
+        logger.info(
+            "Subscription track transitioned to live mode",
+            extra={
+                "track": track.name,
+                "global_nonce": global_nonce,
+                "live_boundary_nonce": self._live_boundary_nonce,
+            },
+        )
+        # Whatever the replay left on these to-do lists is now actionable.
+        self._wake_live_drains([track])
 
     def _record_failure(self, failure: ProjectionHandlerFailedError) -> None:
         """Note ``failure`` against its projection, counting repeats of one event."""
