@@ -71,10 +71,10 @@ migration:
 
 - TypeScript drops `eventType`/`schemaVersion` (`DomainEvent` members, never
   event data) before upcasting and decoding.
-- Python drops the three keys before upcasting unless some registered
-  version of the stored type declares the field (name or alias), and again
-  before validation unless the target model declares it, so strict models
-  accept legacy payloads.
+- Python passes the body to upcasters unchanged, then drops the three keys
+  the selected model does not declare (by name or alias) right before
+  validation, so strict models accept legacy payloads. A `GenericDomainEvent`
+  keeps them (the schema is unknown).
 - Rust passes the body through unchanged; serde ignores unknown fields by
   default, so legacy payloads decode. A Rust event that may read pre-#382 TS
   streams MUST NOT use `#[serde(deny_unknown_fields)]`, and an upcaster

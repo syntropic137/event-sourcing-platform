@@ -351,6 +351,11 @@ export function decodeEvent(stored: StoredEvent, options: DecodeOptions = {}): D
     );
   }
   Object.assign(event, body);
+  // A class without a version (or 0) is v1 on the wire; report it as such.
+  const own = (event as { schemaVersion?: unknown }).schemaVersion;
+  if (own === undefined || own === null || own === 0) {
+    Object.defineProperty(event, 'schemaVersion', { value: version, enumerable: false });
+  }
   return decoded(event);
 }
 

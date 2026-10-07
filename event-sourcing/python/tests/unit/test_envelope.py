@@ -204,7 +204,7 @@ class TestUpcasting:
         assert env.metadata.event_type == "EnvDeposited"
         assert env.metadata.stored_event_type == "EnvRefunded"
 
-    def test_upcaster_sees_payload_without_envelope_echo_keys(self) -> None:
+    def test_legacy_echo_keys_reach_the_upcaster_and_are_dropped_after(self) -> None:
         seen: list[dict[str, Any]] = []
 
         def step(b: dict[str, Any]) -> dict[str, Any]:
@@ -213,8 +213,9 @@ class TestUpcasting:
 
         up = Upcasters().register("EnvDeposited", 1, 2, step)
         legacy_ts = {"eventType": "EnvDeposited", "schemaVersion": 1, "amount": 5}
-        decode(data("EnvDeposited", legacy_ts, version=1), upcasters=up)
-        assert seen == [{"amount": 5}]
+        env = decode(data("EnvDeposited", legacy_ts, version=1), upcasters=up)
+        assert seen == [legacy_ts]  # unchanged, as in the Rust SDK
+        assert env.event == EnvDepositedV2(amount=5, currency="EUR")
 
     def test_failing_upcaster_is_typed_and_positioned(self) -> None:
         def boom(_: dict[str, Any]) -> dict[str, Any]:
@@ -226,7 +227,34 @@ class TestUpcasting:
         assert exc.value.global_nonce == 42
 
 
-class TestEchoKeysDeclaredByAnyVersion:
+class TestEchoKeysAreJudgedByTheTargetModel:
+    def test_rename_keeps_a_field_only_the_target_type_declares(self) -> None:
+        @event("EnvSpec", "v1")
+        class EnvSpec(DomainEvent):
+            event_type: ClassVar[str] = "EnvSpec"
+            schemaVersion: str  # noqa: N815
+
+        up = Upcasters().rename("EnvOldSpec", 1, "EnvSpec", 1, lambda b: b)
+        env = decode(data("EnvOldSpec", {"schemaVersion": "draft-7"}), up)
+        assert env.event == EnvSpec(schemaVersion="draft-7")
+
+    def test_legacy_echo_dropped_for_a_version_that_does_not_declare_it(self) -> None:
+        @event("EnvMixed", "v1")
+        class EnvMixedV1(DomainEvent):  # pyright: ignore[reportUnusedClass]
+            event_type: ClassVar[str] = "EnvMixed"
+            schemaVersion: str  # noqa: N815
+
+        @event("EnvMixed", "v2")
+        class EnvMixedV2(DomainEvent):
+            event_type: ClassVar[str] = "EnvMixed"
+            schema_version: ClassVar[int] = 2
+            x: int
+
+        legacy_ts = {"eventType": "EnvMixed", "schemaVersion": 2, "x": 1}
+        env = decode(data("EnvMixed", legacy_ts, version=2))
+        assert env.event == EnvMixedV2(x=1)
+
+
     def test_field_declared_only_by_the_target_version_reaches_the_upcaster(self) -> None:
         @event("EnvSchemaDoc", "v2")
         class EnvSchemaDocV2(DomainEvent):
@@ -263,11 +291,12 @@ class TestBackwardCompatibility:
         env = decode(data("EnvDeposited", {"event_type": "EnvDeposited", "amount": 5}))
         assert env.event == EnvDepositedV1(amount=5)
 
-    def test_generic_event_drops_echo_keys(self) -> None:
+    def test_generic_event_keeps_every_payload_field(self) -> None:
+        # Unknown schema: an echo-named key may be data, so nothing is dropped.
         legacy = {"eventType": "EnvUnregistered", "schemaVersion": 1, "x": 1}
         env = decode(data("EnvUnregistered", legacy))
         assert isinstance(env.event, GenericDomainEvent)
-        assert env.event.model_dump() == {"event_type": "EnvUnregistered", "x": 1}
+        assert env.event.model_dump() == {**legacy, "event_type": "EnvUnregistered"}
 
     def test_declared_field_with_an_echo_name_is_kept(self) -> None:
         @event("EnvHasSchemaVersion", "v1")

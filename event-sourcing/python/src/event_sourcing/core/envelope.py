@@ -32,10 +32,12 @@ CONTENT_TYPE_JSON = "application/json"
 
 #: Keys some writers put in the payload that duplicate envelope metadata:
 #: ``eventType``/``schemaVersion`` (TypeScript SDK <= 0.17 serialized its
-#: event class fields) and ``event_type`` (older Python producers). Readers
-#: drop them before upcasting and validation, unless the target class
-#: declares a field of that name, so strict (``extra="forbid"``) models accept
-#: payloads already stored by those writers.
+#: event class fields) and ``event_type`` (older Python producers). The
+#: payload reaches upcasters unchanged; right before validation, the keys the
+#: selected model does not declare (by name or alias) are dropped, so strict
+#: (``extra="forbid"``) models accept payloads already stored by those
+#: writers. A ``GenericDomainEvent`` keeps them (only ``event_type`` is moved
+#: to the attribute).
 ENVELOPE_ECHO_KEYS: tuple[str, ...] = ("eventType", "schemaVersion", "event_type")
 
 InvalidPayloadPolicy = Literal["raise", "generic"]
@@ -124,10 +126,10 @@ def decode_event(
 
     1. ``content_type`` must be empty or ``application/json``.
     2. ``event_version`` 0 is read as 1.
-    3. The payload must be a JSON object; :data:`ENVELOPE_ECHO_KEYS` are
-       dropped (unless the target class declares them).
+    3. The payload must be a JSON object.
     4. The upcaster chain runs on ``(event_type, event_version, payload)``.
-    5. The result is validated by the class registered for the final
+    5. The result, without the :data:`ENVELOPE_ECHO_KEYS` the class does not
+       declare, is validated by the class registered for the final
        ``(event_type, event_version)``.
 
     Errors are typed (:class:`~event_sourcing.core.errors.EventDecodeError`
@@ -156,9 +158,9 @@ def decode_event(
         raise EventPayloadError(
             event_type, stored_version, "payload is not a JSON object", global_nonce
         )
-    # Before upcasting the final class is unknown: keep a key any registered
-    # version of the stored type declares, so an upcaster still sees it.
-    obj = _strip_echo_keys(cast("dict[str, Any]", body), _declared_by_type(event_type))
+    # Upcasters see the stored body as is (as in the Rust SDK): which echo
+    # keys are data is only known once the target model is.
+    obj = cast("dict[str, Any]", body)
 
     ty, version = event_type, stored_version
     if upcasters is not None and upcasters.handles(ty, version):
@@ -169,7 +171,6 @@ def decode_event(
             raise UpcastError(
                 e.event_type, e.event_version, e.reason, global_nonce, e.original_error
             ) from e
-        obj = _strip_echo_keys(obj, _target_fields(ty, version))
 
     def done(event: DomainEvent) -> DecodedEvent:
         return DecodedEvent(event, ty, version, event_type, stored_version)
@@ -190,7 +191,7 @@ def decode_event(
         return done(_generic(ty, version, obj))
 
     try:
-        return done(cls.model_validate(obj))
+        return done(cls.model_validate(_strip_echo_keys(obj, _model_fields(cls))))
     except ValidationError as e:
         if on_invalid_payload == "generic":
             logger.warning(
@@ -209,18 +210,6 @@ def decode_event(
             global_nonce,
             e,
         ) from e
-
-
-def _target_fields(event_type: str, event_version: int) -> frozenset[str]:
-    cls = resolve_event_class(event_type, event_version) if event_type else None
-    return _model_fields(cls) if cls is not None else frozenset()
-
-
-def _declared_by_type(event_type: str) -> frozenset[str]:
-    keys: set[str] = set()
-    for version in registered_event_versions(event_type) if event_type else ():
-        keys |= _target_fields(event_type, version)
-    return frozenset(keys)
 
 
 def _generic(event_type: str, event_version: int, body: dict[str, Any]) -> GenericDomainEvent:

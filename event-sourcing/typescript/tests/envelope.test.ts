@@ -160,6 +160,20 @@ describe('read by version', () => {
     expect(v2.metadata.storedEventVersion).toBe(2);
   });
 
+  it('a class without schemaVersion decodes reporting version 1', () => {
+    class EnvNoVersion extends BaseDomainEvent {
+      readonly eventType = 'EnvNoVersion' as const;
+      readonly schemaVersion = 0 as unknown as number;
+      v = 0;
+    }
+    EventSerializer.registerEvent('EnvNoVersion', EnvNoVersion);
+    const env = decodeGrpcEvent(wire('EnvNoVersion', { v: 1 }, { version: 0 }), '');
+    expect(env.event).toBeInstanceOf(EnvNoVersion);
+    expect(env.event.schemaVersion).toBe(1);
+    expect(env.event.toJson()).toEqual({ v: 1 });
+    expect(eventVersionOf(env.event)).toBe(1);
+  });
+
   it('reads version 0 as 1', () => {
     const env = decodeGrpcEvent(wire('EnvDeposited', { amount: 5 }, { version: 0 }), '');
     expect(env.event).toBeInstanceOf(EnvDepositedV1);
