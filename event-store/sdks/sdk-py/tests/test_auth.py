@@ -174,6 +174,9 @@ def test_endpoint_forms_and_validation():
     with pytest.raises(ClientConfigError) as info:
         r("https://admin:hunter2@es:443")
     assert "hunter2" not in str(info.value)
+    with pytest.raises(ClientConfigError) as info:
+        EventStoreClientRT("dns:///admin:hunter2@es:443", auth=BasicAuth("u", "p"))
+    assert "hunter2" not in str(info.value)
     for bad_auth in [BasicAuth("a:b", "p"), BearerToken(""), BearerToken("sec\nret"), BearerToken("secret\n")]:
         with pytest.raises(ClientConfigError) as info:
             EventStoreClientRT("localhost:1", auth=bad_auth)
@@ -234,6 +237,11 @@ def test_insecure_channel_credentials_do_not_count_as_tls() -> None:
     for address in ["es.example.com:8081", "https://es.example.com:443"]:
         with pytest.raises(ClientConfigError):
             EventStoreClientRT(address, auth=BasicAuth("u", "p"), channel_credentials=insecure)
+    composite = grpc.composite_channel_credentials(
+        insecure, grpc.access_token_call_credentials("t")
+    )
+    with pytest.raises(ClientConfigError):
+        EventStoreClientRT("https://es.example.com:443", auth=BasicAuth("u", "p"), channel_credentials=composite)
     EventStoreClientRT(
         "es.example.com:443",
         auth=BasicAuth("u", "p"),

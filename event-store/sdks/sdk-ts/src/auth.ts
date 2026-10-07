@@ -311,7 +311,7 @@ export function resolveConnection(address: string, opts: ConnectionOptions = {})
     const host = hostOf(target);
     if (host === undefined || !isLoopback(host)) {
       throw new ConfigError(
-        `refusing to send credentials over plaintext to '${host ?? target}'; use https:// or allowInsecureCredentials: true`,
+        `refusing to send credentials over plaintext to '${host ?? "this endpoint"}'; use https:// or allowInsecureCredentials: true`,
       );
     }
   }
@@ -416,10 +416,9 @@ const GRPC_JS_SCHEMES = new Set(["dns", "unix", "unix-abstract", "ipv4", "ipv6",
 
 /** True when the authority part of `endpoint` has `userinfo@`. */
 function hasUserinfo(endpoint: string): boolean {
-  const i = endpoint.indexOf("://");
-  const rest = i >= 0 ? endpoint.slice(i + 3) : endpoint;
-  const authority = rest.split(/[/?#]/, 1)[0] ?? "";
-  return authority.includes("@");
+  // Any '@': resolver targets (dns:///user:pass@host) put userinfo after the
+  // slashes, and no valid event store endpoint contains one.
+  return endpoint.includes("@");
 }
 
 /** Host of a `host:port` / `[v6]:port` / `host` target; undefined for other grpc-js target forms. */

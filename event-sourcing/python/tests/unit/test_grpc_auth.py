@@ -298,6 +298,9 @@ def test_endpoint_forms() -> None:
     with pytest.raises(ClientConfigError) as info:
         r("https://admin:hunter2@es:443")
     assert "hunter2" not in str(info.value)
+    with pytest.raises(ClientConfigError) as info:
+        GrpcEventStoreClient("dns:///admin:hunter2@es:443", auth=BasicAuth("u", "p"))
+    assert "hunter2" not in str(info.value)
     for bad_auth in [
         BasicAuth("a:b", "p"),
         BearerToken(""),
@@ -374,8 +377,39 @@ def test_insecure_channel_credentials_do_not_count_as_tls() -> None:
     for address in ["es.example.com:8081", "https://es.example.com:443"]:
         with pytest.raises(ClientConfigError):
             GrpcEventStoreClient(address, auth=BasicAuth("u", "p"), credentials=insecure)
+    composite = grpc.composite_channel_credentials(
+        insecure, grpc.access_token_call_credentials("t")
+    )
+    with pytest.raises(ClientConfigError):
+        GrpcEventStoreClient(
+            "https://es.example.com:443", auth=BasicAuth("u", "p"), credentials=composite
+        )
     GrpcEventStoreClient(
         "es.example.com:443",
         auth=BasicAuth("u", "p"),
         credentials=grpc.ssl_channel_credentials(),
     )
+
+
+async def test_deadline_bounds_a_stalled_token_provider(
+    gateway: tuple[_GatewayServicer, int],
+) -> None:
+    servicer, port = gateway
+
+    async def stalled() -> str:
+        await asyncio.sleep(3600)
+        return "never"
+
+    client = GrpcEventStoreClient(f"127.0.0.1:{port}", auth=TokenProviderAuth(stalled))
+    await client.connect()
+    try:
+        assert client._stub is not None  # pyright: ignore[reportPrivateUsage]
+        with pytest.raises(grpc.aio.AioRpcError) as info:
+            await asyncio.wait_for(
+                client._stub.GetServerInfo(eventstore_pb2.GetServerInfoRequest(), timeout=0.05),  # pyright: ignore[reportPrivateUsage]
+                timeout=2,
+            )
+        assert info.value.code() == grpc.StatusCode.DEADLINE_EXCEEDED
+    finally:
+        await client.disconnect()
+    assert servicer.seen == []

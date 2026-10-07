@@ -265,6 +265,10 @@ test("endpoint forms resolve to the right target and transport", () => {
     () => r("https://admin:hunter2@es:443"),
     (e: unknown) => e instanceof ConfigError && !e.message.includes("hunter2"),
   );
+  assert.throws(
+    () => r("dns:///admin:hunter2@es:443", { auth: Credentials.basic("u", "p") }),
+    (e: unknown) => e instanceof ConfigError && !e.message.includes("hunter2"),
+  );
   assert.throws(() => r("es:1", { auth: Credentials.basic("a:b", "p") }), ConfigError);
   assert.throws(() => r("es:1", { auth: { bearerToken: "" } }), ConfigError);
   assert.throws(

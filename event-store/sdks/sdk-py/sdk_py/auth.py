@@ -231,7 +231,7 @@ def resolve_connection(
             host = _host_of(target)
             if host is None or not _is_loopback(host):
                 raise ClientConfigError(
-                    f"refusing to send credentials over plaintext to '{host or target}'; "
+                    f"refusing to send credentials over plaintext to '{host or 'this endpoint'}'; "
                     "use https:// or allow_insecure_credentials=True"
                 )
         interceptor = _AuthInterceptor(_header_source(auth))
@@ -368,9 +368,11 @@ class MappedStream:
 
 
 # Channel credential kinds that encrypt the connection. Anything else
-# (insecure, local, unknown) does not count as TLS for the plaintext guard.
+# (insecure, local, composite, unknown) does not count as TLS for the
+# plaintext guard: a composite may wrap insecure credentials and cannot be
+# inspected. Use tls=TlsConfig(...) or allow_insecure_credentials instead.
 _SECURE_CREDENTIAL_KINDS = frozenset(
-    {"SSLChannelCredentials", "CompositeChannelCredentials", "ALTSChannelCredentials"}
+    {"SSLChannelCredentials", "ALTSChannelCredentials"}
 )
 
 
@@ -380,9 +382,9 @@ def _is_secure(creds: grpc.ChannelCredentials) -> bool:
 
 
 def _has_userinfo(endpoint: str) -> bool:
-    rest = endpoint.split("://", 1)[1] if "://" in endpoint else endpoint
-    authority = re.split(r"[/?#]", rest, maxsplit=1)[0]
-    return "@" in authority
+    # Any '@': resolver targets (dns:///user:pass@host) put userinfo after
+    # the slashes, and no valid event store endpoint contains one.
+    return "@" in endpoint
 
 
 def _host_of(target: str) -> str | None:

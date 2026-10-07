@@ -15,6 +15,7 @@ channels alike. Semantics mirror the Rust client (``sdk-rs`` ``ClientConfig``):
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import inspect
 import ipaddress
@@ -202,7 +203,7 @@ def resolve_connection(
             host = _host_of(target)
             if host is None or not _is_loopback(host):
                 raise ClientConfigError(
-                    f"refusing to send credentials over plaintext to '{host or target}'; "
+                    f"refusing to send credentials over plaintext to '{host or 'this endpoint'}'; "
                     "use https:// or allow_insecure_credentials=True"
                 )
         interceptors = auth_interceptors(auth)
@@ -284,8 +285,20 @@ def _unauthenticated(details: str) -> grpc.aio.AioRpcError:
 async def _with_auth(
     source: HeaderSource, details: grpc.aio.ClientCallDetails
 ) -> grpc.aio.ClientCallDetails:
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    timeout = details.timeout
     try:
-        value = await source()
+        # The RPC deadline starts only when the call is made, so bound the
+        # provider by it and deduct the time spent.
+        value = await (source() if timeout is None else asyncio.wait_for(source(), timeout))
+    except TimeoutError:
+        raise grpc.aio.AioRpcError(
+            grpc.StatusCode.DEADLINE_EXCEEDED,
+            grpc.aio.Metadata(),
+            grpc.aio.Metadata(),
+            details="Deadline exceeded while waiting for the token provider",
+        ) from None
     except ClientConfigError as e:
         raise _unauthenticated(e.message) from None
     except Exception as e:
@@ -298,7 +311,7 @@ async def _with_auth(
     metadata.add(AUTHORIZATION, value)
     return grpc.aio.ClientCallDetails(
         method=details.method,
-        timeout=details.timeout,
+        timeout=None if timeout is None else max(0.0, timeout - (loop.time() - started)),
         metadata=metadata,
         credentials=details.credentials,
         wait_for_ready=details.wait_for_ready,
@@ -389,10 +402,10 @@ def auth_interceptors(auth: Credentials) -> list[grpc.aio.ClientInterceptor]:
 
 
 # Channel credential kinds that encrypt the connection. Anything else
-# (insecure, local, unknown) does not count as TLS for the plaintext guard.
-_SECURE_CREDENTIAL_KINDS = frozenset(
-    {"SSLChannelCredentials", "CompositeChannelCredentials", "ALTSChannelCredentials"}
-)
+# (insecure, local, composite, unknown) does not count as TLS for the
+# plaintext guard: a composite may wrap insecure credentials and cannot be
+# inspected. Use tls=TlsConfig(...) or allow_insecure_credentials instead.
+_SECURE_CREDENTIAL_KINDS = frozenset({"SSLChannelCredentials", "ALTSChannelCredentials"})
 
 
 def _is_secure(creds: grpc.ChannelCredentials) -> bool:
@@ -401,9 +414,9 @@ def _is_secure(creds: grpc.ChannelCredentials) -> bool:
 
 
 def _has_userinfo(endpoint: str) -> bool:
-    rest = endpoint.split("://", 1)[1] if "://" in endpoint else endpoint
-    authority = re.split(r"[/?#]", rest, maxsplit=1)[0]
-    return "@" in authority
+    # Any '@': resolver targets (dns:///user:pass@host) put userinfo after
+    # the slashes, and no valid event store endpoint contains one.
+    return "@" in endpoint
 
 
 def _host_of(target: str) -> str | None:
