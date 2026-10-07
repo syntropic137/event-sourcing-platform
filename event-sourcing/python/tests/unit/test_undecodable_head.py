@@ -35,7 +35,7 @@ from event_sourcing.stores.memory_checkpoint import MemoryCheckpointStore
 from event_sourcing.subscriptions.coordinator import SubscriptionCoordinator
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
 pytestmark = pytest.mark.unit
 
@@ -140,11 +140,12 @@ class CorruptHeadStore:
 class RecordingProjection:
     SIDE_EFFECTS_ALLOWED = False
 
-    def __init__(self) -> None:
+    def __init__(self, name: str) -> None:
+        self._name = name
         self.handled: list[int] = []
 
     def get_name(self) -> str:
-        return "recording"
+        return self._name
 
     def get_version(self) -> int:
         return 1
@@ -174,39 +175,87 @@ class RecordingProjection:
         return ProjectionResult.SUCCESS
 
 
+class _Running:
+    """A coordinator over CorruptHeadStore with projections at given checkpoints."""
+
+    def __init__(self, positions: dict[str, int]) -> None:
+        self.store = CorruptHeadStore()
+        self.checkpoints = MemoryCheckpointStore()
+        self.positions = positions
+        self.projections = {name: RecordingProjection(name) for name in positions}
+        self.coordinator = SubscriptionCoordinator(
+            event_store=self.store,  # type: ignore[arg-type]
+            checkpoint_store=self.checkpoints,
+            projections=list(self.projections.values()),  # type: ignore[arg-type]
+        )
+        self._runner: asyncio.Task[None] | None = None
+
+    async def __aenter__(self) -> _Running:
+        for name, position in self.positions.items():
+            await self.checkpoints.save_checkpoint(
+                ProjectionCheckpoint(
+                    projection_name=name,
+                    global_position=position,
+                    updated_at=datetime.now(UTC),
+                    version=1,
+                )
+            )
+        self._runner = asyncio.create_task(self.coordinator.start())
+        await asyncio.wait_for(self.store.subscribed.wait(), timeout=TIMEOUT_S)
+        return self
+
+    async def __aexit__(self, *_: object) -> None:  # OBJRATCHET: exception triple
+        await self.coordinator.stop()
+        if self._runner is not None:
+            self._runner.cancel()
+            await asyncio.gather(self._runner, return_exceptions=True)
+
+    async def position(self, name: str) -> int:
+        checkpoint = await self.checkpoints.get_checkpoint(name)
+        assert checkpoint is not None
+        return checkpoint.global_position
+
+    async def until(self, predicate: Callable[[], bool], timeout: float = TIMEOUT_S) -> None:
+        async def poll() -> None:
+            while not predicate():
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(poll(), timeout=timeout)
+
+
 class TestCheckpointSkipPastCorruptHead:
     async def test_projection_moved_past_corrupt_head_resumes_live(self) -> None:
-        store = CorruptHeadStore()
-        checkpoints = MemoryCheckpointStore()
         # Operator recovery: this consumer explicitly skips the corrupt event.
-        await checkpoints.save_checkpoint(
-            ProjectionCheckpoint(
-                projection_name="recording",
-                global_position=CORRUPT_HEAD,
-                updated_at=datetime.now(UTC),
-                version=1,
+        async with _Running({"skipped": CORRUPT_HEAD}) as run:
+            assert run.store.subscribed_from == [CORRUPT_HEAD + 1]
+            run.store.publish(CORRUPT_HEAD + 1)
+            await run.until(lambda: CORRUPT_HEAD + 1 in run.projections["skipped"].handled)
+            assert CORRUPT_HEAD not in run.projections["skipped"].handled
+
+    async def test_projection_not_moved_past_stops_before_corrupt_event(self) -> None:
+        # No operator action: delivered up to N - 1, then stopped at N, retrying.
+        async with _Running({"behind": CORRUPT_HEAD - 2}) as run:
+            behind = run.projections["behind"]
+            await run.until(lambda: CORRUPT_HEAD - 1 in behind.handled)
+            # The coordinator retries (backoff starts at 1s) from the checkpoint,
+            # which never moves past the corrupt event.
+            await run.until(lambda: len(run.store.subscribed_from) >= 2, timeout=5.0)
+            assert run.store.subscribed_from[1] <= CORRUPT_HEAD
+            assert CORRUPT_HEAD not in behind.handled
+            assert await run.position("behind") == CORRUPT_HEAD - 1
+
+    async def test_skipping_only_some_projections_keeps_the_rest_stopped(self) -> None:
+        # ADR-026: every projection that has not passed N must be moved; one
+        # failing track restarts the whole plan, so nobody passes N on their own.
+        async with _Running({"skipped": CORRUPT_HEAD, "behind": CORRUPT_HEAD - 2}) as run:
+            await run.until(lambda: len(run.store.subscribed_from) >= 3, timeout=5.0)
+            assert CORRUPT_HEAD not in run.projections["behind"].handled
+            assert await run.position("behind") == CORRUPT_HEAD - 1
+            assert await run.position("skipped") == CORRUPT_HEAD
+
+    async def test_skipping_every_projection_resumes_all(self) -> None:
+        async with _Running({"a": CORRUPT_HEAD, "b": CORRUPT_HEAD}) as run:
+            run.store.publish(CORRUPT_HEAD + 1)
+            await run.until(
+                lambda: all(CORRUPT_HEAD + 1 in p.handled for p in run.projections.values())
             )
-        )
-        projection = RecordingProjection()
-        coordinator = SubscriptionCoordinator(
-            event_store=store,  # type: ignore[arg-type]
-            checkpoint_store=checkpoints,
-            projections=[projection],  # type: ignore[list-item]
-        )
-        runner = asyncio.create_task(coordinator.start())
-        try:
-            await asyncio.wait_for(store.subscribed.wait(), timeout=TIMEOUT_S)
-            assert store.subscribed_from == [CORRUPT_HEAD + 1]
-
-            store.publish(CORRUPT_HEAD + 1)
-
-            async def delivered() -> None:
-                while CORRUPT_HEAD + 1 not in projection.handled:
-                    await asyncio.sleep(0.01)
-
-            await asyncio.wait_for(delivered(), timeout=TIMEOUT_S)
-            assert CORRUPT_HEAD not in projection.handled
-        finally:
-            await coordinator.stop()
-            runner.cancel()
-            await asyncio.gather(runner, return_exceptions=True)
