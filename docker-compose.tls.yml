@@ -1,0 +1,15 @@
+# TLS on the gateway's published port (#301, ADR-024). Overlay on the root
+# compose file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+#
+# ESP_GATEWAY_TLS_DIR must hold fullchain.pem and privkey.pem (default: the
+# output of event-store/gateway/gen-self-signed.sh). Mount the directory,
+# not the files, so a renewed cert written into it is picked up by the
+# gateway's reload watcher. The gateway exits if the files are missing.
+services:
+  gateway:
+    environment:
+      ESP_GATEWAY_TLS: "on"
+    volumes:
+      - ${ESP_GATEWAY_TLS_DIR:-./event-store/gateway/tls}:/etc/nginx/tls:ro

@@ -81,6 +81,15 @@ qa: qa-fast
 qa-full: fmt clippy check test-full coverage-text
 	@echo "✅ Full QA passed"
 
+# Gateway TLS e2e (#301): builds the nginx gateway image, then runs the Rust
+# SDK through it (TLS + Basic Auth + streaming + cert rotation + fail-closed).
+GATEWAY_E2E_IMAGE ?= esp-gateway:e2e
+.PHONY: gateway-tls-e2e
+gateway-tls-e2e:
+	@command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 || { echo "Docker is required for the gateway e2e"; exit 2; }
+	docker build -q -t $(GATEWAY_E2E_IMAGE) gateway
+	ESP_GATEWAY_E2E_IMAGE=$(GATEWAY_E2E_IMAGE) cargo test -p eventstore-sdk-rs --test gateway_tls -- --ignored --test-threads=1 $(E2E_ARGS)
+
 # Recovery drills (#355, docs/operations/BACKUP-RESTORE.md): SIGKILL the
 # eventstore-bin process around appends, cut Postgres connectivity during
 # replay/live consumption, pg_dump/pg_restore into a fresh instance. Every

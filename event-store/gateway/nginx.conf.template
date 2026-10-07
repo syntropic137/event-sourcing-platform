@@ -7,9 +7,10 @@
 #   Port 80   — Docker-internal only, NOT published to the host. Used by
 #               same-network services and health checks. No auth: network
 #               isolation is the security boundary here.
-#   Port 8081 — External / published access. HTTP Basic Auth required
-#               whenever ESP_GATEWAY_PASSWORD is set. This is the only
-#               port that should ever be exposed beyond the Docker network.
+#   Port 8081 — External / published access. TLS (ESP_GATEWAY_TLS=on, the
+#               default) and HTTP Basic Auth whenever ESP_GATEWAY_PASSWORD
+#               is set. This is the only port that should ever be exposed
+#               beyond the Docker network.
 #
 # docker-entrypoint.sh generates /etc/nginx/auth/htpasswd and renders this
 # template (envsubst) into /etc/nginx/nginx.conf before nginx starts.
@@ -67,7 +68,9 @@ http {
     # PORT 8081 — External access. Basic Auth enforced when configured.
     # ------------------------------------------------------------------
     server {
-        listen 8081;
+        # `listen 8081 ssl;` plus cert/protocol settings, or plain
+        # `listen 8081;` when ESP_GATEWAY_TLS=off (see docker-entrypoint.sh).
+        include /etc/nginx/auth/listen.conf;
         http2 on;
         server_name _;
 

@@ -432,6 +432,59 @@ class TestBuildAwsAnsibleConfig:
         with pytest.raises(SystemExit, match="gateway.secret_arn"):
             render_config._build_aws_ansible_config(cfg, ansible_dir)
 
+    def test_gateway_tls_on_by_default(self, tmp_path: Path) -> None:
+        ansible_dir = tmp_path / "ansible" / "envs" / "staging"
+        render_config._build_aws_ansible_config(AWS_CONFIG, ansible_dir)
+        gv = yaml.safe_load((ansible_dir / "group_vars" / "all.yml").read_text())
+        assert gv["esp_gateway_tls"] is True
+        assert "esp_gateway_tls_cert_src" not in gv
+
+    def test_gateway_tls_options_passed_through(self, tmp_path: Path) -> None:
+        cfg = {
+            **AWS_CONFIG,
+            "gateway": {
+                **AWS_CONFIG["gateway"],
+                "tls": {"cert_src": "/c/full.pem", "key_src": "/c/key.pem", "reload_interval": 60},
+            },
+        }
+        ansible_dir = tmp_path / "ansible" / "envs" / "staging"
+        render_config._build_aws_ansible_config(cfg, ansible_dir)
+        gv = yaml.safe_load((ansible_dir / "group_vars" / "all.yml").read_text())
+        assert gv["esp_gateway_tls"] is True
+        assert gv["esp_gateway_tls_cert_src"] == "/c/full.pem"
+        assert gv["esp_gateway_tls_key_src"] == "/c/key.pem"
+        assert gv["esp_gateway_tls_reload_interval"] == 60
+
+
+class TestGatewayTlsVars:
+    def test_disable_is_explicit(self) -> None:
+        assert render_config._gateway_tls_vars({"enabled": False}) == {"esp_gateway_tls": False}
+        assert render_config._gateway_tls_vars(None) == {"esp_gateway_tls": True}
+
+    def test_half_pair_rejected(self) -> None:
+        with pytest.raises(SystemExit, match="cert_src"):
+            render_config._gateway_tls_vars({"cert_src": "/c/full.pem"})
+
+    def test_unknown_key_rejected(self) -> None:
+        with pytest.raises(SystemExit, match="unknown"):
+            render_config._gateway_tls_vars({"cert": "/c/full.pem"})
+
+    def test_proxmox_self_signed(self, tmp_path: Path) -> None:
+        cfg = {**PROXMOX_CONFIG}
+        cfg["ansible"] = {
+            **cfg["ansible"],
+            "gateway": {
+                **cfg["ansible"]["gateway"],
+                "tls": {"self_signed": True, "names": ["192.168.1.100"]},
+            },
+        }
+        ansible_dir = tmp_path / "ansible" / "envs" / "local"
+        render_config._build_proxmox_ansible_config(cfg, ansible_dir)
+        gv = yaml.safe_load((ansible_dir / "group_vars" / "all.yml").read_text())
+        assert gv["esp_gateway_tls"] is True
+        assert gv["esp_gateway_tls_self_signed"] is True
+        assert gv["esp_gateway_tls_names"] == ["192.168.1.100"]
+
 
 class TestPrivateFileModes:
     """Rendered artifacts hold secrets; they must be owner-only (0600)."""

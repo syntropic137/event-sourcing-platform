@@ -18,6 +18,9 @@ backend_secret_arn: arn:aws:secretsmanager:us-west-2:123456789012:secret:event-s
 gateway_secret_arn: arn:aws:secretsmanager:us-west-2:123456789012:secret:event-store/prod/gateway
 esp_gateway_user: admin
 esp_gateway_password: "{{ lookup('aws_secretsmanager', gateway_secret_arn) }}"
+# TLS on the published gRPC port (#301); cert/key in /etc/event-store/tls
+# (see the role defaults and event-store/gateway/README.md "TLS").
+esp_gateway_tls: true
 
 binary_url: "https://example-bucket.s3.us-west-2.amazonaws.com/event-store/latest/event-store"
 binary_checksum: "sha256:REPLACE_ME"

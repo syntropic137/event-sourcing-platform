@@ -4,3 +4,12 @@
     name: "{{ service_name }}"
     state: restarted
     daemon_reload: true
+
+# The gateway also polls for cert changes; this makes an Ansible-pushed cert
+# take effect immediately. Not fatal if the container is not up yet (it
+# reads the new files when it starts).
+- name: Reload gateway TLS
+  ansible.builtin.command:
+    cmd: docker exec event-store-gateway sh -c "nginx -t -q && nginx -s reload"
+  failed_when: false
+  changed_when: true
