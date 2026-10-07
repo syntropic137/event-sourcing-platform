@@ -179,3 +179,53 @@ async fn idle_in_transaction_session_is_terminated_by_the_server() {
     );
     conn.close_on_drop();
 }
+
+/// A caller that gives up first (gRPC deadline, client disconnect) drops the
+/// append mid-query. Its connection must be closed, not handed back to the
+/// pool: sqlx would ping it on return, and that ping waits for the abandoned
+/// query (here: blocked on the order lock for up to statement_timeout, on a
+/// stalled network forever), holding the pool slot all that time.
+#[tokio::test]
+async fn an_abandoned_append_frees_its_pool_slot() {
+    let url = common::get_test_database_url().await;
+    let cfg = PostgresConfig {
+        max_connections: 1,
+        lock_timeout: None,
+        statement_timeout: Some(Duration::from_secs(30)),
+        ..Default::default()
+    };
+    let store = PostgresStore::connect_with_config(&url, &cfg)
+        .await
+        .unwrap();
+    let tenant = unique("t-abandon");
+    let mut holder = hold_append_lock(&url, &tenant).await;
+
+    let abandoned = tokio::time::timeout(
+        Duration::from_millis(500),
+        store.append(append_req(&tenant, "a")),
+    )
+    .await;
+    assert!(abandoned.is_err(), "the append should still be blocked");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while store.pool().size() > 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the abandoned connection still holds the only pool slot"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    sqlx::query("SELECT pg_advisory_unlock_all()")
+        .execute(&mut holder)
+        .await
+        .unwrap();
+    let ok = tokio::time::timeout(
+        Duration::from_secs(10),
+        store.append(append_req(&tenant, "b")),
+    )
+    .await
+    .expect("the pool must serve the next append")
+    .unwrap();
+    assert_eq!(ok.last_aggregate_nonce, 1);
+}

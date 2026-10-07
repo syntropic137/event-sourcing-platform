@@ -57,8 +57,14 @@ Two layers, because neither alone covers a silent network failure.
   (paused VM, firewall black hole) the server cannot report its own timeout,
   so this deadline is what turns a hang into an error. The 5 s grace lets the
   server's timeout fire first when the server is reachable, giving a precise
-  error. A connection that hit the deadline is closed, never returned to the
-  pool.
+  error. The deadline covers the whole operation, so an append whose lock
+  waits and statements are each within their server limits but together
+  exceed it still fails (`UNAVAILABLE`, retryable); size
+  `PG_STATEMENT_TIMEOUT_MS` for the longest operation you accept, not the
+  longest single statement.
+- A connection whose operation did not finish (deadline passed, or the
+  caller gave up first: gRPC deadline, client disconnect) is closed, never
+  returned to the pool, so a stalled connection cannot hold a pool slot.
 - `PG_ACQUIRE_TIMEOUT_MS` bounds waiting for a connection, including
   connecting to (or health-checking a connection to) an unreachable server.
 - The dedicated LISTEN/NOTIFY connection (it has its own one-connection

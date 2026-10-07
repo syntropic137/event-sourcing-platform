@@ -224,8 +224,12 @@ fn spawn_pg_listener(
                     }
                 }
             }
-            // Dropping the listener drops its pool and socket without waiting
-            // on a stalled peer.
+            // Known limit: sqlx's PgListener drop spawns an `UNLISTEN *` +
+            // return-to-pool task with no timeout. On a dead path that task
+            // and its socket live until the OS gives up on the unacknowledged
+            // write (TCP retransmission timeout, minutes), then end. At most
+            // one per reconnect cycle (>= 40 s apart while stalled), and it
+            // holds no slot of the main pool.
             drop(listener);
             tokio::time::sleep(backoff).await;
             backoff = (backoff * 2).min(max_backoff);
@@ -290,7 +294,17 @@ impl PostgresStore {
         config.validate()?;
         let base = PgConnectOptions::from_str(database_url)?;
         {
-            let mut conn = PgConnection::connect_with(&base).await?;
+            // Connecting is bounded like a pool acquire; the migrations
+            // themselves are not.
+            let mut conn =
+                tokio::time::timeout(config.acquire_timeout, PgConnection::connect_with(&base))
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!(
+                            "connecting to Postgres for migrations timed out after {:?}",
+                            config.acquire_timeout
+                        )
+                    })??;
             sqlx::migrate!("./migrations").run(&mut conn).await?;
             conn.close().await?;
         }
@@ -336,8 +350,8 @@ impl PostgresStore {
 
     /// Check out a connection; waiting is bounded by the pool's acquire
     /// timeout, and failure is `UNAVAILABLE`.
-    async fn acquire(&self) -> Result<PoolConnection<Postgres>, StoreError> {
-        self.pool.acquire().await.map_err(map_db_error)
+    async fn acquire(&self) -> Result<Checkout, StoreError> {
+        Checkout::acquire(&self.pool).await.map_err(map_db_error)
     }
 
     /// The append transaction. Runs on `conn` so the caller can discard the
@@ -663,6 +677,56 @@ impl PostgresStore {
     }
 }
 
+/// A pooled connection that is closed, not returned to the pool, unless the
+/// operation using it ran to completion ([`Checkout::completed`]).
+///
+/// sqlx pings a connection returned to the pool, without a timeout. A
+/// connection abandoned mid-query (client deadline passed, or the caller's
+/// future was dropped: gRPC deadline, client disconnect) may sit on a stalled
+/// network path, where that ping would hang forever and hold a pool slot.
+/// Closing instead is bounded (sqlx gives a graceful close 5 s, then drops
+/// the socket) and frees the slot.
+struct Checkout {
+    conn: PoolConnection<Postgres>,
+    completed: bool,
+}
+
+impl Checkout {
+    async fn acquire(pool: &PgPool) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            conn: pool.acquire().await?,
+            completed: false,
+        })
+    }
+
+    /// The operation finished (successfully or with a database error): the
+    /// connection is in a known state and may go back to the pool.
+    fn completed(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl std::ops::Deref for Checkout {
+    type Target = PgConnection;
+    fn deref(&self) -> &PgConnection {
+        &self.conn
+    }
+}
+
+impl std::ops::DerefMut for Checkout {
+    fn deref_mut(&mut self) -> &mut PgConnection {
+        &mut self.conn
+    }
+}
+
+impl Drop for Checkout {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.conn.close_on_drop();
+        }
+    }
+}
+
 /// Outcome of [`within`]: the future's output, or the deadline that passed.
 async fn within<T>(
     deadline: Option<Duration>,
@@ -674,10 +738,8 @@ async fn within<T>(
     }
 }
 
-/// A database operation that exceeded the client deadline. The connection it
-/// ran on must not be reused: call `close_on_drop()` on it first, because
-/// sqlx otherwise pings a returned connection, which on a stalled network
-/// path would hang and hold a pool slot.
+/// A database operation that exceeded the client deadline. Its connection is
+/// discarded (a [`Checkout`] not marked completed).
 fn deadline_exceeded(op: &str, deadline: Duration) -> StoreError {
     tracing::warn!(op, ?deadline, "database operation exceeded client deadline");
     StoreError::Unavailable(format!(
@@ -791,11 +853,11 @@ impl EventStoreTrait for PostgresStore {
         let mut conn = self.acquire().await?;
         let tx = self.append_tx(&mut conn, &req, fingerprint, events);
         match within(self.deadline, tx).await {
-            Ok(result) => result,
-            Err(deadline) => {
-                conn.close_on_drop();
-                Err(deadline_exceeded("append", deadline))
+            Ok(result) => {
+                conn.completed();
+                result
             }
+            Err(deadline) => Err(deadline_exceeded("append", deadline)),
         }
     }
 
@@ -855,9 +917,11 @@ impl EventStoreTrait for PostgresStore {
             }
         };
         let rows = match within(self.deadline, query).await {
-            Ok(rows) => rows.map_err(map_db_error)?,
+            Ok(rows) => {
+                conn.completed();
+                rows.map_err(map_db_error)?
+            }
             Err(deadline) => {
-                conn.close_on_drop();
                 return Err(deadline_exceeded("read_stream", deadline));
             }
         };
@@ -948,9 +1012,11 @@ impl EventStoreTrait for PostgresStore {
             }
         };
         let rows = match within(self.deadline, query).await {
-            Ok(rows) => rows.map_err(map_db_error)?,
+            Ok(rows) => {
+                conn.completed();
+                rows.map_err(map_db_error)?
+            }
             Err(deadline) => {
-                conn.close_on_drop();
                 return Err(deadline_exceeded("read_all", deadline));
             }
         };
@@ -1293,24 +1359,24 @@ async fn fetch_events_after_bounded(
     prefix: &str,
     after: i64,
 ) -> Result<Vec<sqlx::postgres::PgRow>, sqlx::Error> {
-    let mut conn = pool.acquire().await?;
+    let mut conn = Checkout::acquire(pool).await?;
     match within(
         deadline,
         fetch_events_after(&mut *conn, tenant, prefix, after),
     )
     .await
     {
-        Ok(rows) => rows,
-        Err(d) => {
-            conn.close_on_drop();
-            Err(sqlx::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                format!(
-                    "database did not answer within {} ms (client deadline)",
-                    d.as_millis()
-                ),
-            )))
+        Ok(rows) => {
+            conn.completed();
+            rows
         }
+        Err(d) => Err(sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!(
+                "database did not answer within {} ms (client deadline)",
+                d.as_millis()
+            ),
+        ))),
     }
 }
 
@@ -1619,6 +1685,31 @@ mod tests {
             other => panic!("subscribe must surface Unavailable, got {other:?}"),
         }
         assert!(started.elapsed() < Duration::from_secs(15));
+        hole.abort();
+    }
+
+    #[tokio::test]
+    async fn startup_against_a_black_holed_database_fails_within_acquire_timeout() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hole = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((sock, _)) = listener.accept().await {
+                held.push(sock);
+            }
+        });
+        let cfg = PostgresConfig {
+            acquire_timeout: Duration::from_secs(1),
+            ..Default::default()
+        };
+        let url = format!("postgres://test:test@{addr}/test");
+        let res = tokio::time::timeout(
+            Duration::from_secs(10),
+            PostgresStore::connect_with_config(&url, &cfg),
+        )
+        .await
+        .expect("startup must not hang on a black-holed database");
+        assert!(res.is_err());
         hole.abort();
     }
 

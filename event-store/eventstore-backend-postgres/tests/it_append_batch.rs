@@ -218,27 +218,29 @@ async fn a_failing_row_rolls_back_the_whole_batch() {
 /// error had already aborted the transaction: COMMIT then rolled back and
 /// the append reported success for events that were never stored.
 #[tokio::test]
-async fn an_append_that_reports_success_is_stored() {
+async fn an_append_too_long_to_notify_is_stored_and_reported() {
     let store = store().await;
     // A NOTIFY payload must be under 8000 bytes; this tenant id is longer.
-    // (It compresses, so the index entries still fit.)
+    // (It compresses, so the index entries still fit.) The append must
+    // succeed (NOTIFY is skipped, subscribers poll) and be stored.
     let tenant = format!("{}{}", unique("t-long"), "x".repeat(8100));
-    let res = store.append(req(&tenant, "agg", 1, 1, "")).await;
-    if res.is_ok() {
-        let read = store
-            .read_stream(proto::ReadStreamRequest {
-                tenant_id: tenant.clone(),
-                aggregate_id: "agg".into(),
-                from_aggregate_nonce: 1,
-                max_count: 10,
-                forward: true,
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            read.events.len(),
-            1,
-            "acknowledged append must be stored: {res:?}"
-        );
-    }
+    let ack = store
+        .append(req(&tenant, "agg", 1, 1, ""))
+        .await
+        .expect("a valid append must not fail because NOTIFY cannot carry it");
+    let read = store
+        .read_stream(proto::ReadStreamRequest {
+            tenant_id: tenant.clone(),
+            aggregate_id: "agg".into(),
+            from_aggregate_nonce: 1,
+            max_count: 10,
+            forward: true,
+        })
+        .await
+        .unwrap();
+    assert_eq!(read.events.len(), 1, "acknowledged append must be stored");
+    assert_eq!(
+        read.events[0].meta.as_ref().unwrap().global_nonce,
+        ack.last_global_nonce
+    );
 }
