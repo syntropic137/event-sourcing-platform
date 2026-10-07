@@ -31,6 +31,8 @@ pub struct Environment {
     /// Uncommitted changes in the checkout: the SHA alone does not reproduce it.
     pub git_dirty: bool,
     pub os: String,
+    /// `uptime` at start: other load on the host invalidates a run.
+    pub host_load_at_start: String,
     pub host_cpu: String,
     pub host_logical_cpus: String,
     pub host_mem_gb: String,
@@ -68,6 +70,7 @@ pub async fn capture(pool: &PgPool, container: Option<&str>) -> Environment {
             .await
             .is_empty(),
         os: sh("uname", &["-srm"]).await,
+        host_load_at_start: sh("uptime", &[]).await,
         rustc: sh("rustc", &["--version"]).await,
         server_pool_max: crate::sampler::SERVER_POOL_MAX,
         pg_container: container.map(str::to_owned),

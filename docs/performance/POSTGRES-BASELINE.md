@@ -82,7 +82,7 @@ cargo build --release -p eventstore-bin -p eventstore-bench
 | Client | `eventstore-bench`, tonic 0.14 over loopback TCP, one HTTP/2 connection per worker |
 | Toolchain | rustc 1.97.1 |
 | Baseline host | Apple M3 Max, 16 logical CPUs, 128 GB, macOS (Darwin 25.6.0 arm64); Docker Desktop 29.8.0 VM with 16 CPUs / 15.6 GB |
-| Code | measured at `d6034f0f83ba` (origin/main when the run was taken) |
+| Code | store and server at `d6034f0f83ba` (origin/main; this PR does not change them); harness as of commit `bffecf6` on this PR's branch (the run's JSON records the base SHA because the harness was not yet committed). Reproduce with this PR's head: later harness commits only change how overloaded open-loop runs are accounted (see the footnote under the results) and add run metadata. |
 
 Client, server and the Docker VM share one machine. Postgres I/O goes through
 the Docker Desktop VM disk, so commit (fsync) latency is **not** representative
@@ -184,11 +184,19 @@ Closed loop: latency is service time at saturation. Open loop: latency from inte
 | append-w16-same-b1-p65536 | 16 | 1 | 1 | 65536 | closed | 515 | 515 | 28.27 | 54.08 | 67.90 | 112.58 | 114.5 | 0 | 27 | 3.11 / 4 | 0.09 | 28 / 39 / 87 | 245876 | pass |
 | append-open-25pct-same-b1-p256 | 64 | 1 | 1 | 256 | open 226 rps | 226 | 226 | 3.76 | 9.68 | 32.29 | 42.27 | 44.3 | 0 | 1 | 0.10 / 3 | 0.04 | 8 / 13 / 884 | 255484 | pass |
 | append-open-50pct-same-b1-p256 | 64 | 1 | 1 | 256 | open 452 rps | 452 | 452 | 3.75 | 711.17 | 842.75 | 865.28 | 865.8 | 0 | 8 | 1.04 / 4 | 0.14 | 15 / 25 / 885 | 259556 | pass |
-| append-open-75pct-same-b1-p256 | 64 | 1 | 1 | 256 | open 679 rps | 679 | 679 | 723.97 | 1453.06 | 2527.23 | 2813.95 | 2840.6 | 0 | 12 | 2.90 / 4 | 0.07 | 21 / 35 / 885 | 267699 | pass |
-| append-open-90pct-same-b1-p256 | 64 | 1 | 1 | 256 | open 814 rps | 814 | 814 | 2541.57 | 7348.22 | 7421.95 | 7430.14 | 7430.1 | 0 | 12 | 3.01 / 4 | 0.07 | 19 / 31 / 770 | 279913 | pass |
+| append-open-75pct-same-b1-p256 | 64 | 1 | 1 | 256 | open 679 rps | 571 [1] | 571 [1] | 723.97 | 1453.06 | 2527.23 | 2813.95 | 2840.6 | 0 | 12 | 2.90 / 4 | 0.07 | 21 / 35 / 885 | 267699 | pass |
+| append-open-90pct-same-b1-p256 | 64 | 1 | 1 | 256 | open 814 rps | 546 [1] | 546 [1] | 2541.57 | 7348.22 | 7421.95 | 7430.14 | 7430.1 | 0 | 12 | 3.01 / 4 | 0.07 | 19 / 31 / 770 | 279913 | pass |
 | append-w16-same-b1-p256-at-hist10000 | 16 | 1 | 1 | 256 | closed | 656 | 656 | 19.79 | 51.10 | 68.54 | 82.17 | 84.2 | 0 | 11 | 3.02 / 4 | 0.06 | 21 / 36 / 243 | 304570 | pass |
 | append-w16-same-b1-p256-at-hist100000 | 16 | 1 | 1 | 256 | closed | 752 | 752 | 18.30 | 37.18 | 58.69 | 66.50 | 68.1 | 0 | 6 | 3.01 / 4 | 0.03 | 21 / 35 / 385 | 406974 | pass |
 | append-w16-same-b1-p256-at-hist1000000 | 16 | 1 | 1 | 256 | closed | 408 | 408 | 21.49 | 121.53 | 431.87 | 660.48 | 704.0 | 0 | 20 | 3.01 / 4 | 0.09 | 15 / 29 / 1869 | 1319624 | pass |
+
+[1] Corrected after review. This run divided events scheduled in the 15 s
+window by 15 s, which reports the offered rate when a backlog drains after the
+window (2.8 s at 75%, 7.3 s at 90%). The values shown are achieved throughput,
+`events / (15 s + drain)`, which is what the harness now reports. Their
+CPU/pool columns still include the drain period; the current harness stops
+sampling at the window end. All other rows drained within a few ms and are
+unaffected.
 
 ### History preload
 
@@ -242,24 +250,37 @@ per-subscriber sequence checks), is in
 
 ## Repeatability and durability
 
-Two extra quick-profile runs on the same machine, same day:
+Quick-profile runs on the same machine, same day. A, B and the first relaxed
+run were taken around the full baseline. C and D were taken later while other
+work (dozens of test Postgres containers and Rust builds from parallel
+sessions) was loading the host; host load average was 17 to 80.
 
-| scenario (quick) | run A durable | run B durable | relaxed (`synchronous_commit=off`) |
-|---|---|---|---|
-| w1 same tenant, ev/s / p99 | 364 / 9.9 ms | 580 / 3.4 ms | 466 / 4.3 ms |
-| w8 same tenant, ev/s / p99 | 872 / 21 ms | 894 / 19 ms | 834 / 16 ms |
-| w8 different tenants, ev/s / p99 | 1,301 / 11 ms | 1,503 / 10 ms | 1,286 / 12 ms |
-| w8 batch 100, ev/s | 3,800 | 3,840 | 3,000 |
-| open loop 50%, p99 | 17 ms | 45 ms | 2,726 ms |
-| e2e 250 ev/s, 8 subs, delivery p99 | n/a (ran at 500 ev/s) | 19 ms | 10 ms |
+| scenario (quick) | A durable | B durable | relaxed | C durable, loaded | D durable, loaded |
+|---|---|---|---|---|---|
+| w1 same tenant, ev/s / p99 | 364 / 9.9 ms | 580 / 3.4 ms | 466 / 4.3 ms | 479 / 3.9 ms | 322 / 9.9 ms |
+| w8 same tenant, ev/s / p99 | 872 / 21 ms | 894 / 19 ms | 834 / 16 ms | 428 / 50 ms | 491 / 86 ms |
+| w8 different tenants, ev/s / p99 | 1,301 / 11 ms | 1,503 / 10 ms | 1,286 / 12 ms | 717 / 24 ms | 722 / 51 ms |
+| w8 batch 100, ev/s | 3,800 | 3,840 | 3,000 | 3,296 | 2,766 |
+| open loop 50%, p99 | 17 ms | 45 ms | 2,726 ms | 39 ms | 30 ms |
+| e2e 250 ev/s, 8 subs, delivery p99 | n/a (ran at 500 ev/s) | 19 ms | 10 ms | 454 ms | 228 ms |
+
+A second full-profile run under that load was **discarded**: single-writer
+appends fell to 95 ev/s, the 1M preload took 41 minutes instead of 5, and 4
+preload appends errored, which (correctly) failed the run. Completeness and
+ordering still passed in every scenario of every run.
 
 Takeaways:
 
-- **Run-to-run spread is large** on Docker Desktop: up to ~1.6x on single-writer
-  throughput and an order of magnitude on open-loop tails near 50% load.
+- **Run-to-run spread is large** on Docker Desktop even on a quiet host: up to
+  ~1.6x on single-writer throughput and an order of magnitude on open-loop
+  tails near 50% load. A loaded host halves multi-writer throughput.
+- **The same/different-tenant ratio is stable** (same-tenant throughput is 0.59 to 0.70 of different-tenant across all runs), as
+  is batch scaling. Those are the better regression signals.
 - **Relaxing commit durability does not raise the ceiling.** WAL flush is not
   the bottleneck here (WAL-wait samples are ~0.1 backends on average). The
   limit is the serialized critical section plus the 5-connection pool.
+- Each run now records `uptime` at start (`host_load_at_start`), so loaded runs
+  can be spotted and discarded.
 
 ## Findings
 

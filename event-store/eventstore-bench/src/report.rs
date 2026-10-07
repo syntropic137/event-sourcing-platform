@@ -88,11 +88,12 @@ pub fn markdown(r: &Results) -> String {
     );
     let _ = writeln!(
         s,
-        "- Host: {} ({} logical CPUs, {} GB), {}\n- Docker {} VM: {} CPUs, {} GB; Postgres container `{}`: {} CPUs, {} GB\n- Postgres {}: fsync={} synchronous_commit={} full_page_writes={} wal_sync_method={} shared_buffers={} max_connections={}\n- Server pool max {} connections; git {}{}; {}\n",
+        "- Host: {} ({} logical CPUs, {} GB), {}\n- Host load at start: `{}`\n- Docker {} VM: {} CPUs, {} GB; Postgres container `{}`: {} CPUs, {} GB\n- Postgres {}: fsync={} synchronous_commit={} full_page_writes={} wal_sync_method={} shared_buffers={} max_connections={}\n- Server pool max {} connections; git {}{}; {}\n",
         e.host_cpu,
         e.host_logical_cpus,
         e.host_mem_gb,
         e.os,
+        e.host_load_at_start,
         e.docker_server,
         e.docker_vm_cpus,
         e.docker_vm_mem_gb,
