@@ -34,7 +34,7 @@ order.execute(OrderCommand::Ship).await?;
 repo.save(&mut order).await?;
 ```
 
-Events are stored as JSON, so `Aggregate::Event` must implement `Serialize` and `DeserializeOwned`. Override `Aggregate::aggregate_type` (or call `with_aggregate_type`) to record a stable type name. Streams are addressed by `(tenant, aggregate_id)`, so aggregate IDs must be unique within a tenant.
+Events are stored as JSON, so `Aggregate::Event` must implement `Serialize` and `DeserializeOwned`. Override `Aggregate::aggregate_type` (or call `with_aggregate_type`) to record a stable type name. Streams are addressed by `(tenant, aggregate_id)`, so aggregate IDs must be unique within a tenant. `AggregateInstance::execute` applies a command's events to a clone of the aggregate and commits them only if all apply, so aggregates must be `Clone`. Saving to an existing stream verifies its stored aggregate type.
 
 ### Save semantics
 

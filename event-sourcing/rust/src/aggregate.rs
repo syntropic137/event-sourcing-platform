@@ -166,9 +166,17 @@ impl<A: Aggregate> AggregateInstance<A> {
     }
 
     /// Apply new events to the aggregate and record them as pending.
-    pub fn add_events(&mut self, events: Vec<A::Event>) -> Result<()> {
-        // Apply events to the aggregate
-        self.aggregate.apply_events(&events)?;
+    ///
+    /// All-or-nothing: events are applied to a copy of the aggregate, and
+    /// state, version, and pending events change only if every event
+    /// applies. On error the instance is exactly as before.
+    pub fn add_events(&mut self, events: Vec<A::Event>) -> Result<()>
+    where
+        A: Clone,
+    {
+        let mut candidate = self.aggregate.clone();
+        candidate.apply_events(&events)?;
+        self.aggregate = candidate;
 
         for event in events {
             self.metadata.increment_version();
@@ -185,10 +193,11 @@ impl<A: Aggregate> AggregateInstance<A> {
 
     /// Run a command against the current state and record the resulting events.
     ///
-    /// Returns the number of events recorded.
+    /// Returns the number of events recorded. Atomic like
+    /// [`add_events`](Self::add_events).
     pub async fn execute(&mut self, command: A::Command) -> Result<usize>
     where
-        A: AggregateRoot,
+        A: AggregateRoot + Clone,
     {
         let events = self.aggregate.handle_command(command).await?;
         let count = events.len();
@@ -241,7 +250,7 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Default)]
+    #[derive(Debug, Clone, Default)]
     struct TestAggregate {
         id: Option<String>,
         value: i32,
