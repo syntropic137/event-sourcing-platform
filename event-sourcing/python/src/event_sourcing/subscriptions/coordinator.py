@@ -684,6 +684,9 @@ class SubscriptionCoordinator:
         name = failure.projection_name
         projection = track.projections.pop(name, None)
         track.unsaved_skips.pop(name, None)
+        # The generation it was held under. A rebuild after this point makes
+        # the retry stale (see _retry_held).
+        generation = track.generations.pop(name, 0)
         if projection is None:
             return
         attempts = self._held[name].attempts if name in self._held else 1
@@ -703,21 +706,36 @@ class SubscriptionCoordinator:
         if group is None:
             return  # no plan running; the next plan resumes it from its checkpoint
         try:
-            group.create_task(self._retry_held(name, projection, delay))
+            group.create_task(self._retry_held(name, projection, generation, delay))
         except RuntimeError:
             # The plan is shutting down; the next one resumes it from its
             # checkpoint, which is still below the failure.
             return
 
     async def _retry_held(
-        self, name: str, projection: CheckpointedProjection, delay: float
+        self, name: str, projection: CheckpointedProjection, generation: int, delay: float
     ) -> None:
-        """After ``delay``, feed a held projection from its checkpoint on its own track."""
+        """After ``delay``, feed a held projection from its checkpoint on its own track.
+
+        ``generation`` is the one it was held under, never the current one. A
+        rebuild_projection() in between bumps the generation first and deletes
+        the checkpoint after, so a retry reading the generation now could pair
+        the new generation with the old checkpoint and, once the rebuild has
+        cleared the data, resume above history it no longer has. Read under
+        the checkpoint lock, and given up if the generation moved: a rebuilt
+        projection is fed by the next plan, from 0, as rebuild_projection says.
+        """
         await asyncio.sleep(delay)
         if not self._running:
             return
-        generation = self._generations.get(name, 0)
-        resume_from = await self._resume_position(name, projection)
+        async with self._checkpoint_lock(name):
+            if self._generations.get(name, 0) != generation:
+                logger.info(
+                    "Held projection was rebuilt; dropping its retry",
+                    extra={"projection_name": name},
+                )
+                return
+            resume_from = await self._resume_position(name, projection)
         track = self._catch_up_track(
             f"retry-{name}",
             [_BehindProjection(name, projection, resume_from, generation)],
@@ -1090,7 +1108,18 @@ class SubscriptionCoordinator:
                 except ProjectionHandlerFailedError as failure:
                     failures.append(failure)
                     self._record_failure(failure)
-                    continue
+                    failed = True
+                else:
+                    failed = False
+            if failed:
+                # Wakes and may_run only gate a drain that has not started. One
+                # already inside process_pending() would go on running side
+                # effects while held, so it is cancelled. Safe: the contract
+                # makes process_pending() idempotent, and recovery wakes it.
+                drain = self._drains.get(name)
+                if drain is not None:
+                    await drain.close()
+                continue
             held = self._held.get(name)
             if held is not None and global_nonce >= held.failure.global_nonce:
                 # Delivered in order from below the failure without failing:

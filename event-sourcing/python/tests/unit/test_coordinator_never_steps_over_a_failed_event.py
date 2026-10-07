@@ -423,3 +423,131 @@ async def test_a_held_process_manager_runs_no_side_effects_until_it_recovers() -
     assert store.subscribed_from[-2:] == [fails_at, fails_at]
     assert manager.processed_while_held == 0
     assert manager.processed_after_recovery >= 1
+
+
+class SuspendingProcessManager(ProcessManager):
+    """Fails event ``fails_at``; process_pending() suspends mid-drain before its side effect."""
+
+    def __init__(self, fails_at: int) -> None:
+        self.side_effects = 0
+        self.drain_started = asyncio.Event()
+        self.release = asyncio.Event()
+        self._fails_at = fails_at
+
+    def get_name(self) -> str:
+        return "suspending_pm"
+
+    def get_version(self) -> int:
+        return 1
+
+    def get_subscribed_event_types(self) -> set[str] | None:
+        return {"SampleEvent"}
+
+    async def clear_all_data(self) -> None:
+        return None
+
+    async def handle_event(
+        self,
+        envelope: EventEnvelope[DomainEvent],
+        checkpoint_store: ProjectionCheckpointStore,
+        context: DispatchContext | None = None,
+    ) -> ProjectionResult:
+        nonce = envelope.metadata.global_nonce or 0
+        if nonce == self._fails_at:
+            return ProjectionResult.FAILURE
+        await checkpoint_store.save_checkpoint(
+            ProjectionCheckpoint(
+                projection_name=self.get_name(),
+                global_position=nonce,
+                updated_at=datetime.now(UTC),
+                version=1,
+            )
+        )
+        return ProjectionResult.SUCCESS
+
+    async def process_pending(self) -> int:
+        self.drain_started.set()
+        await self.release.wait()
+        self.side_effects += 1
+        return 1
+
+    def get_idempotency_key(self, todo_item: dict[str, str | int | float | bool | None]) -> str:
+        return str(todo_item)
+
+
+async def test_a_drain_already_running_when_its_manager_is_held_does_no_side_effect() -> None:
+    """Gating new drains is not enough: one suspended inside process_pending() is fenced too."""
+    manager = SuspendingProcessManager(fails_at=FAILS_AT)
+    coordinator = SubscriptionCoordinator(
+        event_store=FiniteEventStore(),
+        checkpoint_store=MemoryCheckpointStore(),
+        projections=[manager],
+    )
+    coordinator.is_catching_up = False  # live, so a success wakes the drain
+
+    try:
+        await coordinator.dispatch_event(_envelope(1))
+        async with asyncio.timeout(SETTLE_TIMEOUT_S):
+            await manager.drain_started.wait()
+        with pytest.raises(ProjectionHandlerFailedError):
+            await coordinator.dispatch_event(_envelope(FAILS_AT))
+        manager.release.set()
+        await coordinator.wait_for_process_managers()
+        for _ in range(10):  # let a surviving drain run to its side effect
+            await asyncio.sleep(0)
+        assert manager.side_effects == 0
+    finally:
+        await coordinator.stop()
+
+
+class StallingDeleteCheckpointStore(MemoryCheckpointStore):
+    """delete_checkpoint() waits for ``release``, the way a slow database does."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.deleting = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def delete_checkpoint(self, projection_name: str) -> None:
+        self.deleting.set()
+        await self.release.wait()
+        await super().delete_checkpoint(projection_name)
+
+
+async def test_a_retry_pending_across_a_rebuild_does_not_skip_rebuilt_history() -> None:
+    """Checkpoint 1, event 2 fails, rebuild stalls in its delete while the retry fires.
+
+    Pairing the rebuild's new generation with the old checkpoint would resume at
+    2 once the data was cleared, and checkpoint past event 1 for good.
+    """
+    projection = FlakyProjection()
+    checkpoints = StallingDeleteCheckpointStore()
+    store = FiniteEventStore()
+    coordinator = SubscriptionCoordinator(
+        event_store=store, checkpoint_store=checkpoints, projections=[projection]
+    )
+
+    running = asyncio.create_task(coordinator.start())
+    rebuild: asyncio.Task[None] | None = None
+    try:
+        async with asyncio.timeout(SETTLE_TIMEOUT_S):
+            while projection.failures == 0:
+                await asyncio.sleep(0.01)
+            rebuild = asyncio.create_task(coordinator.rebuild_projection(NAME))
+            await checkpoints.deleting.wait()
+            # Past the retry's backoff, so it fires while the delete is stalled.
+            await asyncio.sleep(HELD_RETRY_INITIAL_DELAY + 0.3)
+            checkpoints.release.set()
+            await rebuild
+            # Room for a stale retry to deliver what it would.
+            await asyncio.sleep(0.3)
+    finally:
+        await coordinator.stop()
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+        if rebuild is not None:
+            await asyncio.gather(rebuild, return_exceptions=True)
+
+    # Rebuilt and not yet fed: nothing applied since the clear, no checkpoint.
+    assert projection.applied == []
+    assert await checkpoints.get_checkpoint(NAME) is None

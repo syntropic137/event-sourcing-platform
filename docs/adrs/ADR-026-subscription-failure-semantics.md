@@ -180,8 +180,10 @@ Now:
    checkpoint, which delivers the event again. The exponent is capped, so the
    delay never overflows however long an event stays poison. A held
    ProcessManager runs no `process_pending()`, even when its retry track
-   starts live: its to-do list is missing the event. It is woken once it has
-   applied it.
+   starts live: its to-do list is missing the event. A drain already inside
+   `process_pending()` when the hold lands is cancelled. It is woken once it
+   has applied the event. A retry still pending when the projection is
+   rebuilt is dropped; the next plan replays it from 0.
 4. **Visible.** `held_projections` names each held projection and the event,
    `is_healthy` is False while any is held, and each failure logs an `ERROR`
    plus a `WARNING` with the retry delay. A handler that keeps failing holds
