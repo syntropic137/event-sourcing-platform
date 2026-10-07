@@ -21,7 +21,7 @@ Status: implemented. See `src/` and `tests/` for details.
   - `CHECK (stream_version > 0)` to disallow zero/negative
   - `BEFORE INSERT` trigger to require `stream_version = max(prev) + 1` (or `1` if first)
 - **Immutability**: events are append-only. Enforced by `BEFORE UPDATE/DELETE` triggers that always raise.
-- **Idempotency**: `event_id UUID UNIQUE` prevents duplicate writes of the same logical event.
+- **Idempotency**: `UNIQUE (tenant_id, event_id)` prevents duplicate writes of the same logical event. Batch retries use the `idempotency` table keyed by `(tenant_id, aggregate_id, idempotency_key)`, checked before the concurrency precondition (see ADR-028 in `docs/adrs/`).
 
 See: `migrations/*_init.sql` for the full DDL.
 

@@ -21,14 +21,15 @@
 //! Retries are idempotent because a pending batch is immutable once recorded:
 //! event IDs, timestamps, and nonces are fixed by
 //! [`AggregateInstance::add_events`], and every attempt carries the same
-//! idempotency key. If a retry is rejected as a conflict (or as an idempotency
-//! key reuse), the repository reads the stream at the expected position and
-//! compares event IDs. If its own batch is already there, the save is treated
-//! as committed. If only a prefix is there (the caller recorded more events
-//! after an unknown-outcome save), the prefix is cleared and the remainder is
-//! appended on top of it. This makes the result exactly-once in the stream regardless
-//! of whether the backend checks idempotency keys before or after the
-//! concurrency precondition.
+//! idempotency key. The store checks the key before the concurrency
+//! precondition (ADR-028), so a plain retry of a committed batch gets the
+//! original ack directly. If a retry is still rejected as a conflict (or as
+//! an idempotency key reuse), the repository reads the stream at the expected
+//! position and compares event IDs. If its own batch is already there, the
+//! save is treated as committed. If only a prefix is there (the caller
+//! recorded more events after an unknown-outcome save, which changes the
+//! key), the prefix is cleared and the remainder is appended on top of it.
+//! The result is exactly-once in the stream.
 
 use std::marker::PhantomData;
 use std::sync::Arc;

@@ -94,6 +94,9 @@ pub struct FaultyPort {
     pub lose_acks: AtomicU32,
     pub drop_requests: AtomicU32,
     pub appends_sent: AtomicU32,
+    /// `read_stream` calls (the repository reads only to reconcile or to
+    /// check an existing stream's type).
+    pub reads_sent: AtomicU32,
 }
 
 impl FaultyPort {
@@ -103,6 +106,7 @@ impl FaultyPort {
             lose_acks: AtomicU32::new(0),
             drop_requests: AtomicU32::new(0),
             appends_sent: AtomicU32::new(0),
+            reads_sent: AtomicU32::new(0),
         }
     }
 }
@@ -140,6 +144,7 @@ impl EventStorePort for FaultyPort {
         &self,
         req: proto::ReadStreamRequest,
     ) -> Result<proto::ReadStreamResponse> {
+        self.reads_sent.fetch_add(1, Ordering::SeqCst);
         self.inner.read_stream(req).await
     }
 

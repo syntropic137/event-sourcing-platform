@@ -81,6 +81,7 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 | [ADR-022](./ADR-022-strict-python-typing.md) | **Strict Python Typing Strategy** | ✅ Accepted | **Multi-layer type safety for Python SDK: pyright strict + ruff ANN401 + object ratchet** |
 | [ADR-023](./ADR-023-event-type-registry.md) | **Event Type Registry** | ✅ Accepted | **Global registry for resolving concrete event types from wire format — auto-populated by @event decorator** |
 | [ADR-026](./ADR-026-subscription-failure-semantics.md) | Subscription Failure Semantics | ✅ Accepted | Subscribe surfaces DB failures as `UNAVAILABLE` and undecodable events as `DATA_LOSS`, then ends; at-least-once reconnect; operator recovery path |
+| [ADR-028](./ADR-028-append-idempotency-semantics.md) | Append Idempotency Semantics | ✅ Accepted | Idempotency key checked before the concurrency precondition; canonical batch fingerprint shared by all backends; backend conformance suite |
 
 ---
 

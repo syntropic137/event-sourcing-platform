@@ -17,3 +17,10 @@ anyhow = "1"
 bytes = "1"
 prost = "0.14"
 prost-types = "0.14"
+sha2 = "0.10"
+
+[features]
+default = []
+# Backend conformance suite (`eventstore_core::conformance`). Backends enable
+# it from dev-dependencies; not part of production builds.
+conformance = []
