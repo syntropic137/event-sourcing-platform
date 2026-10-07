@@ -51,9 +51,25 @@ async function createClient(opts: Options): Promise<EventStoreClient> {
     `🛰️  Using gRPC event store at ${serverAddress} (tenant=${tenantId})`,
   );
 
+  // ADR-024 gateway: Basic auth on every call when ESP_GATEWAY_PASSWORD is
+  // set. Credentials only go over plaintext to localhost unless
+  // EVENT_STORE_ALLOW_INSECURE_CREDENTIALS=1 (use https:// otherwise).
+  const password = process.env.ESP_GATEWAY_PASSWORD;
   const client = EventStoreClientFactory.createGrpcClient({
     serverAddress,
     tenantId,
+    connection: password
+      ? {
+          auth: {
+            basic: {
+              username: process.env.ESP_GATEWAY_USER ?? "admin",
+              password,
+            },
+          },
+          allowInsecureCredentials:
+            process.env.EVENT_STORE_ALLOW_INSECURE_CREDENTIALS === "1",
+        }
+      : undefined,
   });
   try {
     await client.connect();

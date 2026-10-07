@@ -33,7 +33,10 @@ type Waiter<T> = {
  * `DATA_LOSS`) instead of hanging forever, and the consumer can reconnect
  * from its checkpoint (ADR-026).
  */
-export function streamToAsyncIterator<T>(call: ReadableCall): AsyncIterableIterator<T> {
+export function streamToAsyncIterator<T>(
+  call: ReadableCall,
+  mapError: (err: unknown) => unknown = (err) => err,
+): AsyncIterableIterator<T> {
   const buffer: T[] = [];
   const waiters: Waiter<T>[] = [];
   let terminal: { kind: "end" } | { kind: "error"; error: unknown } | undefined;
@@ -79,7 +82,7 @@ export function streamToAsyncIterator<T>(call: ReadableCall): AsyncIterableItera
   });
   call.on("error", (error: unknown) => {
     if (finished || terminal) return;
-    terminal = { kind: "error", error };
+    terminal = { kind: "error", error: mapError(error) };
     // Let anything still queued in the Readable flow out before the error.
     if (paused) {
       paused = false;

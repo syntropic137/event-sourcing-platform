@@ -74,9 +74,9 @@ proxmox-deploy-full: proxmox-render-local docker-build-and-save proxmox-terrafor
 	@echo "   for the exact command (avoids base64 line-wrapping issues in a"
 	@echo "   shell-portable way)."
 	@echo ""
-	@echo "⚠️  KNOWN GAP: the Rust SDK supports Basic Auth (ClientConfig::basic_auth);"
-	@echo "   the TS/Python SDK clients do not yet (#302) and will fail against"
-	@echo "   this gateway-protected deployment. See event-store/gateway/README.md."
+	@echo "🔑 SDK clients (Rust, TypeScript, Python) send Basic Auth when configured;"
+	@echo "   plaintext to this host needs allow_insecure_credentials until TLS (#301)."
+	@echo "   See event-store/gateway/README.md 'Client SDK support'."
 
 proxmox-destroy:
 	@echo "🗑️  Destroying Proxmox VM..."

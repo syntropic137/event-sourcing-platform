@@ -114,6 +114,27 @@ account.credit(100.0)
 await repo.save(account)
 ```
 
+### Connecting through the gateway (ADR-024)
+
+```python
+import os
+
+from event_sourcing import BasicAuth, GrpcEventStoreClient
+
+client = GrpcEventStoreClient(
+    "https://es.example.com:50051",  # host:port = plaintext
+    tenant_id="my-tenant",
+    auth=BasicAuth("admin", os.environ["ESP_GATEWAY_PASSWORD"]),
+    # or BearerToken(...) / TokenProviderAuth(SharedToken(...) or an async callable)
+    # allow_insecure_credentials=True,  # plaintext to a non-loopback host
+)
+await client.connect()
+```
+
+The `authorization` header goes on every call, including `subscribe()`.
+Credentials over plaintext to a non-loopback host raise `ClientConfigError`
+unless `allow_insecure_credentials=True`; TLS options are in `TlsConfig`.
+Rejected credentials raise `EventStoreAuthenticationError`.
 ### Event versions and upcasting
 
 Events use the cross-language envelope

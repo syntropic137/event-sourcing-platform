@@ -93,6 +93,24 @@ class EventStoreError(EventSourcingError):
         self.original_error = original_error
 
 
+class EventStoreAuthenticationError(EventStoreError):
+    """The event store, or the ADR-024 gateway in front of it, rejected the
+    client's credentials (gRPC ``UNAUTHENTICATED``), or a token provider failed.
+
+    Retrying without new credentials will not help. Never contains the
+    credentials.
+    """
+
+
+class ClientConfigError(EventSourcingError, ValueError):
+    """Invalid client connection config: endpoint, TLS or credentials (for
+    example credentials over plaintext to a non-loopback host). Never contains
+    a secret."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(f"invalid event store client config: {message}")
+
+
 class UndecodableEventError(EventStoreError):
     """A stored event cannot be decoded by the event store (gRPC DATA_LOSS).
 
