@@ -66,19 +66,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Client Configuration
 
 ```rust
-use eventstore_sdk_rs::EventStoreClient;
+use std::time::Duration;
+use eventstore_sdk_rs::{ClientConfig, EventStore, TlsConfig};
 
-let client = EventStoreClient::new("localhost:50051")
-    .with_credentials("user", "pass")
-    .with_tls_config(TlsConfig {
-        ca_certificate: Some(ca_cert),
-        client_certificate: Some(client_cert),
-        client_key: Some(client_key),
-    })
-    .with_connection_timeout(Duration::from_secs(5))
-    .with_request_timeout(Duration::from_secs(30))
-    .build()?;
+// host:port (plaintext), http://host:port, or https://host:port (TLS, OS roots)
+let store = EventStore::connect("https://events.example.com:443").await?;
+
+let store = ClientConfig::new("events.internal:8443")
+    .tls(
+        TlsConfig::new()
+            .ca_certificate_pem(ca_pem)
+            .client_identity_pem(client_cert_pem, client_key_pem),
+    )
+    .basic_auth("user", "pass")                 // authorization: Basic ... (ADR-024 gateway)
+    .connect_timeout(Duration::from_secs(5))
+    .request_timeout(Duration::from_secs(30))   // unary calls + opening a subscription only
+    .http2_keepalive(Duration::from_secs(30), Duration::from_secs(10))
+    .connect()
+    .await?;
 ```
+
+The high-level SDK exposes the same settings through `EventStoreClient::connect_with`; see the [Rust event sourcing SDK](/docs/event-sourcing/sdks/rust/rust-sdk.md#connecting) for defaults and semantics.
 
 ### Event Definition
 
