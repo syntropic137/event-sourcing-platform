@@ -258,6 +258,23 @@ fn map_db_error(e: sqlx::Error) -> StoreError {
 
 #[async_trait]
 impl EventStoreTrait for PostgresStore {
+    fn backend_kind(&self) -> &'static str {
+        "postgres"
+    }
+
+    fn capabilities(&self) -> Vec<&'static str> {
+        // #337: appends take a per-tenant transaction-scoped advisory lock
+        // before allocating global nonces, so within a tenant they become
+        // visible in commit order.
+        // #350: failed subscription queries end the stream with UNAVAILABLE.
+        // #351: undecodable rows end subscriptions/reads with DATA_LOSS.
+        vec![
+            eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE,
+            eventstore_core::capabilities::SUBSCRIPTION_ERRORS_SURFACED,
+            eventstore_core::capabilities::UNDECODABLE_EVENTS_SURFACED,
+        ]
+    }
+
     async fn append(&self, req: proto::AppendRequest) -> Result<proto::AppendResponse, StoreError> {
         if req.tenant_id.is_empty() {
             return Err(StoreError::Unauthenticated(
