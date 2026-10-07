@@ -13,12 +13,12 @@ COVERAGE_MIN ?= 75
 # Crates excluded from fast unit/doc tests (space-separated)
 FAST_TEST_EXCLUDES ?= eventstore-backend-postgres
 
-.PHONY: help build clean qa qa-full qa-fast fmt clippy check test run gen-ts gen-py smoke cov-setup coverage
+.PHONY: help build clean qa qa-full qa-fast fmt clippy check test run gen-ts gen-py smoke-py-import smoke cov-setup coverage
 .PHONY: ps run-bg stop dev-init dev-start dev-stop dev-restart dev-clean dev-test dev-status dev-logs dev-shell
 .PHONY: bench-pg bench-pg-full
 
 help:
-	@echo "Targets: build, clean, qa, qa-full, fmt, clippy, check, test, run, smoke, gen-ts, gen-py"
+	@echo "Targets: build, clean, qa, qa-full, fmt, clippy, check, test, run, smoke, gen-ts, gen-py, smoke-py-import"
 	@echo ""
 	@echo "Performance (Docker; see docs/performance/POSTGRES-BASELINE.md):"
 	@echo "  bench-pg      - Postgres baseline, quick profile (~2 min)"
@@ -225,18 +225,41 @@ gen-ts:
 	    -I ./eventstore-proto/proto \
 	    eventstore-proto/proto/eventstore/v1/eventstore.proto
 
-# Generate Python stubs using grpcio-tools (requires Python + grpcio-tools)
+# Generate Python stubs using grpcio-tools (requires uv).
+# Pinned to the grpcio-tools that generated event-sourcing/python's stubs
+# (protobuf gencode 6.31.1), so both Python packages accept the same runtime.
+PY_GRPC_TOOLS_VERSION := 1.76.0
+PY_GEN_DIR := sdks/sdk-py/sdk_py/gen
 gen-py:
 	@if [ ! -d sdks/sdk-py ]; then echo "sdk-py not present; skipping. Create sdks/sdk-py/ to enable"; exit 0; fi
-	@if ! command -v python >/dev/null 2>&1; then echo "python not found"; exit 2; fi
-	@echo "Generating Python stubs into sdks/sdk-py/sdk_py/gen ..."
-	@rm -rf sdks/sdk-py/sdk_py/gen
-	@mkdir -p sdks/sdk-py/sdk_py/gen
-	@python -m grpc_tools.protoc \
+	@if ! command -v uv >/dev/null 2>&1; then echo "uv not found"; exit 2; fi
+	@echo "Generating Python stubs into $(PY_GEN_DIR) ..."
+	@rm -rf $(PY_GEN_DIR)
+	@mkdir -p $(PY_GEN_DIR)/eventstore/v1
+	@uv run --isolated --no-project --with grpcio-tools==$(PY_GRPC_TOOLS_VERSION) \
+	  python -m grpc_tools.protoc \
 	  -I ./eventstore-proto/proto \
-	  --python_out=./sdks/sdk-py/sdk_py/gen \
-	  --grpc_python_out=./sdks/sdk-py/sdk_py/gen \
+	  --python_out=./$(PY_GEN_DIR) \
+	  --pyi_out=./$(PY_GEN_DIR) \
+	  --grpc_python_out=./$(PY_GEN_DIR) \
 	  eventstore-proto/proto/eventstore/v1/eventstore.proto
+	@# Regular packages, so the stubs install and import as sdk_py.gen.eventstore.v1.
+	@touch $(PY_GEN_DIR)/__init__.py $(PY_GEN_DIR)/eventstore/__init__.py $(PY_GEN_DIR)/eventstore/v1/__init__.py
+	@# grpc_tools imports the messages as top-level 'eventstore.v1', which does not
+	@# exist once installed (#367). Make it relative to the package instead.
+	@sed -i.bak 's/^from eventstore\.v1 import eventstore_pb2 as /from . import eventstore_pb2 as /' \
+	  $(PY_GEN_DIR)/eventstore/v1/eventstore_pb2_grpc.py
+	@rm $(PY_GEN_DIR)/eventstore/v1/eventstore_pb2_grpc.py.bak
+	@if grep -q '^from eventstore' $(PY_GEN_DIR)/eventstore/v1/eventstore_pb2_grpc.py; then \
+	  echo "absolute eventstore import left in generated stubs"; exit 1; fi
+
+# Install sdk-py into a throwaway environment and import it from there (#367).
+smoke-py-import:
+	@if ! command -v uv >/dev/null 2>&1; then echo "uv not found"; exit 2; fi
+	@# Built from a copy, so the build leaves no egg-info/build dirs in the tree.
+	@tmp="$$(mktemp -d)" && cp -R sdks/sdk-py "$$tmp/sdk-py" && rm -rf "$$tmp/sdk-py/build" "$$tmp"/sdk-py/*.egg-info && \
+	  cd "$$tmp" && uv run --isolated --no-project --reinstall-package eventstore-sdk-py --with ./sdk-py \
+	  python -I ./sdk-py/tests/smoke_import.py
 
 # Show process listening on BIND_ADDR's port
 ps:
