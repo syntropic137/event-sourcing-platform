@@ -1,42 +1,407 @@
 //! Event definitions and metadata handling
 //!
-//! This module provides traits and types for working with domain events,
-//! event envelopes, and event metadata in the event sourcing system.
+//! # Wire format
+//!
+//! Events are stored in the cross-language envelope of ADR-027 (see
+//! [`crate::wire`]): the payload is a JSON object holding only the event's
+//! fields, and the event type and schema version live in metadata. This is
+//! what the TypeScript and Python SDKs write, so any SDK can read any stream.
+//!
+//! # Defining events
+//!
+//! Give each event its own struct and implement [`EventSchema`] for it, then
+//! group an aggregate's events with [`event_enum!`](crate::event_enum):
+//!
+//! ```
+//! use event_sourcing_rust::prelude::*;
+//!
+//! #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+//! pub struct AccountOpened {
+//!     pub account_id: String,
+//!     pub owner: String,
+//! }
+//! impl EventSchema for AccountOpened {
+//!     const EVENT_TYPE: &'static str = "AccountOpened";
+//! }
+//!
+//! #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+//! pub struct MoneyDeposited {
+//!     pub amount: i64,
+//! }
+//! impl EventSchema for MoneyDeposited {
+//!     const EVENT_TYPE: &'static str = "MoneyDeposited";
+//!     const EVENT_VERSION: u32 = 2;
+//! }
+//!
+//! event_sourcing_rust::event_enum! {
+//!     #[derive(Debug, Clone, PartialEq)]
+//!     pub enum AccountEvent {
+//!         Opened(AccountOpened),
+//!         Deposited(MoneyDeposited),
+//!     }
+//! }
+//!
+//! let event = AccountEvent::from(MoneyDeposited { amount: 5 });
+//! assert_eq!(event.event_type(), "MoneyDeposited");
+//! assert_eq!(event.event_version(), 2);
+//! assert_eq!(event.to_payload().unwrap(), br#"{"amount":5}"#);
+//! ```
 
 use chrono::{DateTime, Utc};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use uuid::Uuid;
 
-/// Trait for domain events
+use crate::error::{Error, Result};
+
+/// A domain event as written to and read from the event store.
 ///
-/// Domain events represent facts that have occurred in the system.
-/// They should be immutable and contain all the information needed
-/// to understand what happened.
-pub trait DomainEvent: Debug + Clone + Send + Sync {
-    /// Get the event type identifier
-    ///
-    /// This should be a stable identifier that can be used for
-    /// deserialization and event handling routing.
+/// Domain events represent facts that have occurred in the system. Implement
+/// this through [`EventSchema`] (one struct) or
+/// [`event_enum!`](crate::event_enum) (an aggregate's set of events); a
+/// hand-written impl must follow the same rules:
+///
+/// * [`to_payload`](Self::to_payload) returns a JSON **object** with only the
+///   event's fields (no type tag): `{"amount":5}`, never
+///   `{"Deposited":{"amount":5}}`.
+/// * [`from_payload`](Self::from_payload) dispatches on the stored event type
+///   and version and returns [`Error::UnknownEventType`] or
+///   [`Error::UnknownEventVersion`] for anything it does not know. It must
+///   never guess.
+pub trait DomainEvent: Debug + Clone + Send + Sync + Sized {
+    /// Stable event type written to `meta.event_type`, e.g.
+    /// `"MoneyDeposited"`. Renaming it orphans stored events (use an
+    /// upcaster).
     fn event_type(&self) -> &'static str;
 
-    /// Get the schema version of this event
-    ///
-    /// This is used for event upcasting and migration when
-    /// event schemas evolve over time.
+    /// Schema version written to `meta.event_version` (starts at 1).
     fn event_version(&self) -> u32 {
         1
     }
+
+    /// Serialize the event body: a JSON object with the event's fields only.
+    fn to_payload(&self) -> Result<Vec<u8>>;
+
+    /// Decode a stored event, dispatching on its type and version.
+    fn from_payload(event: &SerializedEvent<'_>) -> Result<Self>;
 
     /// Get optional correlation ID for tracing related events
     fn correlation_id(&self) -> Option<&str> {
         None
     }
 
-    /// Get optional causation ID for event causality tracking  
+    /// Get optional causation ID for event causality tracking
     fn causation_id(&self) -> Option<&str> {
         None
+    }
+}
+
+/// Schema of one event type at one version: a struct whose serde form is the
+/// wire payload.
+///
+/// Fields are serialized by serde as a flat JSON object. Use
+/// `#[serde(rename_all = "camelCase")]` (or per-field renames) when the
+/// stream is shared with code that uses other field names. Do not use
+/// `#[serde(deny_unknown_fields)]` on events read from TypeScript streams:
+/// the TypeScript SDK currently also writes its `eventType` and
+/// `schemaVersion` class fields into the payload (ADR-027).
+///
+/// Every `EventSchema` is a [`DomainEvent`] on its own, which is handy in
+/// projections (`recorded.decode::<MoneyDeposited>()`).
+pub trait EventSchema: Serialize + DeserializeOwned + Debug + Clone + Send + Sync {
+    /// Stable event type, e.g. `"MoneyDeposited"`.
+    const EVENT_TYPE: &'static str;
+    /// Schema version (starts at 1).
+    const EVENT_VERSION: u32 = 1;
+}
+
+impl<T: EventSchema> DomainEvent for T {
+    fn event_type(&self) -> &'static str {
+        const {
+            assert!(
+                crate::wire::is_valid_event_type(T::EVENT_TYPE),
+                "EventSchema::EVENT_TYPE must be non-empty printable ASCII without spaces"
+            );
+        }
+        T::EVENT_TYPE
+    }
+
+    fn event_version(&self) -> u32 {
+        const {
+            assert!(
+                T::EVENT_VERSION >= 1,
+                "EventSchema::EVENT_VERSION starts at 1"
+            )
+        }
+        T::EVENT_VERSION
+    }
+
+    fn to_payload(&self) -> Result<Vec<u8>> {
+        encode_body(self)
+    }
+
+    fn from_payload(event: &SerializedEvent<'_>) -> Result<Self> {
+        if event.event_type != T::EVENT_TYPE {
+            return Err(event.unknown_type());
+        }
+        event.decode_as::<T>()
+    }
+}
+
+/// Serialize an event body as compact JSON, rejecting anything that is not a
+/// JSON object (unit structs, tuple structs, externally tagged enums, ...).
+pub fn encode_body<T: Serialize + ?Sized>(body: &T) -> Result<Vec<u8>> {
+    if !crate::wire::serializes_as_object(body) {
+        return Err(Error::invalid_event(
+            "event payload must serialize to a plain JSON object: use a struct with named \
+             fields (`struct E {}` for an event without data), not an externally tagged enum, \
+             unit, tuple or scalar",
+        ));
+    }
+    let bytes = serde_json::to_vec(body)?;
+    debug_assert!(crate::wire::is_json_object(&bytes));
+    Ok(bytes)
+}
+
+/// A stored event handed to [`DomainEvent::from_payload`]: type and version
+/// from metadata (after upcasting) and the JSON payload.
+#[derive(Debug, Clone, Copy)]
+pub struct SerializedEvent<'a> {
+    /// Event type (`meta.event_type`).
+    pub event_type: &'a str,
+    /// Schema version (`meta.event_version`; `0` on the wire is read as 1).
+    pub event_version: u32,
+    /// JSON object payload.
+    pub payload: &'a [u8],
+}
+
+impl<'a> SerializedEvent<'a> {
+    /// A stored event.
+    pub fn new(event_type: &'a str, event_version: u32, payload: &'a [u8]) -> Self {
+        Self {
+            event_type,
+            event_version: crate::wire::normalize_version(event_version),
+            payload,
+        }
+    }
+
+    /// Deserialize the payload as `T` without checking type or version.
+    ///
+    /// The payload must be a JSON object (ADR-027); anything else is
+    /// [`Error::EventDecode`], even if `T` could deserialize it (serde reads
+    /// a struct from an array too).
+    pub fn deserialize<T: DeserializeOwned>(&self) -> Result<T> {
+        if !crate::wire::is_json_object(self.payload) {
+            return Err(Error::EventDecode {
+                event_type: self.event_type.to_string(),
+                event_version: self.event_version,
+                source: <serde_json::Error as serde::de::Error>::custom(
+                    "payload is not a JSON object",
+                ),
+            });
+        }
+        serde_json::from_slice(self.payload).map_err(|source| Error::EventDecode {
+            event_type: self.event_type.to_string(),
+            event_version: self.event_version,
+            source,
+        })
+    }
+
+    /// Decode as schema `T`: the version must be `T::EVENT_VERSION`
+    /// (otherwise [`Error::UnknownEventVersion`]). The caller has matched
+    /// the type.
+    pub fn decode_as<T: EventSchema>(&self) -> Result<T> {
+        if self.event_version != T::EVENT_VERSION {
+            return Err(self.unknown_version());
+        }
+        self.deserialize()
+    }
+
+    /// Error for an event type the decoder does not know.
+    pub fn unknown_type(&self) -> Error {
+        Error::UnknownEventType {
+            event_type: self.event_type.to_string(),
+            event_version: self.event_version,
+        }
+    }
+
+    /// Error for a known event type at a version the decoder does not know.
+    pub fn unknown_version(&self) -> Error {
+        Error::UnknownEventVersion {
+            event_type: self.event_type.to_string(),
+            event_version: self.event_version,
+        }
+    }
+}
+
+/// Define an enum of an aggregate's events, one [`EventSchema`] struct per
+/// variant, with its [`DomainEvent`] impl and `From` conversions.
+///
+/// Each variant is written as the bare struct body (no type tag) and decoded
+/// by dispatching on the stored `(event_type, event_version)`. Two variants
+/// may share an event type at different versions. Duplicate
+/// `(type, version)` pairs, invalid type names and version 0 are compile
+/// errors.
+///
+/// Variants accept doc comments only. `#[cfg]` on a variant is rejected
+/// (the generated dispatch could not follow it): gate the whole enum, or
+/// implement [`DomainEvent`] by hand.
+///
+/// ```compile_fail
+/// # use event_sourcing_rust::prelude::*;
+/// # #[derive(Debug, Clone, Serialize, Deserialize)]
+/// # pub struct Opened {}
+/// # impl EventSchema for Opened { const EVENT_TYPE: &'static str = "AccountOpened"; }
+/// event_sourcing_rust::event_enum! {
+///     #[derive(Debug, Clone)]
+///     pub enum AccountEvent {
+///         #[cfg(feature = "never")]
+///         Opened(Opened),
+///     }
+/// }
+/// ```
+///
+/// ```
+/// use event_sourcing_rust::prelude::*;
+///
+/// #[derive(Debug, Clone, Serialize, Deserialize)]
+/// pub struct Opened { pub owner: String }
+/// impl EventSchema for Opened { const EVENT_TYPE: &'static str = "AccountOpened"; }
+///
+/// #[derive(Debug, Clone, Serialize, Deserialize)]
+/// pub struct Closed {}
+/// impl EventSchema for Closed { const EVENT_TYPE: &'static str = "AccountClosed"; }
+///
+/// event_sourcing_rust::event_enum! {
+///     /// Events of the Account aggregate.
+///     #[derive(Debug, Clone)]
+///     pub enum AccountEvent {
+///         /// The account was opened.
+///         Opened(Opened),
+///         Closed(Closed),
+///     }
+/// }
+///
+/// let stored = SerializedEvent::new("AccountOpened", 1, br#"{"owner":"alice"}"#);
+/// assert!(matches!(AccountEvent::from_payload(&stored), Ok(AccountEvent::Opened(_))));
+///
+/// let unknown = SerializedEvent::new("AccountFrozen", 1, b"{}");
+/// assert!(matches!(
+///     AccountEvent::from_payload(&unknown),
+///     Err(Error::UnknownEventType { .. })
+/// ));
+/// ```
+#[macro_export]
+macro_rules! event_enum {
+    (
+        $(#[$meta:meta])*
+        $vis:vis enum $name:ident {
+            $( $(#[doc = $vdoc:expr])* $variant:ident($ty:ty) ),+ $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        $vis enum $name {
+            $( $(#[doc = $vdoc])* $variant($ty), )+
+        }
+
+        const _: () = $crate::event::__private::check_schemas(&[
+            $( (
+                <$ty as $crate::event::EventSchema>::EVENT_TYPE,
+                <$ty as $crate::event::EventSchema>::EVENT_VERSION,
+            ), )+
+        ]);
+
+        impl $crate::event::DomainEvent for $name {
+            fn event_type(&self) -> &'static str {
+                match self {
+                    $( Self::$variant(_) => <$ty as $crate::event::EventSchema>::EVENT_TYPE, )+
+                }
+            }
+
+            fn event_version(&self) -> u32 {
+                match self {
+                    $( Self::$variant(_) => <$ty as $crate::event::EventSchema>::EVENT_VERSION, )+
+                }
+            }
+
+            fn to_payload(&self) -> $crate::error::Result<::std::vec::Vec<u8>> {
+                match self {
+                    $( Self::$variant(body) => $crate::event::encode_body(body), )+
+                }
+            }
+
+            fn from_payload(
+                event: &$crate::event::SerializedEvent<'_>,
+            ) -> $crate::error::Result<Self> {
+                let mut known_type = false;
+                $(
+                    if event.event_type == <$ty as $crate::event::EventSchema>::EVENT_TYPE {
+                        if event.event_version
+                            == <$ty as $crate::event::EventSchema>::EVENT_VERSION
+                        {
+                            return event.deserialize::<$ty>().map(Self::$variant);
+                        }
+                        known_type = true;
+                    }
+                )+
+                if known_type {
+                    Err(event.unknown_version())
+                } else {
+                    Err(event.unknown_type())
+                }
+            }
+        }
+
+        $(
+            impl ::std::convert::From<$ty> for $name {
+                fn from(body: $ty) -> Self {
+                    Self::$variant(body)
+                }
+            }
+        )+
+    };
+}
+
+#[doc(hidden)]
+pub mod __private {
+    /// Compile-time checks for [`event_enum!`](crate::event_enum).
+    pub const fn check_schemas(schemas: &[(&str, u32)]) {
+        let mut i = 0;
+        while i < schemas.len() {
+            let (ty, version) = schemas[i];
+            assert!(
+                crate::wire::is_valid_event_type(ty),
+                "event_enum!: EVENT_TYPE must be non-empty printable ASCII without spaces"
+            );
+            assert!(version >= 1, "event_enum!: EVENT_VERSION starts at 1");
+            let mut j = i + 1;
+            while j < schemas.len() {
+                let (other, other_version) = schemas[j];
+                assert!(
+                    !(str_eq(ty, other) && version == other_version),
+                    "event_enum!: two variants have the same EVENT_TYPE and EVENT_VERSION"
+                );
+                j += 1;
+            }
+            i += 1;
+        }
+    }
+
+    const fn str_eq(a: &str, b: &str) -> bool {
+        let (a, b) = (a.as_bytes(), b.as_bytes());
+        if a.len() != b.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < a.len() {
+            if a[i] != b[i] {
+                return false;
+            }
+            i += 1;
+        }
+        true
     }
 }
 
@@ -277,19 +642,165 @@ impl EventContext {
 mod tests {
     use super::*;
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     struct TestEvent {
         message: String,
     }
 
-    impl DomainEvent for TestEvent {
-        fn event_type(&self) -> &'static str {
-            "TestEvent"
-        }
+    impl EventSchema for TestEvent {
+        const EVENT_TYPE: &'static str = "TestEvent";
+    }
 
-        fn event_version(&self) -> u32 {
-            1
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    struct Renamed {
+        amount: i64,
+    }
+
+    impl EventSchema for Renamed {
+        const EVENT_TYPE: &'static str = "Renamed";
+        const EVENT_VERSION: u32 = 2;
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    struct RenamedV1 {
+        amt: i64,
+    }
+
+    impl EventSchema for RenamedV1 {
+        const EVENT_TYPE: &'static str = "Renamed";
+    }
+
+    crate::event_enum! {
+        #[derive(Debug, Clone, PartialEq)]
+        enum Both {
+            Test(TestEvent),
+            Renamed(Renamed),
+            RenamedV1(RenamedV1),
         }
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct Unit;
+
+    #[test]
+    fn enum_encodes_flat_body_and_metadata_identity() {
+        let e = Both::from(Renamed { amount: 3 });
+        assert_eq!(e.event_type(), "Renamed");
+        assert_eq!(e.event_version(), 2);
+        assert_eq!(e.to_payload().unwrap(), br#"{"amount":3}"#);
+        let e = Both::from(RenamedV1 { amt: 3 });
+        assert_eq!(e.event_version(), 1);
+    }
+
+    #[test]
+    fn enum_dispatches_on_type_and_version() {
+        let v2 = SerializedEvent::new("Renamed", 2, br#"{"amount":3}"#);
+        assert_eq!(
+            Both::from_payload(&v2).unwrap(),
+            Both::Renamed(Renamed { amount: 3 })
+        );
+        let v1 = SerializedEvent::new("Renamed", 1, br#"{"amt":4}"#);
+        assert_eq!(
+            Both::from_payload(&v1).unwrap(),
+            Both::RenamedV1(RenamedV1 { amt: 4 })
+        );
+        // Version 0 on the wire means unset, read as 1.
+        let v0 = SerializedEvent::new("Renamed", 0, br#"{"amt":4}"#);
+        assert!(matches!(Both::from_payload(&v0), Ok(Both::RenamedV1(_))));
+    }
+
+    #[test]
+    fn unknown_type_and_version_are_typed_errors() {
+        let unknown = SerializedEvent::new("Nope", 1, b"{}");
+        assert!(matches!(
+            Both::from_payload(&unknown),
+            Err(Error::UnknownEventType { event_type, event_version: 1 }) if event_type == "Nope"
+        ));
+        let newer = SerializedEvent::new("Renamed", 3, b"{}");
+        assert!(matches!(
+            Both::from_payload(&newer),
+            Err(Error::UnknownEventVersion {
+                event_version: 3,
+                ..
+            })
+        ));
+        // serde would read a struct from an array; the envelope forbids it.
+        let array = SerializedEvent::new("Renamed", 2, b"[3]");
+        assert!(matches!(
+            Both::from_payload(&array),
+            Err(Error::EventDecode { .. })
+        ));
+        let bad = SerializedEvent::new("Renamed", 2, br#"{"amount":"x"}"#);
+        assert!(matches!(
+            Both::from_payload(&bad),
+            Err(Error::EventDecode {
+                event_version: 2,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn single_schema_is_a_domain_event() {
+        let ok = SerializedEvent::new("TestEvent", 1, br#"{"message":"hi"}"#);
+        assert_eq!(TestEvent::from_payload(&ok).unwrap().message, "hi");
+        let other = SerializedEvent::new("Renamed", 2, br#"{"message":"hi"}"#);
+        assert!(matches!(
+            TestEvent::from_payload(&other),
+            Err(Error::UnknownEventType { .. })
+        ));
+        let newer = SerializedEvent::new("TestEvent", 2, br#"{"message":"hi"}"#);
+        assert!(matches!(
+            TestEvent::from_payload(&newer),
+            Err(Error::UnknownEventVersion { .. })
+        ));
+    }
+
+    #[test]
+    fn non_object_bodies_are_rejected() {
+        assert!(matches!(
+            encode_body(&Unit),
+            Err(Error::InvalidEvent { .. })
+        ));
+        assert!(encode_body(&5).is_err());
+        assert!(encode_body(&(1, 2)).is_err());
+        assert!(encode_body(&vec![1]).is_err());
+
+        // A serde enum as the body: externally tagged is a type tag inside
+        // the payload (`{"Deposited":{..}}`), rejected even though it is an
+        // object. Untagged and internally tagged enums are flat objects.
+        #[derive(Serialize)]
+        enum Tagged {
+            Deposited { amount: i64 },
+        }
+        assert!(matches!(
+            encode_body(&Tagged::Deposited { amount: 1 }),
+            Err(Error::InvalidEvent { .. })
+        ));
+        #[derive(Serialize)]
+        #[serde(untagged)]
+        enum Untagged {
+            Deposited { amount: i64 },
+        }
+        assert_eq!(
+            encode_body(&Untagged::Deposited { amount: 1 }).unwrap(),
+            br#"{"amount":1}"#
+        );
+        #[derive(Serialize)]
+        #[serde(tag = "kind")]
+        enum Internal {
+            Deposited { amount: i64 },
+        }
+        assert!(encode_body(&Internal::Deposited { amount: 1 }).is_ok());
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("amount", 1);
+        assert_eq!(encode_body(&map).unwrap(), br#"{"amount":1}"#);
+        assert!(encode_body(&Some(TestEvent {
+            message: "m".into()
+        }))
+        .is_ok());
+        assert!(encode_body(&None::<TestEvent>).is_err());
+        assert_eq!(encode_body(&serde_json::json!({})).unwrap(), b"{}");
     }
 
     #[test]

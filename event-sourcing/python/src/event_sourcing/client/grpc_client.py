@@ -201,8 +201,9 @@ class GrpcEventStoreClient:
             return envelopes
 
         except grpc.RpcError as e:
-            logger.error(f"gRPC error reading stream: {e}")
+            # Typed and actionable: the caller logs it, not once per attempt here (#360).
             _raise_if_undecodable(e, "Failed to read stream")
+            logger.error(f"gRPC error reading stream: {e}")
             raise EventStoreError(f"Failed to read stream: {e}") from e
 
     async def append_events(
@@ -463,8 +464,9 @@ class GrpcEventStoreClient:
             return envelopes, response.is_end, response.next_from_global_nonce
 
         except grpc.RpcError as e:
-            logger.error(f"gRPC error in ReadAll: {e}")
+            # Typed and actionable: the caller logs it, not once per attempt here (#360).
             _raise_if_undecodable(e, "Failed to read all events")
+            logger.error(f"gRPC error in ReadAll: {e}")
             raise EventStoreError(f"Failed to read all events: {e}") from e
 
     async def read_all_events_from(
@@ -538,6 +540,7 @@ class GrpcEventStoreClient:
             if e.code() == grpc.StatusCode.CANCELLED:
                 logger.info("Subscription cancelled")
                 return
-            logger.error(f"gRPC error in subscription: {e}")
+            # Typed and actionable: the caller logs it, not once per attempt here (#360).
             _raise_if_undecodable(e, "Subscription failed")
+            logger.error(f"gRPC error in subscription: {e}")
             raise EventStoreError(f"Subscription failed: {e}") from e

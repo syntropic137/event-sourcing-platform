@@ -18,6 +18,13 @@ use crate::error::{Error, Result};
 /// Generated protobuf types of the event store API.
 pub use eventstore_proto::gen as proto;
 
+/// Connection settings (TLS, credentials, timeouts, keepalive) and
+/// server-compatibility types, re-exported from `eventstore-sdk-rs`.
+pub use eventstore_sdk_rs::{
+    capabilities, ClientConfig, CompatibilityError, ConfigError, Credentials, ServerInfo,
+    SharedToken, TlsConfig, TokenProvider,
+};
+
 /// Stream of events delivered by a subscription.
 ///
 /// The stream may end or yield `Err` (for example when the server drops the
@@ -48,21 +55,55 @@ pub trait EventStorePort: Send + Sync {
 /// gRPC event store client backed by the low-level `eventstore-sdk-rs` client.
 ///
 /// Cloning is cheap; clones share one HTTP/2 channel.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EventStoreClient {
     inner: eventstore_sdk_rs::EventStore,
 }
 
 impl EventStoreClient {
-    /// Connect to an event store at `address` (`host:port`, optionally
-    /// prefixed with `http://`).
+    /// Connect with default settings. `address` is `host:port` (plaintext),
+    /// `http://host:port`, or `https://host:port` (TLS, OS trust store).
     pub async fn connect(address: impl AsRef<str>) -> Result<Self> {
-        let address = address.as_ref();
-        let address = address.strip_prefix("http://").unwrap_or(address);
-        let inner = eventstore_sdk_rs::EventStore::connect(address)
+        Self::connect_with(ClientConfig::new(address.as_ref())).await
+    }
+
+    /// Connect with explicit TLS, credentials, timeouts and keepalive.
+    ///
+    /// The request timeout bounds unary calls and opening a subscription,
+    /// never an open subscription stream; HTTP/2 keepalive ends a
+    /// subscription whose connection died. See [`ClientConfig`].
+    pub async fn connect_with(config: ClientConfig) -> Result<Self> {
+        let inner = eventstore_sdk_rs::EventStore::connect_with(config)
             .await
             .map_err(map_anyhow)?;
         Ok(Self { inner })
+    }
+
+    /// Ask the server for its version, backend and capabilities. A server
+    /// that predates `GetServerInfo` yields [`ServerInfo::legacy`].
+    pub async fn server_info(&self) -> Result<ServerInfo> {
+        self.inner.clone().server_info().await.map_err(map_anyhow)
+    }
+
+    /// Fail with [`Error::Incompatible`] unless the server advertises every
+    /// capability in `required` (see [`capabilities`]). Legacy servers
+    /// advertise none, so they fail any non-empty requirement.
+    pub async fn require_capabilities(&self, required: &[&str]) -> Result<ServerInfo> {
+        self.inner
+            .clone()
+            .require_capabilities(required)
+            .await
+            .map_err(map_anyhow)
+    }
+
+    /// Fail with [`Error::Incompatible`] unless the server reports a version
+    /// `>= min`. Prefer [`Self::require_capabilities`].
+    pub async fn require_min_version(&self, min: &str) -> Result<ServerInfo> {
+        self.inner
+            .clone()
+            .require_min_version(min)
+            .await
+            .map_err(map_anyhow)
     }
 
     /// Wrap an already connected low-level client.
@@ -114,6 +155,18 @@ impl EventStorePort for EventStoreClient {
 fn map_anyhow(err: anyhow::Error) -> Error {
     let err = match err.downcast::<tonic::Status>() {
         Ok(status) => return Error::from(status),
+        Err(err) => err,
+    };
+    let err = match err.downcast::<CompatibilityError>() {
+        Ok(incompatible) => return Error::Incompatible(incompatible),
+        Err(err) => err,
+    };
+    let err = match err.downcast::<ConfigError>() {
+        Ok(config) => return Error::Config(config.to_string()),
+        Err(err) => err,
+    };
+    let err = match err.downcast::<eventstore_sdk_rs::InvalidCredentials>() {
+        Ok(creds) => return Error::Config(creds.to_string()),
         Err(err) => err,
     };
     match err.downcast::<tonic::transport::Error>() {
@@ -207,8 +260,7 @@ mod tests {
         let port = portpicker::pick_unused_port().expect("free port");
         let err = EventStoreClient::connect(format!("127.0.0.1:{port}"))
             .await
-            .err()
-            .expect("connect must fail");
+            .expect_err("connect must fail");
         assert!(err.is_transient(), "{err:?}");
     }
 }

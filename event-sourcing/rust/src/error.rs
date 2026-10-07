@@ -38,6 +38,54 @@ pub enum Error {
     #[error("Event deserialization error: {0}")]
     EventDeserialization(#[from] serde_json::Error),
 
+    /// No decoder for this `event_type`. Never skipped silently: register the
+    /// type with the event enum, or an upcaster that maps it to a known one.
+    #[error("Unknown event type '{event_type}' (version {event_version})")]
+    UnknownEventType {
+        event_type: String,
+        event_version: u32,
+    },
+
+    /// The `event_type` is known but not at this `event_version`, and no
+    /// upcaster maps it to a known version (for example an event written by
+    /// newer code).
+    #[error("Unsupported version {event_version} of event type '{event_type}'")]
+    UnknownEventVersion {
+        event_type: String,
+        event_version: u32,
+    },
+
+    /// The payload does not match the schema registered for its
+    /// `event_type` and `event_version`.
+    #[error("Cannot decode event '{event_type}' v{event_version}: {source}")]
+    EventDecode {
+        event_type: String,
+        event_version: u32,
+        source: serde_json::Error,
+    },
+
+    /// The stored payload is not JSON (`content_type` is set and is not
+    /// `application/json`).
+    #[error("Unsupported content type '{content_type}' for event '{event_type}'")]
+    UnsupportedContentType {
+        event_type: String,
+        content_type: String,
+    },
+
+    /// An upcaster failed, cycled, or produced a non-object payload.
+    #[error("Upcasting event '{event_type}' v{event_version} failed: {reason}")]
+    Upcast {
+        event_type: String,
+        event_version: u32,
+        reason: String,
+    },
+
+    /// An event cannot be written in the cross-language envelope (invalid
+    /// `event_type`, `event_version` 0, or a payload that is not a JSON
+    /// object). See ADR-027.
+    #[error("Invalid event: {message}")]
+    InvalidEvent { message: String },
+
     /// Invalid command
     #[error("Invalid command: {message}")]
     InvalidCommand { message: String },
@@ -70,6 +118,16 @@ pub enum Error {
         received: u64,
     },
 
+    /// The event store does not meet a stated capability or version floor
+    /// (`EventStoreClient::require_capabilities` / `require_min_version`).
+    #[error("{0}")]
+    Incompatible(eventstore_sdk_rs::CompatibilityError),
+
+    /// Invalid client configuration (endpoint, TLS material, credentials).
+    /// Never contains secret values.
+    #[error("{0}")]
+    Config(String),
+
     /// Repository error
     #[error("Repository error: {0}")]
     Repository(#[from] anyhow::Error),
@@ -96,6 +154,13 @@ impl Error {
     /// Create a new invalid aggregate state error
     pub fn invalid_state(message: impl Into<String>) -> Self {
         Self::InvalidAggregateState {
+            message: message.into(),
+        }
+    }
+
+    /// Create a new invalid event error
+    pub fn invalid_event(message: impl Into<String>) -> Self {
+        Self::InvalidEvent {
             message: message.into(),
         }
     }

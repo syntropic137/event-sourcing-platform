@@ -136,8 +136,9 @@ impl EventStore {
     /// `UNIMPLEMENTED`; that is returned as `Ok(ServerInfo::legacy())`, not an
     /// error. Any other failure is returned as an error.
     pub async fn server_info(&mut self) -> anyhow::Result<ServerInfo> {
-        match self.inner.get_server_info(GetServerInfoRequest {}).await {
-            Ok(resp) => Ok(resp.into_inner().into()),
+        let req = self.unary(GetServerInfoRequest {});
+        match crate::bounded(self.request_timeout, self.inner.get_server_info(req)).await {
+            Ok(resp) => Ok(resp.into()),
             Err(status) if status.code() == Code::Unimplemented => Ok(ServerInfo::legacy()),
             Err(status) => Err(status.into()),
         }
