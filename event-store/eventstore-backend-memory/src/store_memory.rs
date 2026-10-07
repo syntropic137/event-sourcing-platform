@@ -186,10 +186,13 @@ impl EventStore for InMemoryStore {
         // the stream with an error (see `subscribe` / `EndAfterError`).
         // undecodable_events_surfaced: events are held as decoded protobuf
         // messages, so there is no decode step that could fail or skip one.
+        // literal_subscription_prefix: the prefix is compared with
+        // `str::starts_with`, which has no wildcards.
         vec![
             eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE,
             eventstore_core::capabilities::SUBSCRIPTION_ERRORS_SURFACED,
             eventstore_core::capabilities::UNDECODABLE_EVENTS_SURFACED,
+            eventstore_core::capabilities::LITERAL_SUBSCRIPTION_PREFIX,
         ]
     }
 

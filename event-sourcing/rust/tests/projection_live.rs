@@ -1219,22 +1219,52 @@ async fn dropping_run_stops_the_live_processor() {
     );
 }
 
+/// `\`, `%` and `_` in a feed prefix are ordinary characters (#361): the
+/// runner accepts them, and catch-up and live both deliver exactly the
+/// feed's aggregates. `foreign` would match an unescaped SQL LIKE pattern;
+/// for `acct\` an unescaped LIKE would instead miss the feed's own events.
 #[tokio::test]
-async fn like_wildcards_in_feed_prefix_are_rejected() {
-    let f = fixture().await;
-    for prefix in ["acct\\", "acct%", "acct_"] {
+async fn like_wildcard_characters_in_feed_prefix_match_literally() {
+    for (prefix, foreign) in [
+        (r"acct\", "acct%x"),
+        ("acct%", "acct-x"),
+        ("acct_", "acctXx"),
+    ] {
+        let f = fixture().await;
+        let own = format!("{prefix}1");
+        append(&f.client, &f.tenant, &own, 1, "Deposited", 1).await;
+        append(&f.client, &f.tenant, foreign, 1, "Deposited", 100).await;
+
+        let store = Arc::new(MemStore::new());
         let mut runner = ProjectionRunner::new(
             f.port.clone(),
-            Arc::new(MemStore::new()),
+            store.clone(),
             BalanceProjection::new(&Probe::default()),
             &f.tenant,
         )
         .with_feed_prefix(prefix);
-        let err = runner
-            .run(CancellationToken::new())
-            .await
-            .expect_err("wildcard prefix rejected");
-        assert!(err.to_string().contains("#361"), "{err}");
+        let key = runner.key().clone();
+        let mut progress = runner.progress();
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn({
+            let cancel = cancel.clone();
+            async move { runner.run(cancel).await }
+        });
+        wait_for(&mut progress, |p| p.is_live).await;
+
+        append(&f.client, &f.tenant, foreign, 2, "Deposited", 100).await;
+        let last = append(&f.client, &f.tenant, &own, 2, "Deposited", 2).await;
+        wait_for(&mut progress, |p| p.position == last).await;
+        cancel.cancel();
+        task.await.unwrap().expect("runner accepts the prefix");
+
+        let state = store.state(&key);
+        assert_eq!(
+            state.by_account,
+            BTreeMap::from([(own.clone(), 3)]),
+            "prefix '{prefix}'"
+        );
+        assert_eq!(state.applied, 2, "prefix '{prefix}'");
     }
 }
 
