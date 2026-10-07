@@ -438,12 +438,34 @@ class TestDataLossHaltsInsteadOfRetrying:
             # No side effects run while halted: the drain was closed.
             assert not drains["manager"].is_running
 
+    async def test_no_side_effects_across_recheck_attempts_until_halt_clears(self) -> None:
+        # Each re-check re-plans, and planning wakes live drains. While halted
+        # that must not run process_pending() between failures.
+        manager = CountingProcessManager(block=False)
+        run = _Running({"behind": CORRUPT_HEAD - 2}, recheck=0.05, extra=[manager])
+        await run.move_checkpoint("manager", CORRUPT_HEAD + 10)
+        async with run:
+            await run.until(
+                lambda: run.coordinator.halted is not None and len(run.store.blocked_attempts) >= 1
+            )
+            baseline_calls = manager.processed
+            baseline_attempts = len(run.store.blocked_attempts)
+            await run.until(lambda: len(run.store.blocked_attempts) >= baseline_attempts + 4)
+            assert run.coordinator.halted is not None
+            assert manager.processed == baseline_calls
+
+            # Recovery: the halt clears and the held drain is woken again.
+            await run.move_checkpoint("behind", CORRUPT_HEAD)
+            await run.until(lambda: run.coordinator.halted is None)
+            await run.until(lambda: manager.processed > baseline_calls)
+
 
 class CountingProcessManager(ProcessManager):
     """Counts process_pending() calls; holds no data."""
 
-    def __init__(self) -> None:
+    def __init__(self, block: bool = True) -> None:
         self.processed = 0
+        self._block = block
 
     def get_name(self) -> str:
         return "manager"
@@ -467,7 +489,8 @@ class CountingProcessManager(ProcessManager):
 
     async def process_pending(self) -> int:
         self.processed += 1
-        await asyncio.Event().wait()  # a slow side effect: runs until cancelled
+        if self._block:
+            await asyncio.Event().wait()  # a slow side effect: runs until cancelled
         return 0
 
     def get_idempotency_key(self, todo_item: dict[str, str | int | float | bool | None]) -> str:

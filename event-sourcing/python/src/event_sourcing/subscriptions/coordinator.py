@@ -524,6 +524,8 @@ class SubscriptionCoordinator:
         )
         self._halt = None
         self._halt_pending_tracks = set()
+        # Drains were held while halted; whatever is pending is actionable now.
+        self._wake_live_drains(self._tracks)
 
     async def _subscribe_loop(self) -> None:
         """
@@ -657,13 +659,21 @@ class SubscriptionCoordinator:
                     self._wake(name)
 
     def _wake(self, name: str) -> None:
-        """Wake ``name``'s drain, if it is a ProcessManager and wakes are open."""
+        """Wake ``name``'s drain, if it is a ProcessManager and wakes are open.
+
+        Never while halted at an undecodable event: re-check attempts re-plan
+        and would otherwise run side effects between failures (#360).
+        ``_clear_halt`` wakes the live drains once the halt is over.
+        """
         drain = self._drains.get(name)
-        if drain is not None and self._wakes_open:
+        if drain is not None and self._wakes_open and self._halt is None:
             drain.wake()
 
     def _drain_for(self, name: str, process_manager: ProcessManager) -> ProcessManagerDrain:
-        return ProcessManagerDrain(process_manager, may_run=lambda: self._is_live(name))
+        return ProcessManagerDrain(
+            process_manager,
+            may_run=lambda: self._halt is None and self._is_live(name),
+        )
 
     def _is_live(self, name: str) -> bool:
         """True when the track currently feeding ``name`` is past its catch-up.

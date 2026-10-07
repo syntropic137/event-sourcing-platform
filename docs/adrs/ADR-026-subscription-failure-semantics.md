@@ -90,8 +90,9 @@ Now the same "stop, never skip" rule applies:
 `UndecodableEventError` from any track the coordinator halts:
 
 - Every track is cancelled. No checkpoint is moved past `N`: no projection
-  was handed the event. ProcessManager drains are stopped, so no side effect
-  runs while halted.
+  was handed the event. ProcessManager drains are stopped and held (re-check
+  attempts do not wake them), so no side effect runs while halted; they are
+  woken when the halt clears.
 - It logs one `ERROR` per position and sets `halted` to a
   `SubscriptionHaltedError` (`.global_nonce`, message points here);
   `is_healthy` is `False`. Alert on either.
