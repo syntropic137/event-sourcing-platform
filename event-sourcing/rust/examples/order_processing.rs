@@ -38,49 +38,81 @@ enum OrderStatus {
     Cancelled,
 }
 
-/// Order events
+// Order events: one struct per event; fields are the stored JSON payload,
+// event type and version are metadata (ADR-027).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-enum OrderEvent {
-    Created {
-        id: String,
-        customer_id: String,
-    },
-    ItemAdded {
-        product_id: String,
-        quantity: u32,
-        price: f64,
-    },
-    ItemRemoved {
-        product_id: String,
-    },
-    Confirmed,
-    Shipped {
-        tracking_number: String,
-    },
-    Delivered,
-    Cancelled {
-        reason: String,
-    },
+struct OrderCreated {
+    id: String,
+    customer_id: String,
+}
+impl EventSchema for OrderCreated {
+    const EVENT_TYPE: &'static str = "OrderCreated";
 }
 
-impl DomainEvent for OrderEvent {
-    fn event_type(&self) -> &'static str {
-        match self {
-            OrderEvent::Created { .. } => "OrderCreated",
-            OrderEvent::ItemAdded { .. } => "OrderItemAdded",
-            OrderEvent::ItemRemoved { .. } => "OrderItemRemoved",
-            OrderEvent::Confirmed => "OrderConfirmed",
-            OrderEvent::Shipped { .. } => "OrderShipped",
-            OrderEvent::Delivered => "OrderDelivered",
-            OrderEvent::Cancelled { .. } => "OrderCancelled",
-        }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OrderItemAdded {
+    product_id: String,
+    quantity: u32,
+    price: f64,
+}
+impl EventSchema for OrderItemAdded {
+    const EVENT_TYPE: &'static str = "OrderItemAdded";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OrderItemRemoved {
+    product_id: String,
+}
+impl EventSchema for OrderItemRemoved {
+    const EVENT_TYPE: &'static str = "OrderItemRemoved";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OrderConfirmed {}
+impl EventSchema for OrderConfirmed {
+    const EVENT_TYPE: &'static str = "OrderConfirmed";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OrderShipped {
+    tracking_number: String,
+}
+impl EventSchema for OrderShipped {
+    const EVENT_TYPE: &'static str = "OrderShipped";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OrderDelivered {}
+impl EventSchema for OrderDelivered {
+    const EVENT_TYPE: &'static str = "OrderDelivered";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OrderCancelled {
+    reason: String,
+}
+impl EventSchema for OrderCancelled {
+    const EVENT_TYPE: &'static str = "OrderCancelled";
+}
+
+event_sourcing_rust::event_enum! {
+    /// Order events
+    #[derive(Debug, Clone)]
+    enum OrderEvent {
+        Created(OrderCreated),
+        ItemAdded(OrderItemAdded),
+        ItemRemoved(OrderItemRemoved),
+        Confirmed(OrderConfirmed),
+        Shipped(OrderShipped),
+        Delivered(OrderDelivered),
+        Cancelled(OrderCancelled),
     }
 }
 
 impl Aggregate for Order {
     type Event = OrderEvent;
     type Error = Error;
+    const AGGREGATE_TYPE: &'static str = "Order";
 
     fn aggregate_id(&self) -> Option<&str> {
         self.id.as_deref()
@@ -92,17 +124,17 @@ impl Aggregate for Order {
 
     fn apply_event(&mut self, event: &Self::Event) -> Result<()> {
         match event {
-            OrderEvent::Created { id, customer_id } => {
+            OrderEvent::Created(OrderCreated { id, customer_id }) => {
                 self.id = Some(id.clone());
                 self.customer_id = customer_id.clone();
                 self.status = OrderStatus::Draft;
                 self.version += 1;
             }
-            OrderEvent::ItemAdded {
+            OrderEvent::ItemAdded(OrderItemAdded {
                 product_id,
                 quantity,
                 price,
-            } => {
+            }) => {
                 self.items.push(OrderItem {
                     product_id: product_id.clone(),
                     quantity: *quantity,
@@ -111,24 +143,24 @@ impl Aggregate for Order {
                 self.recalculate_total();
                 self.version += 1;
             }
-            OrderEvent::ItemRemoved { product_id } => {
+            OrderEvent::ItemRemoved(OrderItemRemoved { product_id }) => {
                 self.items.retain(|item| item.product_id != *product_id);
                 self.recalculate_total();
                 self.version += 1;
             }
-            OrderEvent::Confirmed => {
+            OrderEvent::Confirmed(_) => {
                 self.status = OrderStatus::Confirmed;
                 self.version += 1;
             }
-            OrderEvent::Shipped { .. } => {
+            OrderEvent::Shipped(_) => {
                 self.status = OrderStatus::Shipped;
                 self.version += 1;
             }
-            OrderEvent::Delivered => {
+            OrderEvent::Delivered(_) => {
                 self.status = OrderStatus::Delivered;
                 self.version += 1;
             }
-            OrderEvent::Cancelled { .. } => {
+            OrderEvent::Cancelled(_) => {
                 self.status = OrderStatus::Cancelled;
                 self.version += 1;
             }
@@ -160,7 +192,7 @@ impl AggregateRoot for Order {
                 if customer_id.is_empty() {
                     return Err(Error::invalid_command("Customer ID is required"));
                 }
-                Ok(vec![OrderEvent::Created { id, customer_id }])
+                Ok(vec![OrderCreated { id, customer_id }.into()])
             }
 
             // ADD ITEM - Validate order exists and is in Draft status
@@ -185,11 +217,12 @@ impl AggregateRoot for Order {
                 if price < 0.0 {
                     return Err(Error::invalid_command("Price cannot be negative"));
                 }
-                Ok(vec![OrderEvent::ItemAdded {
+                Ok(vec![OrderItemAdded {
                     product_id,
                     quantity,
                     price,
-                }])
+                }
+                .into()])
             }
 
             // REMOVE ITEM - Validate order exists and is in Draft status
@@ -207,7 +240,7 @@ impl AggregateRoot for Order {
                 if !self.items.iter().any(|item| item.product_id == product_id) {
                     return Err(Error::invalid_command("Item not found in order"));
                 }
-                Ok(vec![OrderEvent::ItemRemoved { product_id }])
+                Ok(vec![OrderItemRemoved { product_id }.into()])
             }
 
             // CONFIRM ORDER - Validate order has items
@@ -221,7 +254,7 @@ impl AggregateRoot for Order {
                 if self.items.is_empty() {
                     return Err(Error::invalid_command("Cannot confirm order with no items"));
                 }
-                Ok(vec![OrderEvent::Confirmed])
+                Ok(vec![OrderConfirmed {}.into()])
             }
 
             // SHIP ORDER - Validate order is confirmed
@@ -237,7 +270,7 @@ impl AggregateRoot for Order {
                 if tracking_number.is_empty() {
                     return Err(Error::invalid_command("Tracking number is required"));
                 }
-                Ok(vec![OrderEvent::Shipped { tracking_number }])
+                Ok(vec![OrderShipped { tracking_number }.into()])
             }
 
             // DELIVER ORDER - Validate order is shipped
@@ -250,7 +283,7 @@ impl AggregateRoot for Order {
                         "Order must be shipped before delivery",
                     ));
                 }
-                Ok(vec![OrderEvent::Delivered])
+                Ok(vec![OrderDelivered {}.into()])
             }
 
             // CANCEL ORDER - Validate order is not delivered
@@ -267,7 +300,7 @@ impl AggregateRoot for Order {
                 if reason.is_empty() {
                     return Err(Error::invalid_command("Cancellation reason is required"));
                 }
-                Ok(vec![OrderEvent::Cancelled { reason }])
+                Ok(vec![OrderCancelled { reason }.into()])
             }
         }
     }

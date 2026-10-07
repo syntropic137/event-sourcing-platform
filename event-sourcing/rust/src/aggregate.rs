@@ -26,10 +26,16 @@ pub trait Aggregate: Debug + Default + Send + Sync {
     /// Get the aggregate's identifier
     fn aggregate_id(&self) -> Option<&str>;
 
-    /// Get the aggregate's type name
-    fn aggregate_type(&self) -> &'static str {
-        std::any::type_name::<Self>()
-    }
+    /// Stable aggregate type written to `meta.aggregate_type` of every event,
+    /// e.g. `"Account"`. Part of the stream identity shared with the
+    /// TypeScript (`getAggregateType()` / `@Aggregate('Account')`) and Python
+    /// (`get_aggregate_type()`) SDKs: never derive it from the Rust type path,
+    /// and never change it once events exist.
+    ///
+    /// Must be an ASCII letter followed by ASCII letters, digits, `_` or `.`
+    /// (no `-`: the other SDKs split stream names on it). Checked at compile
+    /// time where the repository is used.
+    const AGGREGATE_TYPE: &'static str;
 
     /// Get the current version of the aggregate
     fn version(&self) -> u64;
@@ -52,6 +58,18 @@ pub trait Aggregate: Debug + Default + Send + Sync {
     fn exists(&self) -> bool {
         self.aggregate_id().is_some() && self.version() > 0
     }
+}
+
+/// [`Aggregate::AGGREGATE_TYPE`], validated at compile time.
+pub fn aggregate_type<A: Aggregate>() -> &'static str {
+    const {
+        assert!(
+            crate::wire::is_valid_aggregate_type(A::AGGREGATE_TYPE),
+            "Aggregate::AGGREGATE_TYPE must be an ASCII letter followed by ASCII letters, \
+             digits, '_' or '.' (no '-')"
+        );
+    }
+    A::AGGREGATE_TYPE
 }
 
 /// Extended aggregate trait for aggregates that can be loaded from events
@@ -140,7 +158,7 @@ pub struct AggregateInstance<A: Aggregate> {
 impl<A: Aggregate> AggregateInstance<A> {
     /// Create a new aggregate instance for a stream that does not exist yet.
     pub fn new(aggregate_id: String, aggregate: A) -> Self {
-        let metadata = AggregateMetadata::new(aggregate_id, aggregate.aggregate_type().to_string());
+        let metadata = AggregateMetadata::new(aggregate_id, aggregate_type::<A>().to_string());
         Self {
             aggregate,
             metadata,
@@ -232,21 +250,26 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    enum TestEvent {
-        Created { id: String },
-        Updated { value: i32 },
+    struct Created {
+        id: String,
+    }
+    impl crate::event::EventSchema for Created {
+        const EVENT_TYPE: &'static str = "TestCreated";
     }
 
-    impl DomainEvent for TestEvent {
-        fn event_type(&self) -> &'static str {
-            match self {
-                TestEvent::Created { .. } => "TestCreated",
-                TestEvent::Updated { .. } => "TestUpdated",
-            }
-        }
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct Updated {
+        value: i32,
+    }
+    impl crate::event::EventSchema for Updated {
+        const EVENT_TYPE: &'static str = "TestUpdated";
+    }
 
-        fn event_version(&self) -> u32 {
-            1
+    crate::event_enum! {
+        #[derive(Debug, Clone)]
+        enum TestEvent {
+            Created(Created),
+            Updated(Updated),
         }
     }
 
@@ -260,6 +283,7 @@ mod tests {
     impl Aggregate for TestAggregate {
         type Event = TestEvent;
         type Error = Error;
+        const AGGREGATE_TYPE: &'static str = "Test";
 
         fn aggregate_id(&self) -> Option<&str> {
             self.id.as_deref()
@@ -271,10 +295,10 @@ mod tests {
 
         fn apply_event(&mut self, event: &Self::Event) -> Result<()> {
             match event {
-                TestEvent::Created { id } => {
+                TestEvent::Created(Created { id }) => {
                     self.id = Some(id.clone());
                 }
-                TestEvent::Updated { value } => {
+                TestEvent::Updated(Updated { value }) => {
                     self.value = *value;
                 }
             }
@@ -288,10 +312,10 @@ mod tests {
         let mut aggregate = TestAggregate::default();
 
         let events = vec![
-            TestEvent::Created {
+            TestEvent::Created(Created {
                 id: "test-1".to_string(),
-            },
-            TestEvent::Updated { value: 42 },
+            }),
+            TestEvent::Updated(Updated { value: 42 }),
         ];
 
         aggregate.apply_events(&events).unwrap();
@@ -308,10 +332,10 @@ mod tests {
         let mut instance = AggregateInstance::new("test-1".to_string(), aggregate);
 
         let events = vec![
-            TestEvent::Created {
+            TestEvent::Created(Created {
                 id: "test-1".to_string(),
-            },
-            TestEvent::Updated { value: 100 },
+            }),
+            TestEvent::Updated(Updated { value: 100 }),
         ];
 
         instance.add_events(events).unwrap();
@@ -333,7 +357,7 @@ mod tests {
         assert_eq!(instance.committed_version(), 2);
 
         instance
-            .add_events(vec![TestEvent::Updated { value: 7 }])
+            .add_events(vec![TestEvent::Updated(Updated { value: 7 })])
             .unwrap();
         assert_eq!(instance.committed_version(), 2);
         assert_eq!(instance.uncommitted_events[0].aggregate_nonce(), 3);
