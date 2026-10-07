@@ -8,7 +8,6 @@ adapter file. The public API (return types) is still fully typed — the "unknow
 types are confined to internal proto interactions.
 """
 
-import json
 import logging
 from collections.abc import AsyncIterator, Sequence
 
@@ -20,6 +19,14 @@ from event_sourcing.client.server_info import (
     assert_capabilities,
     assert_min_version,
 )
+from event_sourcing.core.envelope import (
+    CONTENT_TYPE_JSON,
+    InvalidPayloadPolicy,
+    decode_event,
+    encode_payload,
+    event_type_of,
+    event_version_of,
+)
 from event_sourcing.core.errors import (
     ConcurrencyConflictError,
     EventStoreError,
@@ -30,9 +37,8 @@ from event_sourcing.core.event import (
     DomainEvent,
     EventEnvelope,
     EventMetadata,
-    GenericDomainEvent,
 )
-from event_sourcing.decorators.events import resolve_event_type
+from event_sourcing.core.upcast import Upcasters
 from event_sourcing.proto.eventstore.v1 import eventstore_pb2, eventstore_pb2_grpc
 
 logger = logging.getLogger(__name__)
@@ -75,6 +81,9 @@ class GrpcEventStoreClient:
         address: str = "localhost:50051",
         tenant_id: str = "default",
         credentials: grpc.ChannelCredentials | None = None,
+        *,
+        upcasters: Upcasters | None = None,
+        on_invalid_payload: InvalidPayloadPolicy = "raise",
     ) -> None:
         """
         Initialize the gRPC client.
@@ -83,9 +92,17 @@ class GrpcEventStoreClient:
             address: The gRPC server address (host:port)
             tenant_id: The tenant ID for multi-tenancy support
             credentials: Optional gRPC credentials for TLS/auth
+            upcasters: Steps that migrate stored events to registered
+                versions before decoding (ADR-007, ADR-027).
+            on_invalid_payload: ``"raise"`` (default): a payload the
+                registered class rejects is an ``EventPayloadError``.
+                ``"generic"``: return it as a ``GenericDomainEvent`` instead
+                (the pre-ADR-027 behaviour; a migration aid).
         """
         self.address = address
         self.tenant_id = tenant_id
+        self.upcasters = upcasters
+        self.on_invalid_payload: InvalidPayloadPolicy = on_invalid_payload
         self._channel: grpc.Channel | None = None
         self._stub: eventstore_pb2_grpc.EventStoreStub | None = None
         self._credentials = credentials
@@ -334,27 +351,19 @@ class GrpcEventStoreClient:
     def _envelope_to_proto(
         self, envelope: EventEnvelope[DomainEvent], aggregate_id: str, aggregate_type: str
     ) -> eventstore_pb2.EventData:
-        """Convert an EventEnvelope to protobuf EventData."""
-        # Serialize event payload to JSON
-        payload_dict = envelope.event.model_dump(mode="json")
-        payload_bytes = json.dumps(payload_dict).encode("utf-8")
-
-        # Get event type from the event
-        event_type = (
-            envelope.event.event_type
-            if hasattr(envelope.event, "event_type")
-            else type(envelope.event).__name__
-        )
-
-        # Build metadata
+        """Convert an EventEnvelope to protobuf EventData (ADR-027 envelope)."""
+        try:
+            event_version = event_version_of(envelope.event)
+        except ValueError as e:
+            raise EventStoreError(str(e)) from e
         meta = eventstore_pb2.EventMetadata(
             event_id=envelope.metadata.event_id,
             aggregate_id=aggregate_id,
             aggregate_type=aggregate_type,
             aggregate_nonce=envelope.metadata.aggregate_nonce,
-            event_type=event_type,
-            event_version=1,  # Default schema version
-            content_type="application/json",
+            event_type=event_type_of(envelope.event),
+            event_version=event_version,
+            content_type=CONTENT_TYPE_JSON,
             tenant_id=self.tenant_id,
             correlation_id=envelope.metadata.correlation_id or "",
             causation_id=envelope.metadata.causation_id or "",
@@ -362,58 +371,44 @@ class GrpcEventStoreClient:
             timestamp_unix_ms=int(envelope.metadata.timestamp.timestamp() * 1000),
         )
 
-        return eventstore_pb2.EventData(meta=meta, payload=payload_bytes)
+        return eventstore_pb2.EventData(meta=meta, payload=encode_payload(envelope.event))
 
     def _proto_to_envelope(
         self, event_data: eventstore_pb2.EventData
     ) -> EventEnvelope[DomainEvent]:
-        """Convert protobuf EventData to an EventEnvelope."""
+        """Convert protobuf EventData to an EventEnvelope.
+
+        Decodes by ``(event_type, event_version)`` after upcasting (ADR-027).
+        Raises an ``EventDecodeError`` subclass (an ``UndecodableEventError``)
+        rather than handing the event to code written for another version.
+        """
         meta = event_data.meta
-
-        # Deserialize payload from JSON
-        payload_dict = json.loads(event_data.payload.decode("utf-8"))
-
-        # Create metadata — event_type lives here, not in the payload.
-        # Injecting it into the payload caused ValidationError when downstream
-        # code called model_validate() on concrete DomainEvent subclasses
-        # (which use extra="forbid").
+        decoded = decode_event(
+            meta.event_type,
+            meta.event_version,
+            bytes(event_data.payload),
+            content_type=meta.content_type,
+            upcasters=self.upcasters,
+            global_nonce=meta.global_nonce,
+            on_invalid_payload=self.on_invalid_payload,
+        )
         metadata = EventMetadata(
             event_id=meta.event_id,
             aggregate_id=meta.aggregate_id,
             aggregate_type=meta.aggregate_type,
             aggregate_nonce=meta.aggregate_nonce,
+            tenant_id=meta.tenant_id or None,
+            content_type=meta.content_type or CONTENT_TYPE_JSON,
             correlation_id=meta.correlation_id if meta.correlation_id else None,
             causation_id=meta.causation_id if meta.causation_id else None,
             actor_id=meta.actor_id if meta.actor_id else None,
             global_nonce=meta.global_nonce if meta.global_nonce > 0 else None,
-            event_type=meta.event_type if meta.event_type else None,
+            event_type=decoded.event_type or None,
+            event_version=decoded.event_version,
+            stored_event_type=decoded.stored_event_type or None,
+            stored_event_version=decoded.stored_event_version,
         )
-
-        # ADR-023: Consult the event type registry to resolve concrete types.
-        # If the event type was registered via @event decorator, deserialize
-        # into the concrete class. Otherwise fall back to GenericDomainEvent
-        # with event_type preserved as an instance attribute so aggregate
-        # rehydration can still route to the correct handler.
-        event_type_str = meta.event_type if meta.event_type else ""
-        concrete_cls = resolve_event_type(event_type_str) if event_type_str else None
-
-        # Build GenericDomainEvent, removing any existing event_type key from the
-        # payload to avoid a duplicate-kwarg TypeError (older producers may include it).
-        cleaned = {k: v for k, v in payload_dict.items() if k != "event_type"}
-
-        if concrete_cls is not None:
-            try:
-                event: DomainEvent = concrete_cls.model_validate(cleaned)
-            except Exception:
-                logger.debug(
-                    "Failed to deserialize as %s, falling back to GenericDomainEvent",
-                    concrete_cls.__name__,
-                    exc_info=True,
-                )
-                event = GenericDomainEvent(**cleaned, event_type=event_type_str) if event_type_str else GenericDomainEvent(**cleaned)
-        else:
-            event = GenericDomainEvent(**cleaned, event_type=event_type_str) if event_type_str else GenericDomainEvent(**cleaned)
-
+        event = decoded.event
         return EventEnvelope(event=event, metadata=metadata)
 
     async def read_all(

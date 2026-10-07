@@ -108,7 +108,14 @@ class EventMetadata(BaseModel):
     causation_id: str | None = None
     actor_id: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
-    event_type: str | None = None  # From proto EventMeta.event_type — used for projection dispatch
+    # Set on read (ADR-027). event_type/event_version: what `event` was decoded
+    # as, after upcasting (projections dispatch on event_type). stored_*: as
+    # written in the store (event_version 0 read as 1). All equal unless an
+    # upcaster ran.
+    event_type: str | None = None
+    event_version: int | None = None
+    stored_event_type: str | None = None
+    stored_event_version: int | None = None
     payload_hash: str | None = None
     custom_metadata: dict[str, str] = Field(default_factory=dict)
 

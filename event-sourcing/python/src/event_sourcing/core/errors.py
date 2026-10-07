@@ -158,3 +158,63 @@ class SerializationError(EventSourcingError):
         self.operation = operation
         self.data_type = data_type
         self.original_error = original_error
+
+
+class EventDecodeError(UndecodableEventError):
+    """A stored event cannot be decoded by this reader (ADR-027).
+
+    Raised on read (``read_events``, ``read_all``, ``subscribe``) instead of
+    handing the event to code written for another schema. It is an
+    ``UndecodableEventError``: retrying does not help, so a
+    ``SubscriptionCoordinator`` halts at ``global_nonce`` rather than retrying
+    or moving a checkpoint past the event. Fix it in code (register the event
+    class or an upcaster), then restart.
+
+    ``event_type`` and ``event_version`` are as stored (version 0 read as 1),
+    or as produced by the upcaster chain when a later stage failed.
+    """
+
+    def __init__(
+        self,
+        event_type: str,
+        event_version: int,
+        reason: str,
+        global_nonce: int = 0,
+        original_error: Exception | None = None,
+    ) -> None:
+        super().__init__(
+            global_nonce,
+            f"Cannot decode event '{event_type}' v{event_version}: {reason}",
+            original_error,
+        )
+        self.event_type = event_type
+        self.event_version = event_version
+        self.reason = reason
+        self.details["event_type"] = event_type
+        self.details["event_version"] = event_version
+
+
+class UnknownEventTypeError(EventDecodeError):
+    """No event class is registered for ``event_type`` (strict decode only).
+
+    The gRPC client does not raise this: it returns an unregistered type as a
+    ``GenericDomainEvent`` (ADR-023) so projections can filter by type.
+    """
+
+
+class UnknownEventVersionError(EventDecodeError):
+    """``event_type`` is registered, but not at this version, and no upcaster
+    maps the stored version to a registered one."""
+
+
+class EventPayloadError(EventDecodeError):
+    """The payload is not a JSON object (or not JSON), or the class registered
+    for its ``(event_type, event_version)`` rejects it."""
+
+
+class UnsupportedContentTypeError(EventDecodeError):
+    """The stored ``content_type`` is neither empty nor ``application/json``."""
+
+
+class UpcastError(EventDecodeError):
+    """An upcaster step raised or did not return a dict, or the chain cycled."""
