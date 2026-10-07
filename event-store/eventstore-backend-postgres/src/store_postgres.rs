@@ -6,10 +6,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use eventstore_core::fingerprint::canonical_metadata_bytes;
+use eventstore_core::fingerprint::{batch_fingerprint, fingerprint_matches};
 use eventstore_core::{proto, EventStore as EventStoreTrait, StoreError, StoreStream};
 use futures::stream;
-use sha2::{Digest, Sha256};
 use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgConnectOptions, PgListener, PgPoolOptions};
 use sqlx::{types::Json, Connection, PgConnection, PgPool, Postgres, Row};
@@ -70,18 +69,89 @@ fn now_unix_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn batch_fingerprint(events: &[proto::EventData]) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    for ev in events {
-        if let Some(meta) = &ev.meta {
-            // Server-assigned fields zeroed, headers in key order: an identical
-            // retry must hash identically. Byte-compatible with fingerprints
-            // stored before the headers fix for requests with <= 1 header.
-            hasher.update(canonical_metadata_bytes(meta));
-            hasher.update(&ev.payload);
-        }
+/// Look up an append's idempotency key (ADR-028). `Ok(Some(ack))`: the key
+/// was committed for this exact batch, return its original ack.
+/// `Err(AlreadyExists)`: the key was committed for a different batch.
+/// `Ok(None)`: no key, or the key is unused. Each call is a new statement, so under READ
+/// COMMITTED it sees every append committed before it started. A plain read
+/// (no row lock): a committed idempotency row is never rewritten, because a
+/// second append with the same key finds it under the append-order lock and
+/// stops (see `append`), so this never waits on another transaction.
+async fn idempotent_replay(
+    conn: &mut sqlx::PgConnection,
+    key: Option<&str>,
+    tenant_id: &str,
+    aggregate_id: &str,
+    fingerprint: &[u8],
+    events: &[proto::EventData],
+) -> Result<Option<proto::AppendResponse>, StoreError> {
+    let Some(key) = key else {
+        return Ok(None);
+    };
+    let row = sqlx::query(
+        "SELECT request_fingerprint, last_committed_nonce, last_global_nonce \
+         FROM idempotency WHERE tenant_id = $1 AND aggregate_id = $2 AND idempotency_key = $3",
+    )
+    .bind(tenant_id)
+    .bind(aggregate_id)
+    .bind(key)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(map_db_error)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let stored_fingerprint: Vec<u8> = row.get("request_fingerprint");
+    // Rows written before fingerprint v2 hold the legacy format and are
+    // compared with it (ADR-028, Compatibility).
+    if !fingerprint_matches(&stored_fingerprint, fingerprint, events) {
+        return Err(StoreError::AlreadyExists(format!(
+            "idempotency key '{key}' already used with different payload"
+        )));
     }
-    hasher.finalize().to_vec()
+    Ok(Some(proto::AppendResponse {
+        last_global_nonce: row.get::<i64, _>("last_global_nonce") as u64,
+        last_aggregate_nonce: row.get::<i64, _>("last_committed_nonce") as u64,
+    }))
+}
+
+/// Roll back `tx` and return `result` (the append's early outcome).
+async fn rollback_with<T>(
+    tx: sqlx::Transaction<'_, sqlx::Postgres>,
+    result: Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    tx.rollback()
+        .await
+        .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
+    result
+}
+
+/// Current head of a stream: (last aggregate nonce, its global nonce).
+async fn stream_head(
+    conn: &mut sqlx::PgConnection,
+    tenant_id: &str,
+    aggregate_id: &str,
+    for_update: bool,
+) -> Result<(u64, u64), StoreError> {
+    let sql = if for_update {
+        "SELECT last_nonce, last_global_nonce FROM aggregates WHERE tenant_id = $1 AND aggregate_id = $2 FOR UPDATE"
+    } else {
+        "SELECT last_nonce, last_global_nonce FROM aggregates WHERE tenant_id = $1 AND aggregate_id = $2"
+    };
+    let row = sqlx::query(sql)
+        .bind(tenant_id)
+        .bind(aggregate_id)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(map_db_error)?;
+    Ok(row
+        .map(|r| {
+            (
+                r.get::<i64, _>("last_nonce") as u64,
+                r.get::<i64, _>("last_global_nonce") as u64,
+            )
+        })
+        .unwrap_or((0, 0)))
 }
 
 fn normalize_event(
@@ -398,56 +468,36 @@ impl PostgresStore {
         let aggregate_type = req.aggregate_type.clone();
         let mut tx = conn.begin().await.map_err(map_db_error)?;
 
-        if !req.idempotency_key.is_empty() {
-            let row = sqlx::query(
-                "SELECT request_fingerprint, first_committed_nonce, last_committed_nonce, last_global_nonce \
-                 FROM idempotency WHERE tenant_id = $1 AND aggregate_id = $2 AND idempotency_key = $3 FOR UPDATE",
-            )
-            .bind(&tenant_id)
-            .bind(&aggregate_id)
-            .bind(&req.idempotency_key)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(map_db_error)?;
+        // Precedence (ADR-028): the idempotency key decides first, then the
+        // concurrency precondition. A retry after a lost ack therefore gets
+        // its original ack even if other writers advanced the stream since.
+        let key = (!req.idempotency_key.is_empty()).then_some(req.idempotency_key.as_str());
+        let conflict = |actual_nonce: u64, actual_global: u64| StoreError::Concurrency {
+            message: "append precondition failed".into(),
+            detail: Some(proto::ConcurrencyErrorDetail {
+                tenant_id: tenant_id.clone(),
+                aggregate_id: aggregate_id.clone(),
+                actual_last_aggregate_nonce: actual_nonce,
+                actual_last_global_nonce: actual_global,
+            }),
+        };
 
-            if let Some(row) = row {
-                let stored_fingerprint: Vec<u8> = row.get("request_fingerprint");
-                if stored_fingerprint == fingerprint {
-                    tx.rollback()
-                        .await
-                        .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
-                    return Ok(proto::AppendResponse {
-                        last_global_nonce: row.get::<i64, _>("last_global_nonce") as u64,
-                        last_aggregate_nonce: row.get::<i64, _>("last_committed_nonce") as u64,
-                    });
-                }
-                tx.rollback()
-                    .await
-                    .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
-                return Err(StoreError::AlreadyExists(format!(
-                    "idempotency key '{}' already used with different payload",
-                    req.idempotency_key
-                )));
-            }
+        match idempotent_replay(
+            &mut tx,
+            key,
+            &tenant_id,
+            &aggregate_id,
+            &fingerprint,
+            &events,
+        )
+        .await
+        {
+            Ok(None) => {}
+            done => return rollback_with(tx, done.map(Option::unwrap_or_default)).await,
         }
 
-        let row = sqlx::query(
-            "SELECT last_nonce, last_global_nonce FROM aggregates WHERE tenant_id = $1 AND aggregate_id = $2 FOR UPDATE",
-        )
-        .bind(&tenant_id)
-        .bind(&aggregate_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(map_db_error)?;
-
-        let current_last_nonce: u64 = row
-            .as_ref()
-            .map(|r| r.get::<i64, _>("last_nonce") as u64)
-            .unwrap_or(0);
-        let current_last_global: u64 = row
-            .as_ref()
-            .map(|r| r.get::<i64, _>("last_global_nonce") as u64)
-            .unwrap_or(0);
+        let (current_last_nonce, current_last_global) =
+            stream_head(&mut tx, &tenant_id, &aggregate_id, true).await?;
 
         let expected_head = req.expected_aggregate_nonce;
         let expected_ok = if expected_head == 0 {
@@ -456,18 +506,23 @@ impl PostgresStore {
             current_last_nonce == expected_head
         };
         if !expected_ok {
-            tx.rollback()
-                .await
-                .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
-            return Err(StoreError::Concurrency {
-                message: "append precondition failed".into(),
-                detail: Some(proto::ConcurrencyErrorDetail {
-                    tenant_id,
-                    aggregate_id,
-                    actual_last_aggregate_nonce: current_last_nonce,
-                    actual_last_global_nonce: current_last_global,
-                }),
-            });
+            // An identical request with the same key may have committed
+            // while this one waited for the row lock above (an in-flight
+            // retry): it is this request's outcome, not a conflict.
+            match idempotent_replay(
+                &mut tx,
+                key,
+                &tenant_id,
+                &aggregate_id,
+                &fingerprint,
+                &events,
+            )
+            .await
+            {
+                Ok(None) => {}
+                done => return rollback_with(tx, done.map(Option::unwrap_or_default)).await,
+            }
+            return rollback_with(tx, Err(conflict(current_last_nonce, current_last_global))).await;
         }
 
         for (idx, ev) in events.iter().enumerate() {
@@ -510,8 +565,8 @@ impl PostgresStore {
         // Deadlocks: taken after the FOR UPDATE row locks above. While holding
         // it, an append only writes rows of its own aggregate and idempotency
         // key, which another waiter can hold only if this append already lost
-        // the optimistic check (it then fails on the committed row, it does
-        // not wait). Postgres' deadlock detector covers advisory locks too.
+        // the optimistic check (the re-check below then stops it; it does not
+        // wait). Postgres' deadlock detector covers advisory locks too.
         // Cost: one tenant's INSERT..COMMIT windows are serialized.
         sqlx::query("SELECT pg_advisory_xact_lock($1, hashtext($2))")
             .bind(APPEND_ORDER_LOCK_NAMESPACE)
@@ -520,11 +575,37 @@ impl PostgresStore {
             .await
             .map_err(map_db_error)?;
 
+        // Re-check under the lock (#363). For a stream that did not exist,
+        // the FOR UPDATE above locked nothing, so a competing append for the
+        // same new stream may have committed while this one waited. Every
+        // append that writes takes this lock first, so after acquiring it a
+        // new statement sees any such commit. Without the re-check the loser
+        // hit the nonce trigger and got INTERNAL (and an in-flight identical
+        // retry did not get its ack). Plain reads: they never wait.
+        match idempotent_replay(
+            &mut tx,
+            key,
+            &tenant_id,
+            &aggregate_id,
+            &fingerprint,
+            &events,
+        )
+        .await
+        {
+            Ok(None) => {}
+            done => return rollback_with(tx, done.map(Option::unwrap_or_default)).await,
+        }
+        let (head_nonce, head_global) =
+            stream_head(&mut tx, &tenant_id, &aggregate_id, false).await?;
+        if head_nonce != current_last_nonce {
+            return rollback_with(tx, Err(conflict(head_nonce, head_global))).await;
+        }
+
         // Everything written while the lock is held goes in ONE statement
         // (#370): all events, the stream head, the idempotency record and the
-        // NOTIFY. The lock is held for three round trips (lock, write,
-        // COMMIT) whatever the batch size, instead of one per event plus
-        // three. Same transaction, same rows, same constraints and triggers
+        // NOTIFY. The lock is held for the lock, the #363 re-checks (one or
+        // two plain reads), this write and COMMIT, whatever the batch size,
+        // instead of one round trip per event plus three. Same transaction, same rows, same constraints and triggers
         // (the per-row nonce-contiguity trigger sees earlier rows of the
         // statement because rows are inserted in `ord` order).
         let recorded_ms = now_unix_ms() as i64;
