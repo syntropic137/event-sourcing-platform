@@ -2,12 +2,18 @@
  * Thin gRPC adapter that maps Event Sourcing envelopes to the Event Store TS SDK.
  */
 
-import { EventSerializer, type EventEnvelope } from '../core/event';
+import {
+  EventSerializer,
+  encodeEventPayload,
+  eventVersionOf,
+  type EventEnvelope,
+} from '../core/event';
 import type {
   EventStoreClient as RepoEventStoreClient,
   ReadAllResult,
 } from '../client/event-store-client';
-import { EventStoreError } from '../core/errors';
+import { EventDecodeError, EventPayloadError, EventStoreError } from '../core/errors';
+import type { Upcasters } from '../core/upcast';
 import type { JsonObject, JsonValue } from '../types/common';
 
 type EventStoreSdkModule = typeof import('@eventstore/sdk-ts');
@@ -49,6 +55,8 @@ export interface GrpcEventStoreConfig {
   serverAddress: string;
   /** Tenant identifier for multi-tenant stores */
   tenantId: string;
+  /** Steps that migrate stored events to registered versions before decoding (ADR-027) */
+  upcasters?: Upcasters;
 }
 
 /**
@@ -58,10 +66,12 @@ export interface GrpcEventStoreConfig {
 export class GrpcEventStoreAdapter implements RepoEventStoreClient {
   private readonly clientPromise: Promise<EventStoreClient>;
   private readonly tenantId: string;
+  private readonly upcasters?: Upcasters;
 
   constructor(cfg: GrpcEventStoreConfig) {
     this.clientPromise = loadEventStoreClient().then((Ctor) => new Ctor(cfg.serverAddress));
     this.tenantId = cfg.tenantId;
+    this.upcasters = cfg.upcasters;
   }
 
   async readEvents(streamName: string, fromVersion = 1): Promise<EventEnvelope[]> {
@@ -83,8 +93,7 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
         });
 
         for (const e of resp.events) {
-          const envelope = transformGrpcEvent(e, aggregateType);
-          if (envelope) all.push(envelope);
+          all.push(decodeGrpcEvent(e, aggregateType, this.upcasters));
         }
 
         if (resp.isEnd) break;
@@ -92,6 +101,8 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
       }
       return all;
     } catch (err) {
+      // Typed and actionable: never wrapped, never skipped (ADR-027).
+      if (err instanceof EventDecodeError) throw err;
       throw new EventStoreError(
         `readEvents failed for ${aggregateType}:${aggregateId}`,
         err as Error
@@ -120,7 +131,7 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
           meta: {
             aggregateNonce: Number(env.metadata.aggregateNonce),
             eventType: env.event.eventType,
-            eventVersion: (env.event as { schemaVersion?: number }).schemaVersion ?? 0,
+            eventVersion: eventVersionOf(env.event),
             eventId: env.metadata.eventId,
             contentType: env.metadata.contentType,
             correlationId: env.metadata.correlationId,
@@ -134,7 +145,8 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
                 : undefined,
             headers: env.metadata.headers,
           },
-          payload: Buffer.from(JSON.stringify(env.event.toJson())),
+          // ADR-027: the event's own fields only.
+          payload: Buffer.from(JSON.stringify(encodeEventPayload(env.event))),
         })),
       });
     } catch (err) {
@@ -190,8 +202,7 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
 
       const events: EventEnvelope[] = [];
       for (const e of resp.events) {
-        const envelope = transformGrpcEvent(e, '');
-        if (envelope) events.push(envelope);
+        events.push(decodeGrpcEvent(e, '', this.upcasters));
       }
 
       return {
@@ -200,18 +211,28 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
         nextFromGlobalNonce: resp.nextFromGlobalNonce,
       };
     } catch (err) {
+      if (err instanceof EventDecodeError) throw err;
       throw new EventStoreError('readAll failed', err as Error);
     }
   }
 }
 
-function transformGrpcEvent(
+/**
+ * Decode one stored gRPC event (ADR-027): by `(eventType, eventVersion)`
+ * after upcasting. Throws an `EventDecodeError` subclass; never returns
+ * nothing. Exported for tests.
+ */
+export function decodeGrpcEvent(
   e: { meta?: unknown; payload: Uint8Array },
-  fallbackAggregateType: string
-): EventEnvelope | null {
-  if (!e.meta) return null;
+  fallbackAggregateType: string,
+  upcasters?: Upcasters
+): EventEnvelope {
+  if (!e.meta) {
+    throw new EventDecodeError('', 1, 'stored event has no metadata');
+  }
   const meta = e.meta as ReadStreamMetadata;
-  const payloadJson = safeJsonParse(e.payload);
+  const globalNonce = Number(meta.globalNonce ?? 0);
+  const payloadJson = parsePayload(e.payload, meta, globalNonce);
 
   const recordedUnixMs = Number(meta.recordedTimeUnixMs ?? meta.timestampUnixMs ?? Date.now());
   const timestampUnixMs = Number(meta.timestampUnixMs ?? recordedUnixMs);
@@ -237,18 +258,30 @@ function transformGrpcEvent(
     metadataJson.payloadHash = bytesToHex(meta.payloadSha256);
   }
 
-  return EventSerializer.deserialize({
-    event: { eventType: meta.eventType, schemaVersion: meta.eventVersion ?? 0, data: payloadJson },
-    metadata: metadataJson,
-  });
+  return EventSerializer.deserialize(
+    {
+      event: {
+        eventType: meta.eventType,
+        schemaVersion: Number(meta.eventVersion ?? 0),
+        data: payloadJson,
+      },
+      metadata: metadataJson,
+    },
+    { upcasters, globalNonce }
+  );
 }
 
-function safeJsonParse(buf: Uint8Array): JsonValue {
+function parsePayload(buf: Uint8Array, meta: ReadStreamMetadata, globalNonce: number): JsonValue {
   try {
-    return JSON.parse(Buffer.from(buf).toString('utf8')) as JsonValue;
-  } catch {
-    // Fall back to an empty object which is a valid JsonValue (JsonObject)
-    return {};
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(buf)) as JsonValue;
+  } catch (err) {
+    throw new EventPayloadError(
+      meta.eventType ?? '',
+      Number(meta.eventVersion ?? 0) || 1,
+      `payload is not JSON: ${(err as Error).message}`,
+      globalNonce,
+      err as Error
+    );
   }
 }
 

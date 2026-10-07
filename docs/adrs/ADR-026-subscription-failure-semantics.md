@@ -127,6 +127,32 @@ Now the same "stop, never skip" rule applies:
 
 `UNAVAILABLE` and other errors are still retried with exponential backoff.
 
+### Rust `ProjectionRunner::run_supervised` on `DATA_LOSS` (#372)
+
+Same semantics as the Python coordinator, for one runner:
+
+- The client maps `DATA_LOSS` with the `esp-undecodable-global-nonce`
+  trailer to `Error::DataLoss { global_nonce }`. It is never retried with
+  the transient backoff and never skipped.
+- Catch-up applies every valid event before the position (a failing
+  `read_all` page is re-read one event at a time up to it), so the
+  checkpoint ends at the event just below `N` and an operator skip skips
+  only `N`. The head probe maps `DATA_LOSS` on the head event to its
+  position, as in Python.
+- It logs one `ERROR` per position, sets `RunnerHealth::halted_at` and
+  state `Halted`, and holds the `LiveProcessor`: an in-flight pass is
+  cancelled, as in Python, and no pass runs while halted; it is woken when
+  the halt clears.
+- Default: `run_supervised` returns `Error::DataLoss`. With
+  `with_undecodable_recheck(interval)` it stays halted and re-checks at
+  that fixed pace. The halt clears once the loaded checkpoint is at or past
+  `N`, or the store delivers an event at or past `N`.
+
+Other transient failures (`UNAVAILABLE`, `RESOURCE_EXHAUSTED`, transport,
+Postgres projection-store connection loss) reconnect from the checkpoint
+with jittered exponential backoff; everything else stops with a typed
+error.
+
 ## Consumer contract (at-least-once)
 
 - `from_global_nonce` is **inclusive**. Events arrive in `global_nonce` order.
@@ -149,6 +175,7 @@ Now the same "stop, never skip" rule applies:
 |--------|-----------------------|
 | gRPC server (`eventstore-bin`) | Logs the error, maps it with `StoreError::to_status()`, ends the response stream with that status. |
 | Rust SDK (`sdk-rs`) | `tonic::Streaming` yields `Err(Status)` with `Code::Unavailable`, or `Code::DataLoss` for an undecodable event (position in trailing metadata `esp-undecodable-global-nonce`). |
+| Rust event sourcing SDK (`event-sourcing-rust`) | `Error::EventStore(Status)` for `UNAVAILABLE`; `Error::DataLoss { global_nonce }` for `DATA_LOSS` with a position. `ProjectionRunner::run_supervised` retries the former with backoff and halts on the latter (see above). |
 | TypeScript SDK (`sdk-ts`) | The async iterator rejects with the gRPC error (`code` 14 `UNAVAILABLE`, or 15 `DATA_LOSS`). Messages and a terminal error/end that arrive while the consumer is busy are buffered and delivered on later `next()` calls (`streamToAsyncIterator`), so a failure is never lost between reads. |
 | Python (`event_sourcing` `GrpcEventStoreClient.subscribe`) | Raises `EventStoreError`; for `DATA_LOSS` with a position, the subclass `UndecodableEventError` (`.global_nonce`). `SubscriptionCoordinator` retries `UNAVAILABLE` with exponential backoff and resumes each projection from its saved checkpoint; on `UndecodableEventError` it halts with `SubscriptionHaltedError` instead (see above). |
 

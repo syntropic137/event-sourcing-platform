@@ -29,8 +29,8 @@ from event_sourcing.decorators.events import event
 from event_sourcing.proto.eventstore.v1 import eventstore_pb2
 
 
-# Fixture domain (mirrors tests/xlang_golden.rs). All v1: the Python client
-# currently writes event_version=1 for every event (see ADR-027).
+# Fixture domain (mirrors tests/common/xlang.rs). Strict models
+# (extra="forbid"): reading proves a payload holds exactly the schema's fields.
 @event("AccountOpened", "v1")
 class AccountOpened(DomainEvent):
     event_type: ClassVar[str] = "AccountOpened"
@@ -45,6 +45,14 @@ class MoneyDeposited(DomainEvent):
     note: str
 
 
+@event("AccountClosed", "v2")
+class AccountClosed(DomainEvent):
+    event_type: ClassVar[str] = "AccountClosed"
+    schema_version: ClassVar[int] = 2
+    reason: str
+    tags: list[str]
+
+
 class Account(AggregateRoot[DomainEvent]):
     def get_aggregate_type(self) -> str:
         return "Account"
@@ -56,6 +64,7 @@ class Account(AggregateRoot[DomainEvent]):
         self._initialize(aggregate_id)
         self._raise_event(AccountOpened(account_id=aggregate_id, owner="alice"))
         self._raise_event(MoneyDeposited(amount=125, note='café ☕ "quoted"'))
+        self._raise_event(AccountClosed(reason="done", tags=["a", "b"]))
 
 
 def freeze() -> None:
@@ -79,8 +88,8 @@ class CaptureStub:
         self.request = request
 
         class Resp:
-            last_global_nonce = 2
-            last_aggregate_nonce = 2
+            last_global_nonce = 3
+            last_aggregate_nonce = 3
 
         return Resp()
 
@@ -119,8 +128,7 @@ async def read(addr: str, tenant: str, aggregate_id: str) -> None:
     client = GrpcEventStoreClient(address=addr, tenant_id=tenant)
     await client.connect()
     envelopes = await client.read_events(f"Account-{aggregate_id}")
-    # EventMetadata has no event_version (ADR-027 known deviation): read the
-    # wire metadata directly as well.
+    # The wire metadata too, so the test can check what the SDK reports.
     raw = await client._stub.ReadStream(  # type: ignore[union-attr]
         eventstore_pb2.ReadStreamRequest(
             tenant_id=tenant,
@@ -133,14 +141,19 @@ async def read(addr: str, tenant: str, aggregate_id: str) -> None:
     await client.disconnect()
     out = []
     for env, data in zip(envelopes, raw.events, strict=True):
+        m = env.metadata
         out.append(
             {
-                "event_type": env.metadata.event_type,
+                "event_type": m.event_type,
+                "event_version": m.event_version,
+                "stored_event_type": m.stored_event_type,
+                "stored_event_version": m.stored_event_version,
                 "wire_event_type": data.meta.event_type,
                 "wire_event_version": data.meta.event_version,
                 "class": type(env.event).__name__,
-                "aggregate_type": env.metadata.aggregate_type,
-                "aggregate_nonce": env.metadata.aggregate_nonce,
+                "aggregate_type": m.aggregate_type,
+                "aggregate_nonce": m.aggregate_nonce,
+                "content_type": m.content_type,
                 "data": env.event.model_dump(mode="json"),
             }
         )

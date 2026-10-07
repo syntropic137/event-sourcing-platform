@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 
+#### Cross-language event envelope (ADR-027, #382)
+
+- **Payload holds only event fields.** `BaseDomainEvent.toJson()` and the gRPC
+  adapter no longer write `eventType`/`schemaVersion` into the payload; they
+  are envelope metadata. Code that read them from `toJson()` must use
+  `event.eventType`/`event.schemaVersion`.
+- **Decoding is by `(eventType, schemaVersion)`.** The `EventSerializer`
+  registry keeps every registered version (`@Event` registers the class's
+  `schemaVersion`). A stored event of a registered type at a version with no
+  class, after upcasting, throws `UnknownEventVersionError` instead of being
+  assigned onto the class of another version.
+- **Read errors are typed and never skipped.** A payload that is not JSON or
+  not a JSON object throws `EventPayloadError` (it was silently read as `{}`);
+  a stored event without metadata throws (it was dropped); a non-JSON content
+  type throws `UnsupportedContentTypeError`. All extend `EventDecodeError` and
+  are rethrown by `readEvents`/`readAll` unwrapped.
+- An event without `schemaVersion` is written as `event_version = 1` (was 0).
+
+Migration: none for stored data. Payloads written by 0.17 and earlier still
+decode: readers drop their `eventType`/`schemaVersion` keys. If a class's
+`schemaVersion` was bumped without keeping the old class, register the old
+class or an upcaster.
+
+#### Added
+
+- `Upcasters` (`register(type, from, to, fn)`, `rename(fromType, from, toType, to, fn)`),
+  same semantics as the Rust SDK; `upcasters` option on `GrpcEventStoreAdapter`
+  and `EventStoreClientFactory.createGrpcClient`; `EventSerializer.deserialize(json, options)`.
+- `decodeEvent`, `EventSerializer.resolveEventClass(type, version)`,
+  `registeredVersions(type)`, `registerEvent(type, class, version?)`.
+- `EventMetadata.storedEventType`/`storedEventVersion` (as stored; set on read).
+- Golden fixture tests decoding the TypeScript, Python, Rust and legacy
+  TypeScript encodings (`tests/xlang-golden.test.ts`).
+
 #### Removed AutoDispatchAggregate Class
 
 **What Changed:**

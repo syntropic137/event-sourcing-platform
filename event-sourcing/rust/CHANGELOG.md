@@ -23,12 +23,26 @@ The SDK is alpha: breaking changes may land in minor versions and are listed und
 - `upcast::Upcasters` (`register`, `rename`, `upcast(event_type, version, Value)`), applied by `EventStoreRepository::with_upcasters` on load and `ProjectionRunner::with_upcasters` before routing (#371).
 - `RecordedEvent::decode::<E: DomainEvent>()` (dispatching), `decode_with(&Upcasters)`, `payload_json::<T>()` (raw) (#371).
 - Typed decode errors: `Error::UnknownEventType`, `UnknownEventVersion`, `EventDecode`, `UnsupportedContentType`, `Upcast`, `InvalidEvent` (#371).
+- Supervised projection runner (#372): `ProjectionRunner::run_supervised(cancel, BackoffPolicy)` reconnects from the checkpoint on transient failures (`UNAVAILABLE`, `RESOURCE_EXHAUSTED`, transport, Postgres projection-store connection loss, also inside a handler's store transaction) with jittered exponential backoff and a cap (`BackoffPolicy`: initial, max, multiplier, jitter, `with_max_retries`); cancellation is prompt during backoff. Non-retryable errors stop with their typed error.
+- `Error::DataLoss { global_nonce, message }` for gRPC `DATA_LOSS` carrying the `esp-undecodable-global-nonce` trailer (ADR-026). Runners never retry or skip it: catch-up applies every event before it, the checkpoint stays just below it, the runner halts (`RunnerHealth::halted_at`, one `ERROR` log per position, live processor held). Opt-in `with_undecodable_recheck(interval)` stays halted and resumes on its own after an operator fix, like the Python coordinator (#380). An undecodable head event is used as the live boundary.
+- `ProjectionRunner::health()` (`RunnerHealth`: `state`, `position`, `live_boundary`, `lag()`, `halted_at`, `last_error`, `consecutive_failures`, `restarts`, `is_healthy()`).
+- Capability guard: `run`, `catch_up` and supervised reconnects require `REQUIRED_CAPABILITIES` (`commit_ordered_global_nonce`, `subscription_errors_surfaced`, `undecodable_events_surfaced`); `with_required_capabilities`, `without_capability_check`. `EventStorePort::server_info` (default: legacy, so non-forwarding ports fail closed). A feed prefix containing `\` also requires `literal_subscription_prefix`.
+- `LiveProcessor` panics (including while creating the pass future) and unexpected processor task exits are caught: the runner stops with `Error::LiveProcessorPanicked` (default) or retries the pass with `on_processor_panic(ProcessorPanicPolicy::Restart)`. A failure racing with shutdown is still reported. When the runner fails or halts, an in-flight pass is cancelled instead of awaited; on cancellation it gets `with_processor_shutdown_grace` (default 10 s) before it is cancelled.
+- `Error::CheckpointFenced { projection, stored, position }` for fenced checkpoint commits; `Error::data_loss_position()`.
+- Example `supervised_projection` (projection service with supervision, live processor and health).
+
+- Cross-language tests cover all six directions between TypeScript, Python and Rust (#382): `tests/fixtures/xlang/rust.json` (Rust encoder, checked by `rust_fixture_is_current`) and the frozen `typescript-legacy.json` (TS SDK 0.17 payloads) join the TS and Python fixtures, which were regenerated because those encoders now write ADR-027 exactly (no `eventType`/`schemaVersion` in TS payloads; Python writes its v2 event). No Rust encoder output changed.
 
 ### Fixed
 
 - `EventStoreClient::connect("https://...")` no longer becomes `http://https://...`; it now connects over TLS (#373).
 
 ### Breaking
+
+- **Capability guard (#372).** `ProjectionRunner::run` and `catch_up` now refuse an event store that does not advertise `REQUIRED_CAPABILITIES` (`Error::Incompatible`). Custom `EventStorePort` implementations must forward `server_info` (the default reports a legacy server), or the runner must opt out with `without_capability_check()`.
+- Fenced checkpoint commits are `Error::CheckpointFenced` instead of `Error::Repository` (#372).
+- `DATA_LOSS` statuses with a position are `Error::DataLoss` instead of `Error::EventStore` (#372).
+- A panicking `LiveProcessor` pass now stops the runner (`Error::LiveProcessorPanicked`) instead of silently ending the processor task (#372).
 
 - Default request timeout of 30s on unary calls and on opening a subscription (open subscriptions have no deadline); pass `request_timeout(None)` to disable (#373).
 - **Wire format (#371).** The payload is the event's flat JSON body instead of the serde enum (`{"amount":5}`, not `{"Deposited":{"amount":5}}`). Streams written by earlier pre-release builds of this crate are not readable; there was no release with the old format.

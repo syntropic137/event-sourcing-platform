@@ -19,3 +19,6 @@ export * from './query';
 
 // Error exports
 export * from './errors';
+
+// Upcaster exports (ADR-007, ADR-027)
+export * from './upcast';

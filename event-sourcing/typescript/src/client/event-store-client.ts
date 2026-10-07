@@ -4,6 +4,7 @@
 
 import { EventEnvelope } from '../core/event';
 import { BaseConfig } from '../types/common';
+import type { Upcasters } from '../core/upcast';
 import { GrpcEventStoreAdapter } from '../integrations/grpc-event-store';
 import { MemoryEventStoreClient } from './event-store-memory';
 
@@ -17,6 +18,9 @@ export interface EventStoreClientConfig extends BaseConfig {
 
   /** Connection timeout in milliseconds */
   timeoutMs?: number;
+
+  /** Steps that migrate stored events to registered versions before decoding (ADR-027) */
+  upcasters?: Upcasters;
 }
 
 /** Result from readAll operation */
@@ -72,6 +76,7 @@ export class EventStoreClientFactory {
     const adapter = new GrpcEventStoreAdapter({
       serverAddress: config.serverAddress,
       tenantId: config.tenantId ?? 'default',
+      upcasters: config.upcasters,
     });
     // Provide a simple wrapper with connect/disconnect no-ops to match interface
     return {
