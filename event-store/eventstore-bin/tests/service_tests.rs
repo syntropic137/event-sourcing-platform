@@ -89,6 +89,18 @@ async fn service_append_and_read_with_postgres_backend() {
     assert_eq!(out.events.len(), 2);
     assert_eq!(out.events[0].payload, b"pg1");
     assert_eq!(out.events[1].payload, b"pg2");
+
+    // GetServerInfo reports the Postgres backend and its #337 guarantee.
+    let info = client
+        .get_server_info(proto::GetServerInfoRequest {})
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(info.backend, "postgres");
+    assert!(info
+        .capabilities
+        .iter()
+        .any(|c| c == eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE));
 }
 
 #[tonic::async_trait]
@@ -127,6 +139,15 @@ impl EventStore for Service {
             .await
             .map(Response::new)
             .map_err(|e| e.to_status())
+    }
+
+    async fn get_server_info(
+        &self,
+        _request: Request<proto::GetServerInfoRequest>,
+    ) -> Result<Response<proto::GetServerInfoResponse>, Status> {
+        Ok(Response::new(eventstore_bin::server_info(
+            self.store.as_ref(),
+        )))
     }
 
     type SubscribeStream =
@@ -194,6 +215,26 @@ fn make_event(
         }),
         payload: payload.to_vec(),
     }
+}
+
+#[tokio::test]
+async fn service_get_server_info_memory_backend() {
+    let (endpoint, _jh) = spawn_server().await;
+    let mut client = EventStoreClient::connect(endpoint).await.unwrap();
+
+    let info = client
+        .get_server_info(proto::GetServerInfoRequest {})
+        .await
+        .expect("GetServerInfo should be implemented")
+        .into_inner();
+
+    assert_eq!(info.server_version, eventstore_bin::SERVER_VERSION);
+    assert_eq!(info.api_version, eventstore_core::API_VERSION);
+    assert_eq!(info.backend, "memory");
+    assert!(info
+        .capabilities
+        .iter()
+        .any(|c| c == eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE));
 }
 
 #[tokio::test]

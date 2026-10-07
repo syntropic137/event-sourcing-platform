@@ -3,6 +3,9 @@ use eventstore_proto::gen::event_store_client::EventStoreClient;
 use eventstore_proto::gen::{AppendRequest, ReadAllRequest, ReadStreamRequest, SubscribeRequest};
 use tonic::transport::Channel;
 
+mod server_info;
+pub use server_info::{capabilities, CompatibilityError, ServerInfo, SERVER_INFO_MIN_VERSION};
+
 /// Cloning is cheap: clones share the underlying gRPC channel.
 #[derive(Clone)]
 pub struct EventStore {

@@ -110,10 +110,33 @@ message ConcurrencyErrorDetail {
   uint64 actual_last_global_nonce    = 4;  // optional: last committed in global log
 }
 
+// Request for GetServerInfo. Intentionally empty; reserved for future filters.
+message GetServerInfoRequest {}
+
+// Identifies the running store so a client can assert a correctness floor at
+// connect time. Added in v0.17.0. Servers older than that answer GetServerInfo
+// with gRPC status UNIMPLEMENTED; clients must treat that as "older than
+// v0.17.0, advertises no capabilities".
+message GetServerInfoResponse {
+  // Semver of the store binary (Cargo package version), e.g. "0.17.0".
+  string server_version           = 1;
+  // Wire API the server speaks, e.g. "eventstore.v1".
+  string api_version              = 2;
+  // Storage backend kind: "memory", "postgres", or "unknown".
+  string backend                  = 3;
+  // Named behavioral guarantees this server provides. Clients should check
+  // these rather than parse versions. Unknown names must be ignored.
+  // See docs: event-store compatibility page for the registry of names.
+  repeated string capabilities    = 4;
+}
+
 service EventStore {
   rpc Append     (AppendRequest)      returns (AppendResponse);
   rpc ReadStream (ReadStreamRequest)  returns (ReadStreamResponse);
   rpc Subscribe  (SubscribeRequest)   returns (stream SubscribeResponse);
   // Read all events from global position (for projections/catch-up)
   rpc ReadAll    (ReadAllRequest)     returns (ReadAllResponse);
+  // Server version, backend, and capability flags (added in v0.17.0;
+  // older servers return UNIMPLEMENTED)
+  rpc GetServerInfo (GetServerInfoRequest) returns (GetServerInfoResponse);
 }
