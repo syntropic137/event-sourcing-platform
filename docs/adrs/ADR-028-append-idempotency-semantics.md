@@ -36,10 +36,15 @@ conformance suite.
 A key is scoped to `(tenant_id, aggregate_id, idempotency_key)`. The same key
 on another aggregate is a different request.
 
-The request identity is `eventstore_core::fingerprint::batch_fingerprint`:
-SHA-256 over each normalized event's canonical metadata (server-assigned
+The request identity is `eventstore_core::fingerprint::batch_fingerprint`
+(format v2): a version byte, then SHA-256 over a domain tag, the event count
+and, per event, its canonical metadata (server-assigned
 `recorded_time_unix_ms` and `global_nonce` zeroed, `headers` in key order)
-followed by its payload. Every backend uses this one function.
+and its payload, each length-prefixed. Every backend uses this one function
+and compares with `fingerprint_matches`. The framing matters: the legacy
+format hashed metadata and payload back to back, so bytes moved from the
+metadata into the payload could produce the same hash and a different batch
+would be acknowledged as a retry.
 `expected_aggregate_nonce` is not part of the fingerprint; the events'
 `aggregate_nonce` values already pin the batch's position.
 
@@ -75,13 +80,20 @@ revision: one wins, the others get `ABORTED`.
 
 ### Compatibility
 
-`batch_fingerprint` is byte-identical to what Postgres has stored for every
-request with zero or one header per event (and for every request since
-#365), so existing idempotency rows stay valid. Requests stored before #365
-with two or more headers may not match on retry; such a retry gets
-`ALREADY_EXISTS`, as before #365 (the Rust repository reconciles it). Memory
-keeps no state across restarts, so its fingerprint change has no
-compatibility impact.
+No migration. Legacy fingerprints are a bare 32-byte SHA-256; v2 is 33
+bytes, so the stored length selects the comparison. A 32-byte row is
+compared with the legacy formula (unframed, canonical header order), which
+equals what earlier releases stored for requests with zero or one header per
+event and for every request since #365. Legacy rows therefore keep matching
+their retries, and keep the legacy formula's ambiguity until they age out.
+Rows stored before #365 with two or more headers may not match; such a
+retry gets `ALREADY_EXISTS`, as before (the Rust repository reconciles it).
+
+During a rolling upgrade, an older server reading a v2 row compares it with
+its own 32-byte value and answers `ALREADY_EXISTS` to an identical retry.
+Finish the rollout before relying on retries across versions.
+
+Memory keeps no state across restarts, so it uses v2 only.
 
 ### Conformance suite
 
@@ -89,6 +101,12 @@ compatibility impact.
 backend runs them all with `eventstore_core::append_conformance_tests!(factory)`
 from an integration test. Memory and Postgres run it in CI (Postgres via
 `TEST_DATABASE_URL` or a testcontainer). A new backend must run it too.
+
+The suite's concurrency cases only align start times, so they can pass
+without the racers overlapping. A backend with internal race windows also
+forces them in its own tests: Postgres `tests/it_idempotency.rs` parks every
+racer on the advisory lock or the stream row lock before letting the winner
+through, and checks legacy-fingerprint rows.
 
 ## Consequences
 

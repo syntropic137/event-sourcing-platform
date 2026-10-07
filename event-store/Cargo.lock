@@ -588,6 +588,7 @@ dependencies = [
  "futures",
  "once_cell",
  "prost",
+ "sha2",
  "sqlx",
  "testcontainers",
  "testcontainers-modules",

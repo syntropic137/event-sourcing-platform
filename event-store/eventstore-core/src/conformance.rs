@@ -20,6 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use prost::Message;
 
+use crate::fingerprint::canonical_metadata_bytes;
 use crate::proto::{AppendRequest, AppendResponse, EventData, EventMetadata, ReadStreamRequest};
 use crate::{EventStore, StoreError};
 
@@ -280,6 +281,26 @@ pub async fn same_key_different_payload_is_already_exists(store: Store) {
         "different header value",
     );
     assert_eq!(s.event_ids(&store).await.len(), 1, "nothing written");
+
+    // Bytes moved from metadata into the payload are a different batch (the
+    // fingerprint frames each part; an unframed hash collides here).
+    let t = Stream::new();
+    let single_header = HashMap::from([("h".to_owned(), "v".to_owned())]);
+    let original = t.event(1, "a", single_header);
+    store
+        .append(t.request(0, "k-smuggle", vec![original.clone()]))
+        .await
+        .expect("first append");
+    let mut moved = original.clone();
+    moved.meta.as_mut().unwrap().headers.clear();
+    let with = canonical_metadata_bytes(original.meta.as_ref().unwrap());
+    let without = canonical_metadata_bytes(moved.meta.as_ref().unwrap());
+    assert!(with.starts_with(&without), "test precondition");
+    moved.payload = [&with[without.len()..], original.payload.as_slice()].concat();
+    assert_already_exists(
+        store.append(t.request(0, "k-smuggle", vec![moved])).await,
+        "header bytes moved into the payload",
+    );
 }
 
 /// Without a matching key (no key, or a key never seen) a stale expected
@@ -367,6 +388,11 @@ async fn race_identical(store: &Store, req: AppendRequest) -> Vec<AppendResponse
 /// Identical keyed requests in flight at the same time (a client retry that
 /// overtakes the original) commit once, and every one of them gets the
 /// committed ack, on a new stream and on an existing one.
+///
+/// Best effort: the barrier aligns the starts, not the backend's internal
+/// steps, so a run can pass without the racers overlapping. Backends with
+/// internal race windows must also force the interleavings in their own
+/// tests (Postgres: `tests/it_idempotency.rs`).
 pub async fn concurrent_identical_retries_commit_once(store: Store) {
     let s = Stream::new();
     let acks = race_identical(&store, s.request(0, "k-race-new", s.batch(0, 2, "a", 0))).await;

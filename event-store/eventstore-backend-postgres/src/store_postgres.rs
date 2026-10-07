@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use eventstore_core::fingerprint::batch_fingerprint;
+use eventstore_core::fingerprint::{batch_fingerprint, fingerprint_matches};
 use eventstore_core::{proto, EventStore as EventStoreTrait, StoreError, StoreStream};
 use futures::stream;
 use sqlx::{postgres::PgPoolOptions, types::Json, PgPool, Row};
@@ -66,6 +66,7 @@ async fn idempotent_replay(
     tenant_id: &str,
     aggregate_id: &str,
     fingerprint: &[u8],
+    events: &[proto::EventData],
 ) -> Result<Option<proto::AppendResponse>, StoreError> {
     let Some(key) = key else {
         return Ok(None);
@@ -84,7 +85,9 @@ async fn idempotent_replay(
         return Ok(None);
     };
     let stored_fingerprint: Vec<u8> = row.get("request_fingerprint");
-    if stored_fingerprint != fingerprint {
+    // Rows written before fingerprint v2 hold the legacy format and are
+    // compared with it (ADR-028, Compatibility).
+    if !fingerprint_matches(&stored_fingerprint, fingerprint, events) {
         return Err(StoreError::AlreadyExists(format!(
             "idempotency key '{key}' already used with different payload"
         )));
@@ -399,7 +402,16 @@ impl EventStoreTrait for PostgresStore {
             }),
         };
 
-        match idempotent_replay(&mut tx, key, &tenant_id, &aggregate_id, &fingerprint).await {
+        match idempotent_replay(
+            &mut tx,
+            key,
+            &tenant_id,
+            &aggregate_id,
+            &fingerprint,
+            &events,
+        )
+        .await
+        {
             Ok(None) => {}
             done => return rollback_with(tx, done.map(Option::unwrap_or_default)).await,
         }
@@ -417,7 +429,16 @@ impl EventStoreTrait for PostgresStore {
             // An identical request with the same key may have committed
             // while this one waited for the row lock above (an in-flight
             // retry): it is this request's outcome, not a conflict.
-            match idempotent_replay(&mut tx, key, &tenant_id, &aggregate_id, &fingerprint).await {
+            match idempotent_replay(
+                &mut tx,
+                key,
+                &tenant_id,
+                &aggregate_id,
+                &fingerprint,
+                &events,
+            )
+            .await
+            {
                 Ok(None) => {}
                 done => return rollback_with(tx, done.map(Option::unwrap_or_default)).await,
             }
@@ -481,7 +502,16 @@ impl EventStoreTrait for PostgresStore {
         // new statement sees any such commit. Without the re-check the loser
         // hit the nonce trigger and got INTERNAL (and an in-flight identical
         // retry did not get its ack). Plain reads: they never wait.
-        match idempotent_replay(&mut tx, key, &tenant_id, &aggregate_id, &fingerprint).await {
+        match idempotent_replay(
+            &mut tx,
+            key,
+            &tenant_id,
+            &aggregate_id,
+            &fingerprint,
+            &events,
+        )
+        .await
+        {
             Ok(None) => {}
             done => return rollback_with(tx, done.map(Option::unwrap_or_default)).await,
         }
