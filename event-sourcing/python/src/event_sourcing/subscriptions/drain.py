@@ -72,6 +72,11 @@ class ProcessManagerDrain:
                 name=f"process-manager-drain:{self._process_manager.get_name()}",
             )
 
+    @property
+    def is_running(self) -> bool:
+        """True while a drain task exists and has not finished."""
+        return self._task is not None and not self._task.done()
+
     async def settled(self) -> None:
         """Wait until no drain is running and no wake is pending."""
         await self._idle.wait()

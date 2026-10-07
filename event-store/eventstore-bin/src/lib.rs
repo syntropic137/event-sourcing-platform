@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use eventstore_core::{proto, EventStore as EventStoreTrait};
 use eventstore_proto::gen::event_store_server::EventStore;
-use eventstore_proto::gen::{AppendRequest, ReadAllRequest, ReadStreamRequest};
+use eventstore_proto::gen::{
+    AppendRequest, GetServerInfoRequest, GetServerInfoResponse, ReadAllRequest, ReadStreamRequest,
+};
 use tokio_stream::{Stream, StreamExt};
 use tonic::{Request, Response, Status};
 use tracing::{error, info, instrument, warn};
@@ -12,6 +14,24 @@ pub use eventstore_proto::gen::SubscribeResponse;
 
 pub struct Service {
     pub store: Arc<dyn EventStoreTrait>,
+}
+
+/// Version of this server binary, reported by `GetServerInfo`.
+pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Build the `GetServerInfo` response for a backend. Capabilities come from
+/// the backend so a server never advertises a guarantee its storage lacks.
+pub fn server_info(store: &dyn EventStoreTrait) -> GetServerInfoResponse {
+    GetServerInfoResponse {
+        server_version: SERVER_VERSION.to_string(),
+        api_version: eventstore_proto::API_VERSION.to_string(),
+        backend: store.backend_kind().to_string(),
+        capabilities: store
+            .capabilities()
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    }
 }
 
 #[tonic::async_trait]
@@ -96,6 +116,14 @@ impl EventStore for Service {
         }
     }
 
+    #[instrument(name = "rpc.get_server_info", skip(self, _request))]
+    async fn get_server_info(
+        &self,
+        _request: Request<GetServerInfoRequest>,
+    ) -> Result<Response<GetServerInfoResponse>, Status> {
+        Ok(Response::new(server_info(self.store.as_ref())))
+    }
+
     type SubscribeStream =
         Pin<Box<dyn Stream<Item = Result<SubscribeResponse, Status>> + Send + 'static>>;
 
@@ -128,7 +156,13 @@ pub async fn resolve_backend() -> anyhow::Result<Arc<dyn EventStoreTrait>> {
         "postgres" => {
             let url = std::env::var("DATABASE_URL")
                 .map_err(|_| anyhow::anyhow!("DATABASE_URL must be set when BACKEND=postgres"))?;
-            let store = eventstore_backend_postgres::PostgresStore::connect(&url).await?;
+            // Pool size and timeouts: PG_* env vars, see
+            // docs/operations/POSTGRES-CONNECTIONS.md (#368, #370).
+            let config = eventstore_backend_postgres::PostgresConfig::from_env()?;
+            info!(?config, "postgres pool and timeout settings");
+            let store =
+                eventstore_backend_postgres::PostgresStore::connect_with_config(&url, &config)
+                    .await?;
             Ok(store)
         }
         other => anyhow::bail!("unsupported BACKEND '{other}'. Supported: memory, postgres"),
@@ -151,6 +185,60 @@ mod tests {
             None => std::env::remove_var(&key),
         }
         prev
+    }
+
+    #[test]
+    fn server_info_reports_memory_backend_and_capabilities() {
+        let store = eventstore_backend_memory::InMemoryStore::new();
+        let info = server_info(store.as_ref());
+        assert_eq!(info.server_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(info.api_version, "eventstore.v1");
+        assert_eq!(info.backend, "memory");
+        assert!(info
+            .capabilities
+            .iter()
+            .any(|c| c == eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE));
+    }
+
+    /// A backend that does not override the server-info hooks.
+    struct BareStore;
+
+    #[tonic::async_trait]
+    impl EventStoreTrait for BareStore {
+        async fn append(
+            &self,
+            _req: proto::AppendRequest,
+        ) -> Result<proto::AppendResponse, eventstore_core::StoreError> {
+            unimplemented!()
+        }
+        async fn read_stream(
+            &self,
+            _req: proto::ReadStreamRequest,
+        ) -> Result<proto::ReadStreamResponse, eventstore_core::StoreError> {
+            unimplemented!()
+        }
+        async fn read_all(
+            &self,
+            _req: proto::ReadAllRequest,
+        ) -> Result<proto::ReadAllResponse, eventstore_core::StoreError> {
+            unimplemented!()
+        }
+        fn subscribe(
+            &self,
+            _req: proto::SubscribeRequest,
+        ) -> eventstore_core::StoreStream<SubscribeResponse> {
+            Box::pin(tokio_stream::empty())
+        }
+    }
+
+    #[test]
+    fn server_info_backend_defaults_advertise_nothing() {
+        let info = server_info(&BareStore);
+        assert_eq!(info.backend, "unknown");
+        assert!(
+            info.capabilities.is_empty(),
+            "a backend must opt in to every capability"
+        );
     }
 
     #[tokio::test]
@@ -179,6 +267,24 @@ mod tests {
             Some(v) => std::env::set_var("BACKEND", v),
             None => std::env::remove_var("BACKEND"),
         }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn resolve_backend_rejects_invalid_postgres_settings_before_connecting() {
+        let prev_backend = set_env_and_get_prev("BACKEND", Some("postgres"));
+        let prev_url = set_env_and_get_prev("DATABASE_URL", Some("postgres://u:p@127.0.0.1:1/db"));
+        let prev_pool = set_env_and_get_prev("PG_POOL_MAX_CONNECTIONS", Some("lots"));
+        let res = resolve_backend().await;
+        for (k, v) in [
+            ("BACKEND", prev_backend),
+            ("DATABASE_URL", prev_url),
+            ("PG_POOL_MAX_CONNECTIONS", prev_pool),
+        ] {
+            set_env_and_get_prev(k, v);
+        }
+        let msg = format!("{:#}", res.err().expect("invalid pool size must fail"));
+        assert!(msg.contains("PG_POOL_MAX_CONNECTIONS"), "{msg}");
     }
 
     #[tokio::test]

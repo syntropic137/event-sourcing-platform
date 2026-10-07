@@ -899,16 +899,16 @@ class OrderAggregate(BaseAggregate):
         self.raise_event(OrderPlaced(order_id, customer_id))
 ```
 
-### Rust SDK (Planned)
+### Rust SDK (Alpha)
 ```rust
-use neurale_event_sourcing::{BaseAggregate, Repository};
+use event_sourcing_rust::prelude::*;
 
-impl OrderAggregate {
-    fn place(&mut self, order_id: String, customer_id: String) {
-        self.initialize(order_id.clone());
-        self.raise_event(OrderPlaced { order_id, customer_id });
-    }
-}
+let client = EventStoreClient::connect("127.0.0.1:50051").await?;
+let repo = EventStoreRepository::<OrderAggregate>::new(Arc::new(client), "tenant-a");
+
+let mut order = AggregateInstance::new(order_id.clone(), OrderAggregate::default());
+order.execute(OrderCommand::Place { order_id, customer_id }).await?;
+repo.save(&mut order).await?; // Error::ConcurrencyConflict on a stale writer
 ```
 
 ### Go SDK (Planned)

@@ -2,8 +2,10 @@ import path from "node:path";
 import { loadPackageDefinition } from "@grpc/grpc-js";
 import { loadSync } from "@grpc/proto-loader";
 import type { PackageDefinition } from "@grpc/proto-loader";
-import { credentials } from "@grpc/grpc-js";
+import { mapGrpcError, resolveConnection, type ConnectionOptions } from "./auth.js";
 import { fileURLToPath } from "node:url";
+import { inspect } from "node:util";
+import { streamToAsyncIterator } from "./stream-iterator.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -11,10 +13,14 @@ const __dirname = path.dirname(__filename);
 // Minimal runtime-loaded client that works even before ts-proto stubs are generated
 export class EventStoreClientRT {
   private readonly addr: string;
-  private readonly client: any;
+  // ES private field: never shown by util.inspect (in-flight calls hold
+  // the authorization header).
+  readonly #client: any;
 
-  constructor(addr: string) {
-    this.addr = addr;
+  /** Same endpoint forms and options as `EventStoreClientTS`. */
+  constructor(addr: string, opts: ConnectionOptions = {}) {
+    const conn = resolveConnection(addr, opts);
+    this.addr = conn.target;
     const protoPath = path.resolve(__dirname, "../../../eventstore-proto/proto/eventstore/v1/eventstore.proto");
     const def: PackageDefinition = loadSync(protoPath, {
       keepCase: true,
@@ -26,13 +32,24 @@ export class EventStoreClientRT {
     });
     const pkg = loadPackageDefinition(def) as any;
     const Svc = pkg.eventstore.v1.EventStore;
-    this.client = new Svc(this.addr, credentials.createInsecure());
+    this.#client = new Svc(conn.target, conn.channelCredentials, conn.options);
+  }
+
+  /** Never includes credentials. */
+  toString(): string {
+    return "EventStoreClientRT";
+  }
+  toJSON(): string {
+    return this.toString();
+  }
+  [inspect.custom](): string {
+    return this.toString();
   }
 
   append(req: any): Promise<any> {
     return new Promise((resolve, reject) => {
-      this.client.Append(req, (err: any, resp: any) => {
-        if (err) return reject(err);
+      this.#client.Append(req, (err: any, resp: any) => {
+        if (err) return reject(mapGrpcError(err));
         resolve(resp);
       });
     });
@@ -40,26 +57,14 @@ export class EventStoreClientRT {
 
   readStream(req: any): Promise<any> {
     return new Promise((resolve, reject) => {
-      this.client.ReadStream(req, (err: any, resp: any) => {
-        if (err) return reject(err);
+      this.#client.ReadStream(req, (err: any, resp: any) => {
+        if (err) return reject(mapGrpcError(err));
         resolve(resp);
       });
     });
   }
 
   subscribe(req: any): AsyncIterable<any> {
-    const call = this.client.Subscribe(req);
-    const iterator = {
-      [Symbol.asyncIterator]() { return this; },
-      next(): Promise<IteratorResult<any>> {
-        return new Promise((resolve, reject) => {
-          call.once("data", (data: any) => resolve({ value: data, done: false }));
-          call.once("error", (err: any) => reject(err));
-          call.once("end", () => resolve({ value: undefined, done: true }));
-        });
-      },
-      return(): Promise<IteratorResult<any>> { call.cancel(); return Promise.resolve({ value: undefined, done: true }); }
-    } as AsyncIterableIterator<any>;
-    return iterator;
+    return streamToAsyncIterator<any>(this.#client.Subscribe(req), mapGrpcError);
   }
 }

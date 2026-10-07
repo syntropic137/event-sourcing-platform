@@ -118,7 +118,16 @@ pnpm run start
 
 # Run with in-memory event store
 pnpm run start -- --memory
+
+# Through the ADR-024 gateway (Basic auth on every call)
+EVENT_STORE_ADDR=localhost:50051 ESP_GATEWAY_PASSWORD=... pnpm run start
+# Remote gateway over plaintext (no TLS yet, #301): explicit opt-in
+EVENT_STORE_ADDR=es.lan:50051 ESP_GATEWAY_PASSWORD=... \
+  EVENT_STORE_ALLOW_INSECURE_CREDENTIALS=1 pnpm run start
 ```
+
+`ESP_GATEWAY_USER` defaults to `admin`. Credentials are refused over
+plaintext to a non-loopback host unless you opt in or use `https://`.
 
 ### Validate Architecture
 

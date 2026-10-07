@@ -78,9 +78,7 @@ impl ValidationRule for ContextPublicApiExistsRule {
                     severity: Severity::Error,
                     message: format!(
                         "Context '{}' {} has no exports ({})",
-                        context.name,
-                        api.primary_file,
-                        api.export_hint
+                        context.name, api.primary_file, api.export_hint
                     ),
                     suggestions: vec![Suggestion::manual(api.export_suggestion)],
                 });
@@ -189,8 +187,7 @@ impl ValidationRule for CrossContextPublicApiRule {
     ) -> Result<()> {
         let scanner = Scanner::new(ctx.config.clone(), ctx.root.clone());
         let contexts = scanner.scan_contexts()?;
-        let context_names: HashSet<String> =
-            contexts.iter().map(|c| c.name.clone()).collect();
+        let context_names: HashSet<String> = contexts.iter().map(|c| c.name.clone()).collect();
 
         let parser = PythonImportParser::new();
 
@@ -221,23 +218,14 @@ impl ValidationRule for CrossContextPublicApiRule {
                     .map(|imp| imp.line.trim().to_string())
                     .collect();
 
-                report_violations(
-                    ctx,
-                    report,
-                    file_path,
-                    &violations,
-                    "VSA204",
-                );
+                report_violations(ctx, report, file_path, &violations, "VSA204");
             }
         }
 
         // Walk cross_context_scan_paths (no "own" context)
         for scan_path in &ctx.config.cross_context_scan_paths {
-            let resolved = if scan_path.is_absolute() {
-                scan_path.clone()
-            } else {
-                ctx.root.join(scan_path)
-            };
+            let resolved =
+                if scan_path.is_absolute() { scan_path.clone() } else { ctx.root.join(scan_path) };
 
             if !resolved.exists() {
                 continue;
@@ -271,13 +259,7 @@ impl ValidationRule for CrossContextPublicApiRule {
                     .map(|imp| imp.line.trim().to_string())
                     .collect();
 
-                report_violations(
-                    ctx,
-                    report,
-                    file_path,
-                    &violations,
-                    "VSA204",
-                );
+                report_violations(ctx, report, file_path, &violations, "VSA204");
             }
         }
 
@@ -295,11 +277,7 @@ fn collect_py_files(root: &Path) -> Vec<PathBuf> {
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map_or(false, |ext| ext == "py")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "py"))
         .map(|e| e.path().to_path_buf())
         .collect()
 }
@@ -418,24 +396,16 @@ fn report_violations(
         .config
         .exceptions
         .iter()
-        .filter(|e| e.rule == rule_code && file_str.ends_with(&e.file))
+        .filter(|e| e.matches(rule_code, &file_str))
         .map(|e| e.budget)
         .sum::<usize>();
 
-    let excess = if violations.len() > budget {
-        violations.len() - budget
-    } else {
-        0
-    };
+    let excess = if violations.len() > budget { violations.len() - budget } else { 0 };
 
     if excess > 0 {
         // Report the excess violations
-        let violation_lines = violations
-            .iter()
-            .skip(budget)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join("\n  ");
+        let violation_lines =
+            violations.iter().skip(budget).cloned().collect::<Vec<_>>().join("\n  ");
 
         report.errors.push(ValidationIssue {
             path: file_path.to_path_buf(),
@@ -458,7 +428,7 @@ fn report_violations(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{PatternsConfig, ValidationConfig, VsaConfig, ExceptionBudget};
+    use crate::config::{ExceptionBudget, PatternsConfig, ValidationConfig, VsaConfig};
     use crate::validation::{EnhancedValidationReport, ValidationContext};
     use std::collections::HashMap;
     use tempfile::TempDir;
@@ -553,11 +523,8 @@ mod tests {
             "from .domain import InstallationAggregate\n",
         )
         .unwrap();
-        std::fs::write(
-            root.join("orchestration/__init__.py"),
-            "__all__ = ['WorkspaceService']\n",
-        )
-        .unwrap();
+        std::fs::write(root.join("orchestration/__init__.py"), "__all__ = ['WorkspaceService']\n")
+            .unwrap();
 
         let config = create_test_config(root.clone());
         let ctx = ValidationContext::new(config, root);
@@ -680,10 +647,7 @@ mod tests {
         // index.ts does not count: both contexts error on missing __init__.py.
         assert_eq!(report.errors.len(), 2);
         assert!(report.errors.iter().all(|e| e.code == "VSA205"));
-        assert!(report
-            .errors
-            .iter()
-            .all(|e| e.message.contains("__init__.py")));
+        assert!(report.errors.iter().all(|e| e.message.contains("__init__.py")));
 
         // And the historical __init__.py path still passes for TypeScript.
         std::fs::write(
@@ -691,11 +655,7 @@ mod tests {
             "from .domain import InstallationAggregate\n",
         )
         .unwrap();
-        std::fs::write(
-            root.join("orchestration/__init__.py"),
-            "__all__ = ['Workflow']\n",
-        )
-        .unwrap();
+        std::fs::write(root.join("orchestration/__init__.py"), "__all__ = ['Workflow']\n").unwrap();
         let mut report2 = EnhancedValidationReport::default();
         rule.validate(&ctx, &mut report2).unwrap();
         assert_eq!(report2.errors.len(), 0);
@@ -941,11 +901,8 @@ mod tests {
         // Create an external scan path outside the contexts root
         let external = project_root.join("apps/api");
         std::fs::create_dir_all(&external).unwrap();
-        std::fs::write(
-            external.join("handler.py"),
-            "from contexts.github.domain.Agg import Agg\n",
-        )
-        .unwrap();
+        std::fs::write(external.join("handler.py"), "from contexts.github.domain.Agg import Agg\n")
+            .unwrap();
 
         let mut config = create_test_config(contexts_root.clone());
         config.cross_context_scan_paths = vec![external.clone()];

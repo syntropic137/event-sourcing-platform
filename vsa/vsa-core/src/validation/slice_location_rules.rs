@@ -35,7 +35,7 @@ const RESERVED_DIRECTORY_NAMES: &[&str] = &[
 /// slices are first-class organizational units.
 ///
 /// Invalid structure:
-/// ```
+/// ```text
 /// contexts/sessions/
 ///   ├── start_session/      # ❌ Command slice at root
 ///   ├── complete_session/   # ❌ Command slice at root
@@ -44,7 +44,7 @@ const RESERVED_DIRECTORY_NAMES: &[&str] = &[
 /// ```
 ///
 /// Valid structure:
-/// ```
+/// ```text
 /// contexts/sessions/
 ///   └── slices/
 ///       ├── start_session/      # ✅ Command slice in slices/

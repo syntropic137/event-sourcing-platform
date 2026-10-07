@@ -46,19 +46,37 @@ docker-save:
 	docker save event-sourcing-platform-event-store:latest | gzip > /tmp/event-store-amd64.tar.gz
 	@ls -lh /tmp/event-store-amd64.tar.gz
 
-docker-build-and-save: docker-build-amd64 docker-save
-	@echo "✅ Docker image built and saved to /tmp/event-store-amd64.tar.gz"
+# Gateway image (ADR-024) - the only component this deployment publishes to
+# the host. See event-store/gateway/README.md.
+docker-build-gateway-amd64:
+	@echo "🐳 Building Event Store Gateway Docker image for x86_64..."
+	cd ../event-store/gateway && docker buildx build --platform linux/amd64 \
+		-t event-sourcing-platform-gateway:latest \
+		--load .
+
+docker-save-gateway:
+	@echo "💾 Saving Gateway image..."
+	docker save event-sourcing-platform-gateway:latest | gzip > /tmp/gateway-amd64.tar.gz
+	@ls -lh /tmp/gateway-amd64.tar.gz
+
+docker-build-and-save: docker-build-amd64 docker-save docker-build-gateway-amd64 docker-save-gateway
+	@echo "✅ Docker images built and saved to /tmp/event-store-amd64.tar.gz and /tmp/gateway-amd64.tar.gz"
 
 # Full deployment workflow
 proxmox-deploy-full: proxmox-render-local docker-build-and-save proxmox-terraform-apply proxmox-ansible-configure
 	@echo ""
 	@echo "🎉 Deployment complete!"
 	@echo ""
-	@echo "📊 Connection info:"
-	@echo "   Event Store: 192.168.0.100:50051"
+	@echo "📊 Connection info (ADR-024: all traffic goes through the auth gateway):"
+	@echo "   Event Store: 192.168.0.100:50051 (Basic Auth required - see ESP_GATEWAY_PASSWORD)"
 	@echo ""
-	@echo "🧪 Test with:"
-	@echo "   EVENT_STORE_ADDR=192.168.0.100:50051 npm run start --prefix ../examples/002-simple-aggregate-ts"
+	@echo "🧪 Test with grpcurl - see event-store/gateway/README.md 'Verify' section"
+	@echo "   for the exact command (avoids base64 line-wrapping issues in a"
+	@echo "   shell-portable way)."
+	@echo ""
+	@echo "🔑 SDK clients (Rust, TypeScript, Python) send Basic Auth when configured;"
+	@echo "   plaintext to this host needs allow_insecure_credentials until TLS (#301)."
+	@echo "   See event-store/gateway/README.md 'Client SDK support'."
 
 proxmox-destroy:
 	@echo "🗑️  Destroying Proxmox VM..."

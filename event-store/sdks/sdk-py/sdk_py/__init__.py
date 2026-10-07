@@ -1,1 +1,1 @@
-__all__ = ["client_rt"]
+__all__ = ["auth", "client_rt"]

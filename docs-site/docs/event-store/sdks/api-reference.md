@@ -17,8 +17,23 @@ Appends events to an aggregate with optimistic concurrency control.
 - `aggregateType` (string): Aggregate type for routing
 - `events` (Event[]): Array of events to append
 - `expectedAggregateNonce` (number): Optimistic concurrency check. Use `0` for brand new streams; otherwise supply the current stream head.
+- `idempotencyKey` (string, optional): Makes the whole batch safe to retry when the outcome is unknown. Scoped to the aggregate.
 
 **Returns:** `{ lastAggregateNonce, lastGlobalNonce }`
+
+**Idempotency and concurrency:** the key is checked before
+`expectedAggregateNonce`, on every backend:
+
+| Situation | Result |
+|-----------|--------|
+| Key already committed with the identical batch | The original `{ lastAggregateNonce, lastGlobalNonce }`; nothing written, even if other writers advanced the stream since |
+| Key already committed with a different batch | `ALREADY_EXISTS`; nothing written |
+| No key, or key unused, and `expectedAggregateNonce` is stale | `ABORTED` with the current head (concurrency conflict) |
+
+"Identical" means the same events: metadata (header order does not matter)
+and payloads. To retry after a timeout, resend the exact same request with
+the same key. Concurrent identical requests commit once and all get the ack.
+See ADR-028 (Append Idempotency Semantics) in `docs/adrs/`.
 
 #### `readStream(request)`
 Reads events from an aggregate stream.
@@ -37,9 +52,17 @@ Creates a real-time subscription to event streams.
 **Parameters:**
 - `tenantId` (string): Tenant/partition routing key
 - `aggregateIdPrefix` (string): Filter by aggregate id prefix (optional)
-- `fromGlobalNonce` (number): Starting global nonce
+- `fromGlobalNonce` (number): Starting global nonce (inclusive)
 
 **Returns:** AsyncIterator of events
+
+**Delivery and errors:** at-least-once, in global nonce order. If the store
+cannot read events (for example the database is down), the stream ends with
+gRPC status `UNAVAILABLE` instead of going quiet. Reconnect with
+`fromGlobalNonce = last processed globalNonce + 1`, with backoff, and keep
+handlers idempotent. If a stored event cannot be decoded, the stream delivers
+the events before it and ends with `DATA_LOSS` naming its global nonce; it
+never skips it. Retrying does not help: alert an operator. See ADR-026 (Subscription Failure Semantics) in `docs/adrs/`.
 
 ### 🎯 Event Definition
 

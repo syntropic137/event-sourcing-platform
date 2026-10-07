@@ -15,11 +15,13 @@ See ADR-014 for architectural rationale.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+import math
 import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, NamedTuple, Protocol, TypedDict
+from typing import TYPE_CHECKING, NamedTuple, Protocol, TypedDict, cast
 
 from event_sourcing.core.checkpoint import (
     CheckpointedProjection,
@@ -28,12 +30,18 @@ from event_sourcing.core.checkpoint import (
     ProjectionCheckpointStore,
     ProjectionResult,
 )
+from event_sourcing.core.errors import (
+    ProjectionHandlerFailedError,
+    SubscriptionHaltedError,
+    UndecodableEventError,
+)
 from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.subscriptions.drain import ProcessManagerDrain
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
+    from event_sourcing.core.envelope import EventTypeFilter
     from event_sourcing.core.event import DomainEvent, EventEnvelope
 
 
@@ -84,6 +92,41 @@ DEFAULT_NEAR_HEAD_WINDOW = 1000
 # untouched, so its data and position stay atomic.
 CATCH_UP_SKIP_CHECKPOINT_INTERVAL = 500
 
+# A projection that fails an event is held below it and fed it again on a
+# track of its own after this delay, doubling per consecutive failure of the
+# same event up to the cap (the same pace start() retries a failed attempt).
+# Only the failing projection waits: the others keep consuming (#1696).
+HELD_RETRY_INITIAL_DELAY = 1.0
+HELD_RETRY_MAX_DELAY = 30.0
+# The doubling stops at the cap. The exponent is bounded before it is used:
+# 2.0 ** 1024 overflows a float, which a poison event reaches after ~8.5h.
+_HELD_RETRY_MAX_EXPONENT = math.ceil(math.log2(HELD_RETRY_MAX_DELAY / HELD_RETRY_INITIAL_DELAY))
+
+# The always-present track at head; see ``_plan_tracks``.
+LIVE_TRACK = "live"
+
+
+def _find_undecodable(error: BaseException) -> UndecodableEventError | None:
+    """The undecodable-event error in ``error``, unwrapping TaskGroup groups.
+
+    One failing track fails the whole TaskGroup, so the store's DATA_LOSS
+    arrives inside an ExceptionGroup, possibly beside other tracks' errors.
+    If several tracks hit undecodable rows, the lowest position is reported:
+    it is the one every projection before it must get past first.
+    """
+    if isinstance(error, UndecodableEventError):
+        return error
+    if isinstance(error, BaseExceptionGroup):
+        group = cast("BaseExceptionGroup[BaseException]", error)
+        found = [
+            nested
+            for nested in (_find_undecodable(inner) for inner in group.exceptions)
+            if nested is not None
+        ]
+        if found:
+            return min(found, key=lambda nested: nested.global_nonce)
+    return None
+
 
 @dataclass
 class _SubscriptionTrack:
@@ -118,7 +161,8 @@ class _SubscriptionTrack:
         generations: Each projection's rebuild generation when this track was
             planned. A track whose generation for a projection is stale was
             planned before a ``rebuild_projection`` of it, and no longer
-            touches it: no dispatch, no checkpoint, no drain unlock.
+            touches it: no dispatch, no checkpoint, no drain unlock, no
+            decoding for it (see ``_is_member``).
     """
 
     name: str
@@ -128,6 +172,49 @@ class _SubscriptionTrack:
     unsaved_skips: dict[str, int] = field(default_factory=dict[str, int])
     skips_saved_at: int = 0
     generations: dict[str, int] = field(default_factory=dict[str, int])
+
+
+@dataclass
+class _HeldProjection:
+    """A projection held below an event it failed to apply (syntropic137#1696).
+
+    Attributes:
+        failure: The latest failure, naming the event it is held below.
+        attempts: Consecutive failures of that same event; sets the backoff.
+    """
+
+    failure: ProjectionHandlerFailedError
+    attempts: int
+
+
+def _held_retry_delay(attempts: int) -> float:
+    """Seconds before retrying a projection held for ``attempts`` consecutive failures."""
+    exponent = min(max(attempts - 1, 0), _HELD_RETRY_MAX_EXPONENT)
+    return min(HELD_RETRY_INITIAL_DELAY * 2**exponent, HELD_RETRY_MAX_DELAY)
+
+
+class _TrackEventTypes:
+    """The types the projections on a track handle, read live.
+
+    Live, not a snapshot: a projection held off the track (``_hold``) or
+    rebuilt since it was planned must stop widening its filter, or its types
+    would still be decoded, and could halt, for the members left on it.
+    """
+
+    def __init__(
+        self,
+        track: _SubscriptionTrack,
+        members: Callable[[_SubscriptionTrack], list[CheckpointedProjection]],
+    ) -> None:
+        self._track = track
+        self._members = members
+
+    def __contains__(self, event_type: str, /) -> bool:
+        for projection in self._members(self._track):
+            subscribed = projection.get_subscribed_event_types()
+            if subscribed is None or event_type in subscribed:
+                return True
+        return False
 
 
 class _BehindProjection(NamedTuple):
@@ -172,6 +259,31 @@ class EventStoreSubscriber(Protocol):
             Tuple of (events, is_end, next_from_global_nonce)
         """
         ...
+
+
+class TypeFilteringSubscriber(Protocol):
+    """A subscriber that can leave events of unwanted types undecoded.
+
+    ``GrpcEventStoreClient`` is one. Events whose type (after upcasting) is
+    not in ``event_types`` are yielded without decoding, so one the track's
+    projections would skip cannot fail decoding and halt them (ADR-027).
+    The coordinator passes ``event_types`` only to a ``subscribe`` that
+    declares it.
+    """
+
+    def subscribe(
+        self, from_global_nonce: int, event_types: EventTypeFilter | None = None
+    ) -> AsyncIterator[EventEnvelope[DomainEvent]]: ...
+
+
+def _accepts_event_types(subscriber: EventStoreSubscriber) -> bool:
+    subscribe = getattr(subscriber, "subscribe", None)
+    if subscribe is None:
+        return False
+    try:
+        return "event_types" in inspect.signature(subscribe).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 class SubscriptionCoordinator:
@@ -227,6 +339,7 @@ class SubscriptionCoordinator:
         projections: list[CheckpointedProjection],
         replay_concurrency: int = DEFAULT_REPLAY_CONCURRENCY,
         near_head_window: int = DEFAULT_NEAR_HEAD_WINDOW,
+        undecodable_recheck_interval: float | None = None,
     ) -> None:
         """
         Initialize the subscription coordinator.
@@ -241,21 +354,42 @@ class SubscriptionCoordinator:
                 at or below the live boundary catches up on the near-head
                 track (one more connection, only while such projections
                 exist) rather than a replay track. 0 disables it.
+            undecodable_recheck_interval: What to do when the store reports
+                an undecodable stored event (gRPC DATA_LOSS, ADR-026). None
+                (default): halt, and start() raises SubscriptionHaltedError.
+                A number of seconds: stay halted inside start() (``halted``
+                set, ``is_healthy`` False) and re-check at that fixed pace,
+                resuming on its own once an operator has repaired the row or
+                moved the checkpoints. Either way it is never retried with
+                the transient-error backoff.
 
         Raises:
             ValueError: If replay_concurrency is below 1, which would leave a
-                behind projection with no track to replay on, or if
-                near_head_window is negative.
+                behind projection with no track to replay on, if
+                near_head_window is negative, or if
+                undecodable_recheck_interval is not positive.
         """
         if replay_concurrency < 1:
             raise ValueError(f"replay_concurrency must be at least 1, got {replay_concurrency}")
         if near_head_window < 0:
             raise ValueError(f"near_head_window must not be negative, got {near_head_window}")
+        if undecodable_recheck_interval is not None and not undecodable_recheck_interval > 0:
+            raise ValueError(
+                "undecodable_recheck_interval must be positive or None, "
+                f"got {undecodable_recheck_interval}"
+            )
 
         self._event_store = event_store
+        self._filters_types = _accepts_event_types(event_store)
         self._checkpoint_store = checkpoint_store
         self._replay_concurrency = replay_concurrency
         self._near_head_window = near_head_window
+        self._undecodable_recheck_interval = undecodable_recheck_interval
+        # Set while stopped at an undecodable event (#360). Cleared once a
+        # plan needs nothing at or below its position, or every track that
+        # did has delivered an event at or past it (the row was repaired).
+        self._halt: SubscriptionHaltedError | None = None
+        self._halt_pending_tracks: set[str] = set()
         # A track planned before rebuild_projection() is still running after
         # it. Nothing it does to that projection may land after the rebuild
         # deletes the checkpoint, or the rebuild resumes past history. So every
@@ -273,6 +407,18 @@ class SubscriptionCoordinator:
         self._wakes_open = True
         self._last_error: Exception | None = None
         self._live_boundary_nonce: int = 0
+        # Projections held below an event they failed to apply, by name. Set
+        # on the failure, cleared once the projection has taken that event.
+        self._held: dict[str, _HeldProjection] = {}
+        # Projections that failed an event live and have not been live since.
+        # A re-plan (reconnect, retry) puts them back on a catching-up track,
+        # which goes live once it delivers the head rather than past it: the
+        # event past it may never come, and their drains would stay asleep.
+        # Kept across re-plans and later failures until they are live again.
+        self._resume_live: set[str] = set()
+        # The running plan's task group, so a held projection's retry track
+        # runs in it and is cancelled with the plan. None between plans.
+        self._task_group: asyncio.TaskGroup | None = None
 
         # Validate for duplicate projection names
         self._projections: dict[str, CheckpointedProjection] = {}
@@ -315,8 +461,27 @@ class SubscriptionCoordinator:
 
     @property
     def is_healthy(self) -> bool:
-        """True if the coordinator is running and has no active error."""
-        return self._running and self._last_error is None
+        """True if running, with no active error, not halted, and no projection held."""
+        return self._running and self._last_error is None and self._halt is None and not self._held
+
+    @property
+    def held_projections(self) -> dict[str, ProjectionHandlerFailedError]:
+        """Projections held below an event they failed to apply (#1696), by name.
+
+        Each value names the event. The projection's checkpoint is below it
+        and it is being fed it again with backoff; it leaves this view once
+        it has applied it.
+        """
+        return {name: held.failure for name, held in self._held.items()}
+
+    @property
+    def halted(self) -> SubscriptionHaltedError | None:
+        """The halt at an undecodable stored event (ADR-026), or None.
+
+        Stays set across a restart until the coordinator has got past the
+        position, so a health check sees the stop until it is really fixed.
+        """
+        return self._halt
 
     @property
     def projections(self) -> dict[str, CheckpointedProjection]:
@@ -356,16 +521,38 @@ class SubscriptionCoordinator:
 
         Public interface for testing and fitness tooling. Production code
         uses start(), which feeds each track from its own subscription.
+
+        Every projection is offered the event, even after one of them failed
+        it. A failed one is not checkpointed past it, so dispatching the same
+        envelope again redelivers it to that projection only.
+
+        Raises:
+            ProjectionHandlerFailedError: A projection failed the event. With
+                several, an ExceptionGroup of them.
         """
+        failures: list[ProjectionHandlerFailedError] = []
         for track in self._tracks:
-            await self._dispatch_to_track(track, envelope)
+            failures.extend(await self._dispatch_to_track(track, envelope))
+        if len(failures) == 1:
+            raise failures[0]
+        if failures:
+            raise ExceptionGroup("Projections failed to apply an event", failures)
 
     async def start(self) -> None:
         """
         Start the subscription coordinator with exponential-backoff retry.
 
-        Retries on any transient error (e.g. RST_STREAM, connection reset).
-        Stops only on explicit stop() or CancelledError.
+        Retries on any transient error (e.g. UNAVAILABLE, RST_STREAM,
+        connection reset) with exponential backoff. An undecodable stored
+        event (gRPC DATA_LOSS) is not transient: retrying fails at the same
+        position, so the coordinator halts there instead (#360, ADR-026). See
+        ``undecodable_recheck_interval`` for what halting means.
+
+        Raises:
+            SubscriptionHaltedError: On an undecodable stored event, when
+                ``undecodable_recheck_interval`` is None. ``halted`` holds the
+                same error. Fix it as its message says, then call start()
+                again.
         """
         if self._running:
             logger.warning("Subscription coordinator already running")
@@ -386,6 +573,14 @@ class SubscriptionCoordinator:
                 except Exception as e:
                     if not self._running:
                         break
+                    undecodable = _find_undecodable(e)
+                    if undecodable is not None:
+                        halt = await self._halt_at(undecodable)
+                        if self._undecodable_recheck_interval is None:
+                            self._running = False
+                            raise halt from undecodable
+                        await asyncio.sleep(self._undecodable_recheck_interval)
+                        continue
                     self._last_error = e
                     logger.warning(
                         "Subscription error — retrying in %.1fs",
@@ -401,6 +596,61 @@ class SubscriptionCoordinator:
             await self._close_drains(self._drains)
 
         logger.info("Subscription coordinator stopped")
+
+    async def _halt_at(self, undecodable: UndecodableEventError) -> SubscriptionHaltedError:
+        """Enter the halted state at ``undecodable``'s position.
+
+        Every track is already cancelled (one failing track fails the plan)
+        and nothing saves a checkpoint past the position: no projection was
+        handed the event. ProcessManager drains are stopped too, so no side
+        effect runs while the read model is stuck. A live one is woken again
+        by the next plan.
+        """
+        await self._close_drains(self._drains)
+        previous = self._halt
+        halt = SubscriptionHaltedError(undecodable.global_nonce, self._undecodable_recheck_interval)
+        self._halt = halt
+        # Nothing can clear it until a new plan says what still needs N.
+        self._halt_pending_tracks = set()
+        extra: dict[str, str | int | float | None] = {
+            "global_nonce": undecodable.global_nonce,
+            "recheck_interval": self._undecodable_recheck_interval,
+        }
+        if previous is None or previous.global_nonce != halt.global_nonce:
+            logger.error("%s", halt.message, extra=extra)
+        else:
+            # Same stop, re-checked: one ERROR per position, not per attempt.
+            logger.debug("Still halted at undecodable stored event", extra=extra)
+        return halt
+
+    def _plan_halt_clearance(self, tracks: list[_SubscriptionTrack]) -> None:
+        """Clear the halt, or note which tracks must pass its position first.
+
+        A track starting above the position cannot meet it again. One at or
+        below it has a projection that has not passed it: the halt holds
+        until that track delivers an event at or past the position, which
+        happens only once the row decodes again.
+        """
+        if self._halt is None:
+            return
+        position = self._halt.global_nonce
+        self._halt_pending_tracks = {
+            track.name for track in tracks if track.from_position <= position
+        }
+        if not self._halt_pending_tracks:
+            self._clear_halt()
+
+    def _clear_halt(self) -> None:
+        if self._halt is None:
+            return
+        logger.info(
+            "Resumed past undecodable stored event",
+            extra={"global_nonce": self._halt.global_nonce},
+        )
+        self._halt = None
+        self._halt_pending_tracks = set()
+        # Drains were held while halted; whatever is pending is actionable now.
+        self._wake_live_drains(self._tracks)
 
     async def _subscribe_loop(self) -> None:
         """
@@ -425,6 +675,7 @@ class SubscriptionCoordinator:
 
         self._live_boundary_nonce = await self._read_head_nonce()
         self._tracks = await self._plan_tracks(self._live_boundary_nonce)
+        self._plan_halt_clearance(self._tracks)
 
         # Items left pending before a restart must not wait for the next live
         # event to be noticed: wake every ProcessManager that is live already.
@@ -446,17 +697,143 @@ class SubscriptionCoordinator:
         # A failure on any track cancels the others and propagates, so start()
         # retries the whole plan with backoff rather than leaving the read
         # model half-fed by a track nobody is watching.
-        async with asyncio.TaskGroup() as group:
-            for track in self._tracks:
-                group.create_task(self._run_track(track))
+        # A projection failing an event is not a track failure: it is taken
+        # off its track and retried on its own (``_hold``), in this group.
+        try:
+            async with asyncio.TaskGroup() as group:
+                self._task_group = group
+                for track in self._tracks:
+                    group.create_task(self._run_track(track))
+        finally:
+            self._task_group = None
 
     async def _run_track(self, track: _SubscriptionTrack) -> None:
         """Feed one track from its own subscription until stopped."""
-        async for envelope in self._event_store.subscribe(from_global_nonce=track.from_position):
+        async for envelope in self._subscribe(track):
             if not self._running:
                 break
             self._last_error = None
-            await self._dispatch_to_track(track, envelope)
+            failures = await self._dispatch_to_track(track, envelope)
+            for failure in failures:
+                self._hold(track, failure)
+            if (
+                self._halt is not None
+                and track.name in self._halt_pending_tracks
+                and (envelope.metadata.global_nonce or 0) >= self._halt.global_nonce
+            ):
+                self._halt_pending_tracks.discard(track.name)
+                if not self._halt_pending_tracks:
+                    self._clear_halt()
+            if failures and not track.projections and track.name != LIVE_TRACK:
+                # Every member is held and retried on its own track; reading
+                # on would feed nobody. The live track stays, so the
+                # coordinator always holds a subscription on the live tail.
+                return
+
+    def _subscribe(self, track: _SubscriptionTrack) -> AsyncIterator[EventEnvelope[DomainEvent]]:
+        """Subscribe for ``track``, decoding only the types its projections handle.
+
+        Filter before decode (ADR-027): an event no projection on the track
+        handles is skipped, so it must not be decoded either. An evolved type
+        with no upcaster would otherwise raise an ``UndecodableEventError``
+        and halt every track for projections that never asked for it.
+        """
+        if not self._filters_types:
+            return self._event_store.subscribe(from_global_nonce=track.from_position)
+        store = cast("TypeFilteringSubscriber", self._event_store)
+        return store.subscribe(
+            from_global_nonce=track.from_position, event_types=_TrackEventTypes(track, self._current_members)
+        )
+
+    def _hold(self, track: _SubscriptionTrack, failure: ProjectionHandlerFailedError) -> None:
+        """Take the projection that failed off ``track`` and retry it alone.
+
+        The track's cursor moves on and the projection's checkpoint must not,
+        so the projection cannot stay on the track: its next successful event
+        would checkpoint past the failed one (#1696). Off the track it is fed
+        nothing, so its checkpoint stays below the failure, and every other
+        projection keeps consuming. After a backoff a track of its own
+        resumes it from that checkpoint, which delivers the event again.
+        """
+        name = failure.projection_name
+        projection = track.projections.pop(name, None)
+        track.unsaved_skips.pop(name, None)
+        # The generation it was held under. A rebuild after this point makes
+        # the retry stale (see _retry_held).
+        generation = track.generations.pop(name, 0)
+        if projection is None:
+            return
+        attempts = self._held[name].attempts if name in self._held else 1
+        delay = _held_retry_delay(attempts)
+        logger.warning(
+            "Projection held below an event it failed to apply; retrying it alone",
+            extra={
+                "projection_name": name,
+                "event_type": failure.event_type,
+                "global_nonce": failure.global_nonce,
+                "track": track.name,
+                "attempts": attempts,
+                "retry_in_seconds": delay,
+            },
+        )
+        group = self._task_group
+        if group is None:
+            return  # no plan running; the next plan resumes it from its checkpoint
+        try:
+            group.create_task(self._retry_held(name, projection, generation, delay))
+        except RuntimeError:
+            # The plan is shutting down; the next one resumes it from its
+            # checkpoint, which is still below the failure.
+            return
+
+    async def _retry_held(
+        self, name: str, projection: CheckpointedProjection, generation: int, delay: float
+    ) -> None:
+        """After ``delay``, feed a held projection from its checkpoint on its own track.
+
+        ``generation`` is the one it was held under, never the current one. A
+        rebuild_projection() in between bumps the generation first and deletes
+        the checkpoint after, so a retry reading the generation now could pair
+        the new generation with the old checkpoint and, once the rebuild has
+        cleared the data, resume above history it no longer has. Read under
+        the checkpoint lock, and given up if the generation moved: a rebuilt
+        projection is fed by the next plan, from 0, as rebuild_projection says.
+        """
+        await asyncio.sleep(delay)
+        if not self._running:
+            return
+        async with self._checkpoint_lock(name):
+            if self._generations.get(name, 0) != generation:
+                logger.info(
+                    "Held projection was rebuilt; dropping its retry",
+                    extra={"projection_name": name},
+                )
+                return
+            resume_from = await self._resume_position(name, projection)
+        track = self._catch_up_track(
+            f"retry-{name}",
+            [_BehindProjection(name, projection, resume_from, generation)],
+            self._live_boundary_nonce,
+        )
+        self._tracks.append(track)
+        logger.info(
+            "Starting subscription track",
+            extra={
+                "track": track.name,
+                "from_position": track.from_position,
+                "is_catching_up": track.is_catching_up,
+                "live_boundary_nonce": self._live_boundary_nonce,
+                "projection_count": 1,
+                "projection_names": [name],
+            },
+        )
+        # Already live: whatever it left pending is actionable again.
+        self._wake_live_drains([track])
+        try:
+            await self._run_track(track)
+        finally:
+            if track in self._tracks:
+                self._tracks.remove(track)
 
     async def _read_head_nonce(self) -> int:
         """
@@ -470,9 +847,24 @@ class SubscriptionCoordinator:
         from_global_nonce is inclusive, so a backwards read returns events
         with global_nonce <= from_global_nonce; 0 would return nothing useful.
         """
-        head_events, _is_end, _next = await self._event_store.read_all(
-            from_global_nonce=sys.maxsize, max_count=1, forward=False,
-        )
+        try:
+            head_events, _is_end, _next = await self._event_store.read_all(
+                from_global_nonce=sys.maxsize, max_count=1, forward=False,
+            )
+        except UndecodableEventError as e:
+            # The probe reads only the highest row, so the undecodable event
+            # IS the head. Its position is enough for the boundary, and lets
+            # projections whose checkpoint an operator moved past it resume
+            # (ADR-026). Anyone still before it hits the error again on
+            # subscribe, which is the intended stop.
+            # Once per position: while halted there, re-checks repeat it.
+            already_halted_here = self._halt is not None and self._halt.global_nonce == e.global_nonce
+            logger.log(
+                logging.DEBUG if already_halted_here else logging.WARNING,
+                "Head event is undecodable; using its position as the live boundary",
+                extra={"global_nonce": e.global_nonce},
+            )
+            return e.global_nonce
         if head_events and head_events[0].metadata.global_nonce is not None:
             return head_events[0].metadata.global_nonce
         return 0
@@ -508,18 +900,28 @@ class SubscriptionCoordinator:
         for track in tracks:
             if track.is_catching_up:
                 continue
-            for name in track.projections:
-                if self._is_current(track, name):
+            for name in list(track.projections):
+                if self._is_member(track, name):
                     self._wake(name)
 
     def _wake(self, name: str) -> None:
-        """Wake ``name``'s drain, if it is a ProcessManager and wakes are open."""
+        """Wake ``name``'s drain, if it is a ProcessManager and wakes are open.
+
+        Never while halted at an undecodable event: re-check attempts re-plan
+        and would otherwise run side effects between failures (#360).
+        ``_clear_halt`` wakes the live drains once the halt is over. Nor while
+        ``name`` is held below an event it failed (#1696): its to-do list is
+        missing that event. Recovery wakes it.
+        """
         drain = self._drains.get(name)
-        if drain is not None and self._wakes_open:
+        if drain is not None and self._wakes_open and self._halt is None and name not in self._held:
             drain.wake()
 
     def _drain_for(self, name: str, process_manager: ProcessManager) -> ProcessManagerDrain:
-        return ProcessManagerDrain(process_manager, may_run=lambda: self._is_live(name))
+        return ProcessManagerDrain(
+            process_manager,
+            may_run=lambda: self._halt is None and self._is_live(name),
+        )
 
     def _is_live(self, name: str) -> bool:
         """True when the track currently feeding ``name`` is past its catch-up.
@@ -528,17 +930,27 @@ class SubscriptionCoordinator:
         must not unlock side effects for a replay still in history. A
         projection on no track is not being fed, so it is not live either,
         and nor is one whose only track was planned before it was rebuilt.
+        Nor is one held below an event it failed (#1696): a retry track can
+        start live, but its to-do list is missing that event until it applies
+        it.
         """
+        if name in self._held:
+            return False
         return any(
-            name in track.projections
-            and self._is_current(track, name)
-            and not track.is_catching_up
-            for track in self._tracks
+            self._is_member(track, name) and not track.is_catching_up for track in self._tracks
         )
 
-    def _is_current(self, track: _SubscriptionTrack, name: str) -> bool:
-        """False once ``name`` was rebuilt after ``track`` was planned."""
-        return track.generations.get(name, 0) == self._generations.get(name, 0)
+    def _is_member(self, track: _SubscriptionTrack, name: str) -> bool:
+        """True while ``track`` feeds ``name``: on it, and not rebuilt since it was planned.
+
+        The one test for dispatch, type filtering and drain eligibility.
+        """
+        return name in track.projections and (
+            track.generations.get(name, 0) == self._generations.get(name, 0)
+        )
+
+    def _current_members(self, track: _SubscriptionTrack) -> list[CheckpointedProjection]:
+        return [p for name, p in track.projections.items() if self._is_member(track, name)]
 
     @staticmethod
     async def _close_drains(drains: dict[str, ProcessManagerDrain]) -> None:
@@ -616,7 +1028,7 @@ class SubscriptionCoordinator:
 
         tracks = [
             _SubscriptionTrack(
-                name="live",
+                name=LIVE_TRACK,
                 from_position=live_boundary_nonce + 1,
                 projections=at_head,
                 # Starts above the boundary by construction, so every event it
@@ -716,7 +1128,7 @@ class SubscriptionCoordinator:
         self,
         track: _SubscriptionTrack,
         envelope: EventEnvelope[DomainEvent],
-    ) -> None:
+    ) -> list[ProjectionHandlerFailedError]:
         """
         Dispatch an event to the projections on one track.
 
@@ -728,36 +1140,70 @@ class SubscriptionCoordinator:
         comes from which projections share a track, decided in
         ``_plan_tracks``, and not from this loop.
 
+        A projection that fails the event does not stop the others taking
+        it. Its checkpoint stays below the event, and the failure is returned
+        for the caller to act on: ``_run_track`` takes it off the track.
+
         Args:
             track: The track the event arrived on
             envelope: Event envelope to dispatch
+
+        Returns:
+            One failure per projection that did not apply the event.
         """
         global_nonce = envelope.metadata.global_nonce or 0
+        failures: list[ProjectionHandlerFailedError] = []
 
         # Transition: catch-up -> live when this track passes the boundary
         # nonce. Uses > (strictly greater): events at the boundary were
         # already in the store when we subscribed, so they are historical.
         if track.is_catching_up and global_nonce > self._live_boundary_nonce:
-            track.is_catching_up = False
-            logger.info(
-                "Subscription track transitioned to live mode",
-                extra={
-                    "track": track.name,
-                    "global_nonce": global_nonce,
-                    "live_boundary_nonce": self._live_boundary_nonce,
-                },
-            )
-            # Whatever the replay left on these to-do lists is now actionable.
-            self._wake_live_drains([track])
+            self._go_live(track, global_nonce)
 
-        for name, projection in track.projections.items():
+        for name, projection in list(track.projections.items()):
+            held = self._held.get(name)
+            if held is not None and global_nonce > held.failure.global_nonce:
+                # It must take the event it is held below first. Handing it
+                # a later one, even one it skips, would checkpoint past it.
+                continue
             # Held across the handler, so rebuild_projection() cannot delete
             # the checkpoint underneath it and the handler's own save cannot
             # land after the delete.
             async with self._checkpoint_lock(name):
-                if not self._is_current(track, name):
+                if not self._is_member(track, name):
                     continue  # rebuilt since this track was planned
-                await self._dispatch_under_lock(track, name, projection, envelope)
+                try:
+                    await self._dispatch_under_lock(track, name, projection, envelope)
+                except ProjectionHandlerFailedError as failure:
+                    failures.append(failure)
+                    self._record_failure(failure)
+                    if not track.is_catching_up:
+                        self._resume_live.add(name)
+                    failed = True
+                else:
+                    failed = False
+            if failed:
+                # Wakes and may_run only gate a drain that has not started. One
+                # already inside process_pending() would go on running side
+                # effects while held, so it is cancelled. Safe: the contract
+                # makes process_pending() idempotent, and recovery wakes it.
+                drain = self._drains.get(name)
+                if drain is not None:
+                    await drain.close()
+                continue
+            held = self._held.get(name)
+            if held is not None and global_nonce >= held.failure.global_nonce:
+                # Delivered in order from below the failure without failing:
+                # the event it was held below has been applied.
+                del self._held[name]
+                logger.info(
+                    "Held projection applied the event it was held below",
+                    extra={"projection_name": name, "global_nonce": held.failure.global_nonce},
+                )
+                # Recovered: a live ProcessManager's to-do list is complete again.
+                if not track.is_catching_up:
+                    self._resume_live.discard(name)
+                    self._wake(name)
 
         # Save the held-back skips periodically, and all of them once the
         # track has delivered the last historical event, so a projection that
@@ -767,6 +1213,49 @@ class SubscriptionCoordinator:
             or global_nonce - track.skips_saved_at >= CATCH_UP_SKIP_CHECKPOINT_INTERVAL
         ):
             await self._save_skips(track, global_nonce)
+
+        # A projection that failed live event N and was re-planned with a head
+        # H >= N (a reconnect) catches up on a track that would only go live
+        # past H, at an event that may never come: its drain would never run
+        # again. Once the track has delivered H with it on board and not held,
+        # the track is at head, so it goes live then (see ``_resume_live``).
+        # Every member has taken H; nothing is replayed.
+        if (
+            track.is_catching_up
+            and global_nonce >= self._live_boundary_nonce
+            and any(
+                name in self._resume_live and name not in self._held
+                for name in track.projections
+                if self._is_member(track, name)
+            )
+        ):
+            self._go_live(track, global_nonce)
+
+        return failures
+
+    def _go_live(self, track: _SubscriptionTrack, global_nonce: int) -> None:
+        track.is_catching_up = False
+        self._resume_live.difference_update(
+            name for name in track.projections if name not in self._held
+        )
+        logger.info(
+            "Subscription track transitioned to live mode",
+            extra={
+                "track": track.name,
+                "global_nonce": global_nonce,
+                "live_boundary_nonce": self._live_boundary_nonce,
+            },
+        )
+        # Whatever the replay left on these to-do lists is now actionable.
+        self._wake_live_drains([track])
+
+    def _record_failure(self, failure: ProjectionHandlerFailedError) -> None:
+        """Note ``failure`` against its projection, counting repeats of one event."""
+        name = failure.projection_name
+        previous = self._held.get(name)
+        same_event = previous is not None and previous.failure.global_nonce == failure.global_nonce
+        attempts = previous.attempts + 1 if previous is not None and same_event else 1
+        self._held[name] = _HeldProjection(failure=failure, attempts=attempts)
 
     async def _dispatch_under_lock(
         self,
@@ -808,7 +1297,7 @@ class SubscriptionCoordinator:
     async def _save_skip(self, track: _SubscriptionTrack, name: str) -> None:
         async with self._checkpoint_lock(name):
             position = track.unsaved_skips.pop(name, None)
-            if position is not None and self._is_current(track, name):
+            if position is not None and self._is_member(track, name):
                 await self._advance_checkpoint_if_behind(name, position)
 
     async def _save_skips(self, track: _SubscriptionTrack, global_nonce: int) -> None:
@@ -824,6 +1313,17 @@ class SubscriptionCoordinator:
     ) -> None:
         """
         Dispatch an event to a single projection with error handling.
+
+        A handler that fails, by returning FAILURE or by raising, raises
+        ProjectionHandlerFailedError here. Logging and moving on is not an
+        option: the track's cursor moves on, and the projection's next
+        successful event would save a checkpoint above the one that failed.
+        Nothing re-reads below a checkpoint, so the event would be lost until
+        a rebuild, with the read model reporting itself current
+        (syntropic137#1696). The caller holds the projection below the event
+        instead (``_hold``) and feeds it again after a backoff; a handler that
+        keeps failing holds its read model at that event, visibly
+        (``held_projections``, ``is_healthy``), rather than skipping it.
 
         Args:
             track: The track the event arrived on, source of catch-up state
@@ -854,7 +1354,7 @@ class SubscriptionCoordinator:
                         "global_nonce": global_nonce,
                     },
                 )
-                # DO NOT advance checkpoint - event will be retried
+                raise ProjectionHandlerFailedError(name, event_type, global_nonce)
             elif result == ProjectionResult.SUCCESS:
                 logger.debug(
                     "Projection processed event",
@@ -889,6 +1389,8 @@ class SubscriptionCoordinator:
                 )
                 await self._advance_checkpoint_if_behind(name, global_nonce)
 
+        except ProjectionHandlerFailedError:
+            raise
         except Exception as e:
             logger.error(
                 "Projection raised exception",
@@ -900,7 +1402,7 @@ class SubscriptionCoordinator:
                 },
                 exc_info=True,
             )
-            # DO NOT advance checkpoint - event will be retried
+            raise ProjectionHandlerFailedError(name, event_type, global_nonce) from e
 
     async def _advance_checkpoint_if_behind(
         self,
@@ -972,6 +1474,7 @@ class SubscriptionCoordinator:
             # after the delete below. Taking the lock first lets a dispatch or
             # skip save already in flight finish before the delete.
             self._generations[projection_name] = self._generations.get(projection_name, 0) + 1
+            self._resume_live.discard(projection_name)  # replays from 0
             for track in self._tracks:
                 track.unsaved_skips.pop(projection_name, None)
 

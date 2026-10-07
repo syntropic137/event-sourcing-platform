@@ -54,21 +54,43 @@ await client.appendEvents(\{
 ### Client Configuration
 
 ```typescript
-interface EventStoreClientConfig {
-  endpoint: string;
-  credentials?: {
-    username: string;
-    password: string;
-  };
-  tls?: {
-    caCertificate?: Buffer;
-    clientCertificate?: Buffer;
-    clientKey?: Buffer;
-  };
-  connectionTimeout?: number;
-  requestTimeout?: number;
-}
+import { readFileSync } from "node:fs";
+import {
+  Credentials,
+  EventStoreClientTS,
+  SharedToken,
+  UnauthenticatedError,
+} from "@eventstore/sdk-ts";
+
+// host:port (plaintext), http://host:port, or https://host:port (TLS, default roots)
+const local = new EventStoreClientTS("localhost:50051");
+
+// ADR-024 gateway: `authorization: Basic ...` on every call, unary and subscribe
+const client = new EventStoreClientTS("https://events.example.com:443", {
+  auth: Credentials.basic("admin", process.env.ESP_GATEWAY_PASSWORD!),
+  tls: { rootCerts: readFileSync("ca.pem"), serverName: "events.example.com" },
+});
+
+// Bearer token read per call, so it can rotate without reconnecting
+const token = new SharedToken(initialToken);
+const rotating = new EventStoreClientTS("https://events.example.com:443", {
+  auth: Credentials.tokenProvider(token.provider), // or an async () => string
+});
+token.set(refreshedToken); // takes effect on the next call
 ```
+
+| Option | Meaning |
+|--------|---------|
+| `auth` | `Credentials.basic(user, pass)`, `Credentials.bearer(token)`, `Credentials.tokenProvider(fn)`, or the plain forms `{ basic: { username, password } }`, `{ bearerToken }`, `{ tokenProvider }` |
+| `tls` | `true` or `{ rootCerts?, privateKey?, certChain?, serverName? }`; implied by `https://`. Certificates are always verified |
+| `credentials` | Custom grpc-js `ChannelCredentials` (secure ones count as TLS) |
+| `allowInsecureCredentials` | Send `auth` over plaintext to a non-loopback host. Default `false`: the constructor throws `ConfigError` |
+
+Credentials are redacted from `toString`, `util.inspect` and `JSON.stringify`.
+Rejected credentials (or a failing token provider) reject with
+`UnauthenticatedError` (`code === status.UNAUTHENTICATED`); the iterator
+from `subscribe` rejects with it too. `EventStoreClientRT` takes the same
+options.
 
 ### Event Definition
 

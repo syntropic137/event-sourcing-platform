@@ -159,8 +159,8 @@ impl Manifest {
         }
 
         // Optionally scan domain model
-        let domain = if include_domain && config.domain.is_some() {
-            let domain_config = config.domain.as_ref().unwrap();
+        let domain = if let Some(domain_config) = config.domain.as_ref().filter(|_| include_domain)
+        {
             let domain_scanner = DomainScanner::new(domain_config.clone(), root.clone())
                 .with_filename_convention(config.patterns.filename_convention.clone());
 
@@ -332,11 +332,7 @@ impl Manifest {
         let content = match fs::read_to_string(&path) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!(
-                    "  ⚠ Warning: could not read {}: {}",
-                    path.display(),
-                    e
-                );
+                eprintln!("  ⚠ Warning: could not read {}: {}", path.display(), e);
                 return None;
             }
         };
@@ -344,11 +340,7 @@ impl Manifest {
         let yaml: serde_yaml::Value = match serde_yaml::from_str(&content) {
             Ok(v) => v,
             Err(e) => {
-                eprintln!(
-                    "  ⚠ Warning: could not parse {}: {}",
-                    path.display(),
-                    e
-                );
+                eprintln!("  ⚠ Warning: could not parse {}: {}", path.display(), e);
                 return None;
             }
         };
@@ -357,7 +349,7 @@ impl Manifest {
         let key = |s: &str| serde_yaml::Value::String(s.to_string());
 
         // Priority 1: Explicit `type:` field
-        if let Some(type_val) = mapping.get(&key("type")) {
+        if let Some(type_val) = mapping.get(key("type")) {
             if let Some(type_str) = type_val.as_str() {
                 return Some(match type_str.to_lowercase().as_str() {
                     "command" => SliceType::Command,
@@ -370,10 +362,10 @@ impl Manifest {
         }
 
         // Priority 2: Infer from section keys
-        let has_query = mapping.contains_key(&key("query"));
-        let has_command = mapping.contains_key(&key("command"));
-        let has_projection = mapping.contains_key(&key("projection"));
-        let has_read_model = mapping.contains_key(&key("read_model"));
+        let has_query = mapping.contains_key(key("query"));
+        let has_command = mapping.contains_key(key("command"));
+        let has_projection = mapping.contains_key(key("projection"));
+        let has_read_model = mapping.contains_key(key("read_model"));
 
         if has_command && (has_query || has_projection) {
             Some(SliceType::Mixed)
@@ -796,24 +788,15 @@ mod tests {
             "pub struct WorkspaceCreated;\n",
         )
         .unwrap();
-        std::fs::write(
-            domain.join("queries/get_workspace_query.rs"),
-            "pub struct GetWorkspace;\n",
-        )
-        .unwrap();
+        std::fs::write(domain.join("queries/get_workspace_query.rs"), "pub struct GetWorkspace;\n")
+            .unwrap();
 
         let config = snake_case_rust_config(root.clone());
         let manifest = Manifest::generate_with_options(&config, root.clone(), true).unwrap();
 
         let domain_manifest = manifest.domain.expect("domain manifest should be present");
-        assert!(
-            !domain_manifest.commands.is_empty(),
-            "snake_case *_command.rs must be detected"
-        );
-        assert!(
-            !domain_manifest.events.is_empty(),
-            "snake_case *_event.rs must be detected"
-        );
+        assert!(!domain_manifest.commands.is_empty(), "snake_case *_command.rs must be detected");
+        assert!(!domain_manifest.events.is_empty(), "snake_case *_event.rs must be detected");
         assert!(
             !domain_manifest.aggregates.is_empty(),
             "snake_case *_aggregate.rs must be detected"
@@ -822,10 +805,8 @@ mod tests {
         // Control: with the default pascal_case convention the same tree yields
         // zero domain artifacts, proving the convention is what unblocks them.
         let mut pascal_config = snake_case_rust_config(root.clone());
-        pascal_config.patterns.filename_convention =
-            crate::config::FilenameConvention::PascalCase;
-        let pascal_manifest =
-            Manifest::generate_with_options(&pascal_config, root, true).unwrap();
+        pascal_config.patterns.filename_convention = crate::config::FilenameConvention::PascalCase;
+        let pascal_manifest = Manifest::generate_with_options(&pascal_config, root, true).unwrap();
         let pascal_domain = pascal_manifest.domain.expect("domain manifest present");
         assert!(pascal_domain.commands.is_empty());
         assert!(pascal_domain.events.is_empty());
@@ -924,63 +905,42 @@ mod tests {
     fn test_yaml_explicit_type_query() {
         let dir = tempfile::tempdir().unwrap();
         write_slice_yaml(dir.path(), "name: trigger_history\ntype: query\n");
-        assert_eq!(
-            Manifest::detect_slice_type_from_yaml(dir.path()),
-            Some(SliceType::Query)
-        );
+        assert_eq!(Manifest::detect_slice_type_from_yaml(dir.path()), Some(SliceType::Query));
     }
 
     #[test]
     fn test_yaml_explicit_type_command() {
         let dir = tempfile::tempdir().unwrap();
         write_slice_yaml(dir.path(), "name: create_order\ntype: command\n");
-        assert_eq!(
-            Manifest::detect_slice_type_from_yaml(dir.path()),
-            Some(SliceType::Command)
-        );
+        assert_eq!(Manifest::detect_slice_type_from_yaml(dir.path()), Some(SliceType::Command));
     }
 
     #[test]
     fn test_yaml_explicit_type_saga() {
         let dir = tempfile::tempdir().unwrap();
         write_slice_yaml(dir.path(), "name: order_process\ntype: saga\n");
-        assert_eq!(
-            Manifest::detect_slice_type_from_yaml(dir.path()),
-            Some(SliceType::Saga)
-        );
+        assert_eq!(Manifest::detect_slice_type_from_yaml(dir.path()), Some(SliceType::Saga));
     }
 
     #[test]
     fn test_yaml_explicit_type_mixed() {
         let dir = tempfile::tempdir().unwrap();
         write_slice_yaml(dir.path(), "name: orders\ntype: mixed\n");
-        assert_eq!(
-            Manifest::detect_slice_type_from_yaml(dir.path()),
-            Some(SliceType::Mixed)
-        );
+        assert_eq!(Manifest::detect_slice_type_from_yaml(dir.path()), Some(SliceType::Mixed));
     }
 
     #[test]
     fn test_yaml_explicit_type_case_insensitive() {
         let dir = tempfile::tempdir().unwrap();
         write_slice_yaml(dir.path(), "name: list_items\ntype: Query\n");
-        assert_eq!(
-            Manifest::detect_slice_type_from_yaml(dir.path()),
-            Some(SliceType::Query)
-        );
+        assert_eq!(Manifest::detect_slice_type_from_yaml(dir.path()), Some(SliceType::Query));
     }
 
     #[test]
     fn test_yaml_query_section_key() {
         let dir = tempfile::tempdir().unwrap();
-        write_slice_yaml(
-            dir.path(),
-            "name: list_repos\nquery:\n  name: ListReposQuery\n",
-        );
-        assert_eq!(
-            Manifest::detect_slice_type_from_yaml(dir.path()),
-            Some(SliceType::Query)
-        );
+        write_slice_yaml(dir.path(), "name: list_repos\nquery:\n  name: ListReposQuery\n");
+        assert_eq!(Manifest::detect_slice_type_from_yaml(dir.path()), Some(SliceType::Query));
     }
 
     #[test]
@@ -990,49 +950,28 @@ mod tests {
             dir.path(),
             "name: get_installation\nprojection:\n  name: InstallationProjection\n",
         );
-        assert_eq!(
-            Manifest::detect_slice_type_from_yaml(dir.path()),
-            Some(SliceType::Query)
-        );
+        assert_eq!(Manifest::detect_slice_type_from_yaml(dir.path()), Some(SliceType::Query));
     }
 
     #[test]
     fn test_yaml_read_model_key_infers_query() {
         let dir = tempfile::tempdir().unwrap();
-        write_slice_yaml(
-            dir.path(),
-            "name: get_status\nread_model:\n  name: StatusReadModel\n",
-        );
-        assert_eq!(
-            Manifest::detect_slice_type_from_yaml(dir.path()),
-            Some(SliceType::Query)
-        );
+        write_slice_yaml(dir.path(), "name: get_status\nread_model:\n  name: StatusReadModel\n");
+        assert_eq!(Manifest::detect_slice_type_from_yaml(dir.path()), Some(SliceType::Query));
     }
 
     #[test]
     fn test_yaml_command_section_key() {
         let dir = tempfile::tempdir().unwrap();
-        write_slice_yaml(
-            dir.path(),
-            "name: place_order\ncommand:\n  name: PlaceOrderCommand\n",
-        );
-        assert_eq!(
-            Manifest::detect_slice_type_from_yaml(dir.path()),
-            Some(SliceType::Command)
-        );
+        write_slice_yaml(dir.path(), "name: place_order\ncommand:\n  name: PlaceOrderCommand\n");
+        assert_eq!(Manifest::detect_slice_type_from_yaml(dir.path()), Some(SliceType::Command));
     }
 
     #[test]
     fn test_yaml_command_and_query_keys_infer_mixed() {
         let dir = tempfile::tempdir().unwrap();
-        write_slice_yaml(
-            dir.path(),
-            "name: orders\ncommand:\n  name: Cmd\nquery:\n  name: Qry\n",
-        );
-        assert_eq!(
-            Manifest::detect_slice_type_from_yaml(dir.path()),
-            Some(SliceType::Mixed)
-        );
+        write_slice_yaml(dir.path(), "name: orders\ncommand:\n  name: Cmd\nquery:\n  name: Qry\n");
+        assert_eq!(Manifest::detect_slice_type_from_yaml(dir.path()), Some(SliceType::Mixed));
     }
 
     #[test]
@@ -1059,10 +998,7 @@ mod tests {
     fn test_yaml_slice_yml_extension() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("slice.yml"), "name: orders\ntype: command\n").unwrap();
-        assert_eq!(
-            Manifest::detect_slice_type_from_yaml(dir.path()),
-            Some(SliceType::Command)
-        );
+        assert_eq!(Manifest::detect_slice_type_from_yaml(dir.path()), Some(SliceType::Command));
     }
 
     #[test]
@@ -1070,20 +1006,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_slice_yaml(dir.path(), "name: list_items\ntype: query\n");
         let files = vec!["CreateItemCommand.py".to_string()];
-        assert_eq!(
-            Manifest::detect_slice_type(dir.path(), &files),
-            SliceType::Query
-        );
+        assert_eq!(Manifest::detect_slice_type(dir.path(), &files), SliceType::Query);
     }
 
     #[test]
     fn test_files_used_when_no_yaml() {
         let dir = tempfile::tempdir().unwrap();
         let files = vec!["CreateOrderCommand.ts".to_string()];
-        assert_eq!(
-            Manifest::detect_slice_type(dir.path(), &files),
-            SliceType::Command
-        );
+        assert_eq!(Manifest::detect_slice_type(dir.path(), &files), SliceType::Command);
     }
 
     #[test]
@@ -1093,9 +1023,6 @@ mod tests {
             dir.path(),
             "name: mixed_slice\ntype: command\nquery:\n  name: SomeQuery\n",
         );
-        assert_eq!(
-            Manifest::detect_slice_type_from_yaml(dir.path()),
-            Some(SliceType::Command)
-        );
+        assert_eq!(Manifest::detect_slice_type_from_yaml(dir.path()), Some(SliceType::Command));
     }
 }

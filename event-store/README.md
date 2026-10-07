@@ -67,6 +67,9 @@ A minimal gRPC-based Event Store implemented in Rust with an in-memory backend. 
     - `BACKEND` = `memory` | `postgres`
     - `DATABASE_URL` when `BACKEND=postgres`
     - `BIND_ADDR` (default `0.0.0.0:50051`)
+    - Postgres pool size and timeouts (`PG_POOL_MAX_CONNECTIONS` default 10,
+      `PG_STATEMENT_TIMEOUT_MS` default 30000, ...): see
+      [`docs/operations/POSTGRES-CONNECTIONS.md`](../docs/operations/POSTGRES-CONNECTIONS.md)
 
 ### How-To: Smoke test
 
@@ -122,6 +125,9 @@ A Docusaurus-powered documentation site is available for a richer reading experi
 
 - Run all checks and tests: `make qa`
 - Lints only: `make fmt` and `make clippy`
+- Recovery drills (Docker, slow, not part of `qa`): `make recovery-drill`.
+  Restart, retry, outage and backup/restore guarantees are documented in
+  [docs/operations/BACKUP-RESTORE.md](../docs/operations/BACKUP-RESTORE.md).
 
 ### Coverage
 

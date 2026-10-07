@@ -9,7 +9,8 @@ This directory contains Rust examples demonstrating event sourcing patterns with
 **Focus:** Basic aggregate pattern with command handlers
 
 Demonstrates:
-- `Aggregate` trait for state management
+- One struct per event (`EventSchema`) grouped with `event_enum!`; payloads use the cross-language envelope (ADR-027)
+- `Aggregate` trait with a stable `AGGREGATE_TYPE`, for state management
 - `AggregateRoot` trait for command handling
 - Business validation in `handle_command()`
 - State updates only in `apply_event()`
@@ -32,6 +33,21 @@ Demonstrates:
 
 **Commands:** 7 (CreateOrder, AddItem, RemoveItem, ConfirmOrder, ShipOrder, DeliverOrder, CancelOrder)
 
+### 3. repository.rs ⭐⭐ Intermediate
+**Complexity:** Persistence against a live event store
+**Focus:** `EventStoreClient` + `EventStoreRepository`
+
+Demonstrates:
+- Connecting the high-level SDK to the gRPC event store (`EventStoreClient::connect`)
+- `AggregateInstance::execute` to run a command and record pending events
+- `Repository::save` with optimistic concurrency (expected stream revision)
+- `Repository::load` replaying a stream
+- A stale writer receiving a typed `Error::ConcurrencyConflict`
+
+Starts an in-memory event store in-process unless `EVENT_STORE_ADDR` is set.
+See the `repository` module docs for retry, idempotency, and pending-event
+semantics (including unknown-outcome saves).
+
 ## ADR-004 Pattern in Rust
 
 Unlike TypeScript and Python which use decorators, Rust implements ADR-004 using traits:
@@ -49,8 +65,9 @@ struct MyAggregate {
 
 // State management trait
 impl Aggregate for MyAggregate {
-    type Event = MyEvent;
+    type Event = MyEvent; // an event_enum! of EventSchema structs
     type Error = Error;
+    const AGGREGATE_TYPE: &'static str = "My"; // stable, shared with TS/Python
 
     fn aggregate_id(&self) -> Option<&str> {
         self.id.as_deref()
@@ -88,7 +105,8 @@ impl AggregateRoot for MyAggregate {
 
 | Aspect | TypeScript/Python | Rust |
 |--------|------------------|------|
-| Aggregate Marking | `@Aggregate` decorator | `impl Aggregate` trait |
+| Aggregate Marking | `@Aggregate('Order')` decorator | `impl Aggregate` with `AGGREGATE_TYPE = "Order"` |
+| Event Type/Version | `@Event('OrderPlaced', 'v1')` | `impl EventSchema` (`EVENT_TYPE`, `EVENT_VERSION`) |
 | Command Handlers | `@CommandHandler` decorator | `impl AggregateRoot` trait |
 | Event Handlers | `@EventSourcingHandler` decorator | `apply_event()` method |
 | Event Emission | `this.apply(event)` / `self._apply(event)` | Return `Vec<Event>` |
@@ -110,7 +128,7 @@ All three language implementations follow these principles:
 
 ### Prerequisites
 
-- Rust 1.70+ (stable)
+- Rust 1.80+ (stable)
 - Cargo
 
 ### Build Examples
@@ -133,6 +151,9 @@ cargo run --example basic_aggregate
 
 # Run order processing
 cargo run --example order_processing
+
+# Run the repository example (live gRPC event store, in-process by default)
+cargo run --example repository
 ```
 
 Expected output shows:

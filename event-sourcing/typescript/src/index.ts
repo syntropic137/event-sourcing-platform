@@ -13,13 +13,14 @@ export * from './core/event';
 export * from './core/repository';
 export * from './core/query';
 export * from './core/errors';
+export * from './core/upcast';
 
 // Event store client integration
 export type { EventStoreClient, EventStoreClientConfig } from './client/event-store-client';
 export { EventStoreClientFactory } from './client/event-store-client';
 
 // gRPC adapter (thin wrapper around event-store TS SDK)
-export { GrpcEventStoreAdapter } from './integrations/grpc-event-store';
+export { GrpcEventStoreAdapter, type GrpcConnectionOptions } from './integrations/grpc-event-store';
 
 // In-memory store for local dev and tests
 export { MemoryEventStoreClient } from './client/event-store-memory';
