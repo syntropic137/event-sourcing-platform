@@ -211,6 +211,25 @@ async fn filtered_live_subscriber_sees_only_its_events_in_order() {
 }
 
 #[tokio::test]
+async fn store_shutdown_ends_live_subscription_with_an_error() {
+    let store = InMemoryStore::new();
+    append_batch(&store, TENANT, "agg-close", 0, 1).await;
+    let mut sub = subscribe(&store, TENANT, "");
+    drop(store); // last owner: the broadcast channel closes
+
+    let replayed = sub.next().await.expect("replayed event").expect("ok");
+    assert_eq!(replayed.event.unwrap().meta.unwrap().global_nonce, 1);
+    match tokio::time::timeout(Duration::from_secs(5), sub.next())
+        .await
+        .expect("timeout")
+    {
+        Some(Err(StoreError::Unavailable(msg))) => assert!(msg.contains("closed"), "{msg}"),
+        other => panic!("closure must surface as an error, got {other:?}"),
+    }
+    assert!(sub.next().await.is_none(), "stream ends after the error");
+}
+
+#[tokio::test]
 async fn lagging_subscriber_gets_an_error_then_resubscribes_from_checkpoint() {
     let store = InMemoryStore::with_broadcast_capacity(4);
     // Lag is the memory backend's only way to stop delivering; surfacing it

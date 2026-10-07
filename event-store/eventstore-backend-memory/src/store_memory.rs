@@ -180,9 +180,10 @@ impl EventStore for InMemoryStore {
         // commit_ordered_global_nonce: appends allocate global nonces and
         // publish them under the same write lock, so visibility order equals
         // allocation order.
-        // subscription_errors_surfaced: the only way a memory subscription
-        // can stop delivering is a lagged receiver, which ends the stream with
-        // RESOURCE_EXHAUSTED (see `subscribe`); there are no backend queries.
+        // subscription_errors_surfaced: there are no backend queries. A
+        // memory subscription stops delivering only if its receiver lags
+        // (RESOURCE_EXHAUSTED) or the store is dropped (UNAVAILABLE); both end
+        // the stream with an error (see `subscribe` / `EndAfterError`).
         // undecodable_events_surfaced: events are held as decoded protobuf
         // messages, so there is no decode step that could fail or skip one.
         vec![
@@ -581,8 +582,11 @@ impl EventStore for InMemoryStore {
     }
 }
 
-/// Yields items from `inner` until (and including) the first error, then
-/// ends without polling `inner` again.
+/// Yields items from the live stream until (and including) the first error,
+/// then ends without polling it again. The live stream never ends on its own
+/// while the store exists, so if it does end (the store was dropped and the
+/// broadcast channel closed) that is surfaced as an error too, never as a
+/// silent end of stream.
 struct EndAfterError<S> {
     inner: Pin<Box<S>>,
     done: bool,
@@ -599,8 +603,16 @@ where
             return Poll::Ready(None);
         }
         let item = self.inner.as_mut().poll_next(cx);
-        if let Poll::Ready(Some(Err(_))) = &item {
-            self.done = true;
+        match item {
+            Poll::Ready(Some(Err(_))) => self.done = true,
+            Poll::Ready(None) => {
+                self.done = true;
+                return Poll::Ready(Some(Err(StoreError::Unavailable(
+                    "live event channel closed (store shut down); resubscribe from your checkpoint"
+                        .into(),
+                ))));
+            }
+            _ => {}
         }
         item
     }

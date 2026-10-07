@@ -41,7 +41,7 @@ be ignored by clients.
 |---|---|---|---|---|
 | `commit_ordered_global_nonce` | Global nonces become visible in commit order (per tenant), so a cursor that has moved past nonce N never misses a nonce below N that commits later. | #337 | v0.16.0 | v0.17.0 |
 | `subscription_errors_surfaced` | A subscription that cannot keep delivering ends with an error status (Postgres query failure: `UNAVAILABLE`, naming `resume from global_nonce N`) instead of an empty result or a silently ended stream. The cursor is never advanced past undelivered events. | #350 / #356 | v0.17.0 | v0.17.0 |
-| `undecodable_events_surfaced` | A stored event the server cannot decode ends the subscription or read with `DATA_LOSS` at its position (also in trailing metadata). Earlier events are delivered, later ones are not, and the bad event is never skipped. | #351 / #359 | v0.17.0 | v0.17.0 |
+| `undecodable_events_surfaced` | A stored event the server cannot decode is reported as `DATA_LOSS` at its position (also in trailing metadata) and is never skipped. A subscription delivers the events before it, then ends with the error. A unary read (`ReadAll`, `ReadStream`) whose page contains it fails as a whole; no partial page is returned. | #351 / #359 | v0.17.0 | v0.17.0 |
 
 Notes:
 
@@ -55,10 +55,11 @@ Notes:
   - `commit_ordered_global_nonce`: live events are published under the append
     lock, so subscribers see them in global nonce order, and the replay/live
     handoff has no gap or duplicate.
-  - `subscription_errors_surfaced`: memory runs no backend queries; the only
-    way a subscription can stop delivering is a lagged receiver (more than the
-    broadcast buffer behind). That ends the stream with `RESOURCE_EXHAUSTED`
-    (resubscribe from your checkpoint) instead of silently skipping events.
+  - `subscription_errors_surfaced`: memory runs no backend queries. A
+    subscription stops delivering only if its receiver lags (more than the
+    broadcast buffer behind: `RESOURCE_EXHAUSTED`) or the store shuts down
+    (`UNAVAILABLE`). Both end the stream with an error (resubscribe from your
+    checkpoint) instead of silently skipping events or ending cleanly.
   - `undecodable_events_surfaced`: events are held as decoded protobuf
     messages, so there is no decode step that could fail or skip an event.
     The guarantee holds by construction.
@@ -66,7 +67,7 @@ Notes:
   commit order (`eventstore-backend-memory/tests/live_order.rs`,
   `eventstore-backend-postgres/tests/it_commit_order.rs`), subscription errors
   (`it_subscribe_faults.rs`, `eventstore-bin/tests/subscribe_errors.rs`,
-  memory lag test), undecodable events (`it_subscribe_undecodable.rs`,
+  memory lag and shutdown tests), undecodable events (`it_subscribe_undecodable.rs`,
   `subscribe_errors.rs`).
 
 ## Who is exposed by #337
