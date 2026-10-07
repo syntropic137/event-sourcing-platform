@@ -207,6 +207,8 @@ struct Faults {
     /// position becomes `bad` (positions are not predictable on Postgres,
     /// whose global nonce is shared by every tenant).
     bad_after: AtomicU64,
+    /// `server_info` never answers (a stalled server).
+    stall_server_info: AtomicBool,
     /// Replaces the server's info when set.
     server_info: Mutex<Option<ServerInfo>>,
     forward_reads: AtomicU32,
@@ -319,6 +321,9 @@ impl EventStorePort for FaultPort {
 
     async fn server_info(&self) -> Result<ServerInfo> {
         self.faults.server_infos.fetch_add(1, Ordering::SeqCst);
+        if self.faults.stall_server_info.load(Ordering::SeqCst) {
+            std::future::pending::<()>().await;
+        }
         if let Some(info) = self.faults.server_info.lock().unwrap().clone() {
             return Ok(info);
         }
@@ -823,6 +828,103 @@ async fn restart_policy_retries_a_panicked_pass() {
     finish(task).await.0.unwrap();
 }
 
+/// Hand-written `LiveProcessor` that panics while creating the pass future
+/// (before any `.await`), outside the polled future.
+struct PanicsBeforeFuture;
+
+impl LiveProcessor for PanicsBeforeFuture {
+    fn process_pending<'a, 'b>(
+        &'a self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<usize>> + Send + 'b>>
+    where
+        'a: 'b,
+        Self: 'b,
+    {
+        panic!("broken before the first poll");
+    }
+}
+
+#[tokio::test]
+async fn processor_panicking_before_its_future_exists_still_stops_the_runner() {
+    let f = fixture().await;
+    append(&f.client, &f.tenant, "a", 1).await;
+    let runner = ProjectionRunner::new(
+        Arc::new(f.client.clone()),
+        Arc::new(Store::new()),
+        LedgerProjection::default(),
+        &f.tenant,
+    )
+    .with_live_processor(Arc::new(PanicsBeforeFuture));
+    let (result, _) = finish(spawn_supervised(runner, &CancellationToken::new(), fast())).await;
+    match result {
+        Err(Error::LiveProcessorPanicked { message, .. }) => {
+            assert!(
+                message.contains("broken before the first poll"),
+                "{message}"
+            );
+        }
+        other => panic!("expected LiveProcessorPanicked, got {other:?}"),
+    }
+}
+
+/// Blocks inside `process_pending` until released; counts completions.
+#[derive(Default)]
+struct BlockingProcessor {
+    started: AtomicUsize,
+    completed: AtomicUsize,
+    gate: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl LiveProcessor for BlockingProcessor {
+    async fn process_pending(&self) -> Result<usize> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        self.gate.notified().await;
+        self.completed.fetch_add(1, Ordering::SeqCst);
+        Ok(1)
+    }
+}
+
+#[tokio::test]
+async fn data_loss_halts_promptly_and_cancels_an_in_flight_pass() {
+    let f = fixture().await;
+    let g1 = append(&f.client, &f.tenant, "a", 1).await;
+    let (port, faults) = FaultPort::wrap(&f.client);
+    let processor = Arc::new(BlockingProcessor::default());
+    let runner = ProjectionRunner::new(
+        port,
+        Arc::new(Store::new()),
+        LedgerProjection::default(),
+        &f.tenant,
+    )
+    .with_live_processor(processor.clone());
+    let mut health = runner.health();
+    let task = spawn_supervised(runner, &CancellationToken::new(), fast());
+    wait_health(&mut health, |h| {
+        h.state == RunnerState::Live && h.position == g1
+    })
+    .await;
+    // The startup pass is stuck on an "external service".
+    eventually("pass started", || {
+        processor.started.load(Ordering::SeqCst) == 1
+    })
+    .await;
+
+    faults.bad_after.store(g1, Ordering::SeqCst);
+    let g2 = append(&f.client, &f.tenant, "a", 2).await;
+    let (result, _) = tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("a blocked processor pass must not delay the halt")
+        .unwrap();
+    assert_eq!(result.unwrap_err().data_loss_position(), Some(g2));
+    assert_eq!(health.borrow().halted_at, Some(g2));
+
+    // The cancelled pass never completes its side effect.
+    processor.gate.notify_waiters();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(processor.completed.load(Ordering::SeqCst), 0);
+}
+
 // ---------------------------------------------------------------------------
 // Capability guard
 // ---------------------------------------------------------------------------
@@ -941,6 +1043,71 @@ async fn capability_guard_refuses_legacy_and_partial_servers() {
 // ---------------------------------------------------------------------------
 // Backoff, cancellation, retry classification
 // ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cancellation_during_a_stalled_startup_call_is_prompt() {
+    let f = fixture().await;
+    let (port, faults) = FaultPort::wrap(&f.client);
+    faults.stall_server_info.store(true, Ordering::SeqCst);
+    let runner = ProjectionRunner::new(
+        port,
+        Arc::new(Store::new()),
+        LedgerProjection::default(),
+        &f.tenant,
+    );
+    let cancel = CancellationToken::new();
+    let task = spawn_supervised(runner, &cancel, fast());
+    eventually("capability probe sent", || {
+        faults.server_infos.load(Ordering::SeqCst) == 1
+    })
+    .await;
+    cancel.cancel();
+    let (result, _) = tokio::time::timeout(Duration::from_secs(1), task)
+        .await
+        .expect("cancellation during a stalled call must be prompt")
+        .unwrap();
+    assert!(
+        matches!(result, Ok(RunExit::Cancelled { position: 0 })),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn backslash_feed_prefix_requires_literal_prefix_capability() {
+    let f = fixture().await;
+    let (port, faults) = FaultPort::wrap(&f.client);
+    // A server with the default three, but matching prefixes with LIKE.
+    *faults.server_info.lock().unwrap() = Some(ServerInfo {
+        server_version: Some("0.17.0".into()),
+        api_version: Some("eventstore.v1".into()),
+        backend: Some("postgres".into()),
+        capabilities: vec![
+            capabilities::COMMIT_ORDERED_GLOBAL_NONCE.into(),
+            capabilities::SUBSCRIPTION_ERRORS_SURFACED.into(),
+            capabilities::UNDECODABLE_EVENTS_SURFACED.into(),
+        ],
+    });
+    let new_runner = |feed: &str| {
+        ProjectionRunner::new(
+            port.clone(),
+            Arc::new(Store::new()),
+            LedgerProjection::default(),
+            &f.tenant,
+        )
+        .with_feed_prefix(feed)
+    };
+    let err = new_runner("acct\\")
+        .run_supervised_bounded(fast())
+        .await
+        .expect_err("refused");
+    assert!(
+        err.to_string()
+            .contains(capabilities::LITERAL_SUBSCRIPTION_PREFIX),
+        "{err}"
+    );
+    // `%` and `_` only widen a LIKE match; the runner filters exactly.
+    assert_eq!(new_runner("acct_").catch_up().await.unwrap(), 0);
+}
 
 #[tokio::test]
 async fn cancellation_during_backoff_is_prompt() {

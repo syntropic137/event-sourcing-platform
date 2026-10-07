@@ -55,6 +55,13 @@ impl Drain {
         let task_wake = wake.clone();
         let task_stop = stop.clone();
         let handle = tokio::spawn(async move {
+            // Reports the task ending for any reason other than a requested
+            // stop (including a panic outside a pass), so the runner never
+            // keeps running with a dead processor.
+            let guard = ExitGuard {
+                report: panic_tx,
+                stop: task_stop.clone(),
+            };
             // Some(delay) while the last pass failed: retry after `delay`
             // even if no new live event arrives.
             let mut retry_after: Option<Duration> = None;
@@ -79,7 +86,13 @@ impl Drain {
                     retry_after = None;
                     continue;
                 }
-                let failed = match CatchUnwind(processor.process_pending()).await {
+                // Creating the future can panic too (a hand-written impl).
+                let pass = catch_unwind(AssertUnwindSafe(|| processor.process_pending()));
+                let outcome = match pass {
+                    Ok(pass) => CatchUnwind(pass).await,
+                    Err(payload) => Err(payload),
+                };
+                let failed = match outcome {
                     Ok(Ok(_)) => false,
                     Ok(Err(err)) => {
                         // Pending items stay pending and are retried.
@@ -95,7 +108,7 @@ impl Drain {
                             "live processor pass panicked"
                         );
                         if policy == ProcessorPanicPolicy::Stop {
-                            panic_tx.send_replace(Some(message));
+                            guard.report.send_replace(Some(message));
                             return;
                         }
                         true
@@ -120,25 +133,46 @@ impl Drain {
         self.wake.notify_one();
     }
 
-    /// Resolves with the panic message once a pass panicked under
-    /// [`ProcessorPanicPolicy::Stop`]; pending forever otherwise.
+    /// Resolves with a message once the processor died: a pass panicked
+    /// under [`ProcessorPanicPolicy::Stop`], or the task ended without being
+    /// asked to. Pending forever otherwise.
     pub(super) async fn panicked(&mut self) -> String {
         loop {
             if let Some(message) = self.panicked.borrow_and_update().clone() {
                 return message;
             }
             if self.panicked.changed().await.is_err() {
-                // Task ended without a panic report: never resolves.
+                // The guard reports before the sender drops; a closed channel
+                // without a report means a requested stop: never resolves.
+                if let Some(message) = self.panicked.borrow().clone() {
+                    return message;
+                }
                 std::future::pending::<()>().await;
             }
         }
     }
 
-    /// Let the current pass finish, then stop. Returns the panic message if a
-    /// pass panicked under [`ProcessorPanicPolicy::Stop`] (or the task itself
-    /// panicked), so a failure racing with shutdown is never lost.
+    /// Let the current pass finish, then stop (graceful shutdown). Returns
+    /// the failure message if the processor died, so a failure racing with
+    /// shutdown is never lost.
     pub(super) async fn stop(mut self) -> Option<String> {
         self.stop.cancel();
+        self.join().await
+    }
+
+    /// Stop now, cancelling an in-flight pass (the runner failed or halted:
+    /// no side effect may start or keep running, and a pass blocked on an
+    /// external service must not delay the halt). Safe because
+    /// `process_pending` is idempotent; the next live pass redoes it.
+    pub(super) async fn abort(mut self) -> Option<String> {
+        self.stop.cancel();
+        if let Some(handle) = self.handle.as_ref() {
+            handle.abort();
+        }
+        self.join().await
+    }
+
+    async fn join(&mut self) -> Option<String> {
         // Await through a reference: if this future is dropped mid-wait
         // (run() aborted during shutdown), `Drain` still owns the handle and
         // `Drop` aborts the task instead of detaching it.
@@ -153,6 +187,26 @@ impl Drain {
         match joined {
             Err(err) if err.is_panic() => Some(panic_message(err.into_panic().as_ref())),
             _ => None,
+        }
+    }
+}
+
+/// Lives on the drain task; on drop (return, panic unwind, abort) reports an
+/// unexpected end unless a stop was requested.
+struct ExitGuard {
+    report: watch::Sender<Option<String>>,
+    stop: CancellationToken,
+}
+
+impl Drop for ExitGuard {
+    fn drop(&mut self) {
+        if !self.stop.is_cancelled() && self.report.borrow().is_none() {
+            let message = if std::thread::panicking() {
+                "live processor task panicked outside a pass".to_string()
+            } else {
+                "live processor task ended unexpectedly".to_string()
+            };
+            self.report.send_replace(Some(message));
         }
     }
 }

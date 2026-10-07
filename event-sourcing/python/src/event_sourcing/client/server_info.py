@@ -40,6 +40,10 @@ class Capabilities:
     """An undecodable stored event ends the subscription or read with
     ``DATA_LOSS`` at its position; it is never skipped (#351, v0.17.0)."""
 
+    LITERAL_SUBSCRIPTION_PREFIX = "literal_subscription_prefix"
+    """The subscription aggregate id prefix is matched literally: ``\\``,
+    ``%`` and ``_`` are not wildcards (#361, v0.17.0)."""
+
 
 @dataclass(frozen=True)
 class ServerInfo:

@@ -18,7 +18,6 @@ tokio = { version = "1", features = ["time", "sync", "rt", "macros"] }
 tracing = "0.1"
 futures = "0.3"
 prost = "0.14"
-sha2 = "0.10"
 
 [features]
 default = []
@@ -33,6 +32,18 @@ testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 tonic = { version = "0.14", default-features = false }
 once_cell = "1.19"
+eventstore-core = { path = "../eventstore-core", features = ["conformance"] }
+sha2 = "0.10"
+
+[[test]]
+name = "it_conformance"
+path = "tests/it_conformance.rs"
+required-features = ["test-utils"]
+
+[[test]]
+name = "it_idempotency"
+path = "tests/it_idempotency.rs"
+required-features = ["test-utils"]
 
 [[test]]
 name = "it_postgres"
@@ -52,4 +63,14 @@ required-features = ["test-utils"]
 [[test]]
 name = "it_subscribe_undecodable"
 path = "tests/it_subscribe_undecodable.rs"
+required-features = ["test-utils"]
+
+[[test]]
+name = "it_subscribe_prefix"
+path = "tests/it_subscribe_prefix.rs"
+required-features = ["test-utils"]
+
+[[test]]
+name = "it_subscribe_paging"
+path = "tests/it_subscribe_paging.rs"
 required-features = ["test-utils"]

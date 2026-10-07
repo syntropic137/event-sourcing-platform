@@ -23,8 +23,12 @@
 //!   capability, see #366). A live event below the last applied position
 //!   that is not provably a duplicate stops the runner with
 //!   [`Error::OutOfOrderDelivery`] rather than being skipped and lost.
-//! * **Feed prefixes** may not contain `\`, `%` or `_` until the backend
-//!   escapes subscription prefixes (#361); `run` rejects them.
+//! * **Feed prefixes** are matched literally, including `\`, `%` and `_`.
+//!   Live delivery relies on the server doing the same (the
+//!   `literal_subscription_prefix` capability, #361); servers before v0.17.0
+//!   used the prefix as an unescaped SQL `LIKE` pattern on Postgres, where a
+//!   prefix containing `\` can miss events. With the capability guard on
+//!   (default), a feed containing `\` also requires that capability.
 //! * **Atomicity**: for each event the runner calls
 //!   [`ProjectionStore::begin`], [`CheckpointedProjection::handle`], then
 //!   [`ProjectionStore::commit`] with the event's position. A transactional
@@ -772,9 +776,10 @@ where
     /// Process every event up to the current head, then return the
     /// committed position. Does not subscribe.
     pub async fn catch_up(&mut self) -> Result<u64> {
+        let never = CancellationToken::new();
         let result = async {
-            self.check_capabilities().await?;
-            self.catch_up_until(&CancellationToken::new()).await
+            self.check_capabilities(&never).await?;
+            self.catch_up_until(&never).await
         }
         .await;
         match result {
@@ -793,17 +798,6 @@ where
     /// occurs. Errors are returned, never swallowed; the checkpoint stays at
     /// the last event that committed.
     pub async fn run(&mut self, cancel: CancellationToken) -> Result<RunExit> {
-        // The Postgres backend matches `aggregate_id_prefix` with an unescaped
-        // SQL LIKE, so these characters change what the live subscription
-        // delivers (events can be missed, not just over-delivered). Reject
-        // them until the backend escapes the pattern (#361).
-        if self.key.feed.contains(['\\', '%', '_']) {
-            return Err(Error::invalid_state(format!(
-                "feed prefix '{}' contains '\\', '%' or '_', which the event store \
-                 subscription treats as LIKE wildcards (see #361); not supported yet",
-                self.key.feed
-            )));
-        }
         let result = self.run_attempt(&cancel).await;
         match &result {
             Ok(_) => self.set_state(RunnerState::Stopped),
@@ -816,21 +810,28 @@ where
     async fn run_attempt(&mut self, cancel: &CancellationToken) -> Result<RunExit> {
         self.loaded_position = self.position;
         self.live_since = None;
-        self.check_capabilities().await?;
+        if !self.check_capabilities(cancel).await? {
+            return Ok(RunExit::Cancelled {
+                position: self.position,
+            });
+        }
         let Some(boundary) = self.catch_up_until(cancel).await? else {
             return Ok(RunExit::Cancelled {
                 position: self.position,
             });
         };
 
-        let mut stream = self
-            .events
-            .subscribe(proto::SubscribeRequest {
-                tenant_id: self.key.tenant_id.clone(),
-                aggregate_id_prefix: self.key.feed.clone(),
-                from_global_nonce: self.position + 1,
-            })
-            .await?;
+        let subscribe = self.events.subscribe(proto::SubscribeRequest {
+            tenant_id: self.key.tenant_id.clone(),
+            aggregate_id_prefix: self.key.feed.clone(),
+            from_global_nonce: self.position + 1,
+        });
+        let Some(stream) = or_cancelled(cancel, subscribe).await else {
+            return Ok(RunExit::Cancelled {
+                position: self.position,
+            });
+        };
+        let mut stream = stream?;
         self.publish(true);
         self.live_since = Some(Instant::now());
         self.health.send_modify(|h| {
@@ -883,9 +884,10 @@ where
                     drain.wake();
                 }
             }
-            // Backends may match the feed prefix loosely (Postgres uses SQL
-            // LIKE); enforce exact prefix semantics so foreign events never
-            // reach the projection or advance its checkpoint.
+            // Servers before `literal_subscription_prefix` (#361) may match
+            // the feed prefix loosely (unescaped SQL LIKE); enforce exact
+            // prefix semantics so foreign events never reach the projection
+            // or advance its checkpoint.
             if !event.aggregate_id.starts_with(&self.key.feed) {
                 continue;
             }
@@ -919,9 +921,16 @@ where
         };
         self.publish(false);
         if let Some(drain) = drain {
-            // A panic racing with shutdown or another error is still
-            // surfaced: a dead processor must never go unnoticed.
-            if let Some(message) = drain.stop().await {
+            // Cancelled: let the in-flight pass finish. Failed or halted:
+            // cancel it now (Python #380 does the same), so a pass blocked on
+            // an external service cannot delay the halt or keep a side
+            // effect running past it. A processor failure racing with either
+            // is still surfaced: a dead processor never goes unnoticed.
+            let died = match result {
+                Ok(_) => drain.stop().await,
+                Err(_) => drain.abort().await,
+            };
+            if let Some(message) = died {
                 if !matches!(result, Err(Error::LiveProcessorPanicked { .. })) {
                     if let Err(other) = &result {
                         tracing::error!(
@@ -942,20 +951,29 @@ where
 
     /// Fail with [`Error::Incompatible`] unless the event store advertises
     /// every required capability.
-    async fn check_capabilities(&mut self) -> Result<()> {
+    /// Returns false if cancelled first.
+    async fn check_capabilities(&mut self, cancel: &CancellationToken) -> Result<bool> {
         if self.required_capabilities.is_empty() {
-            return Ok(());
+            return Ok(true);
         }
         self.set_state(RunnerState::Starting);
-        let info = self.events.server_info().await?;
-        let required: Vec<&str> = self
+        let Some(info) = or_cancelled(cancel, self.events.server_info()).await else {
+            return Ok(false);
+        };
+        let info = info?;
+        let mut required: Vec<&str> = self
             .required_capabilities
             .iter()
             .map(String::as_str)
             .collect();
+        // Older servers use the prefix as an unescaped SQL LIKE pattern, where
+        // `\` escapes the next character and live events can be missed (#361).
+        if self.key.feed.contains('\\') {
+            required.push(capabilities::LITERAL_SUBSCRIPTION_PREFIX);
+        }
         let missing = info.missing_capabilities(&required);
         if missing.is_empty() {
-            return Ok(());
+            return Ok(true);
         }
         Err(Error::Incompatible(
             CompatibilityError::MissingCapabilities {
@@ -967,12 +985,18 @@ where
 
     /// Returns the live boundary, or `None` if cancelled.
     async fn catch_up_until(&mut self, cancel: &CancellationToken) -> Result<Option<u64>> {
-        self.position = self.store.load_checkpoint(&self.key).await?.unwrap_or(0);
+        let Some(loaded) = or_cancelled(cancel, self.store.load_checkpoint(&self.key)).await else {
+            return Ok(None);
+        };
+        self.position = loaded?.unwrap_or(0);
         self.loaded_position = self.position;
         self.publish(false);
         // An operator moved the checkpoint to (or past) the halt position.
         self.observe(self.position);
-        let boundary = self.head().await?;
+        let Some(boundary) = or_cancelled(cancel, self.head()).await else {
+            return Ok(None);
+        };
+        let boundary = boundary?;
         self.health.send_modify(|h| {
             h.state = RunnerState::CatchingUp;
             h.live_boundary = Some(boundary);
@@ -992,16 +1016,16 @@ where
             if from > slow_until {
                 limit = self.page_size;
             }
-            let page = match self
-                .events
-                .read_all(proto::ReadAllRequest {
-                    tenant_id: self.key.tenant_id.clone(),
-                    from_global_nonce: from,
-                    max_count: limit,
-                    forward: true,
-                })
-                .await
-            {
+            let read = self.events.read_all(proto::ReadAllRequest {
+                tenant_id: self.key.tenant_id.clone(),
+                from_global_nonce: from,
+                max_count: limit,
+                forward: true,
+            });
+            let Some(read) = or_cancelled(cancel, read).await else {
+                return Ok(None);
+            };
+            let page = match read {
                 Ok(page) => page,
                 Err(Error::DataLoss { global_nonce, .. }) if global_nonce > from && limit > 1 => {
                     limit = 1;
@@ -1185,6 +1209,20 @@ where
             }
             _ => false,
         }
+    }
+}
+
+/// Await `fut` unless `cancel` fires first. Only for calls that commit
+/// nothing (reads, capability probe, opening a subscription), so dropping
+/// them mid-flight is harmless.
+async fn or_cancelled<T>(
+    cancel: &CancellationToken,
+    fut: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => None,
+        value = fut => Some(value),
     }
 }
 

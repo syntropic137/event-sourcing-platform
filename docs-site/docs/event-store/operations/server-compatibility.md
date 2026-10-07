@@ -42,13 +42,14 @@ be ignored by clients.
 | `commit_ordered_global_nonce` | Global nonces become visible in commit order (per tenant), so a cursor that has moved past nonce N never misses a nonce below N that commits later. | #337 | v0.16.0 | v0.17.0 |
 | `subscription_errors_surfaced` | A subscription that cannot keep delivering ends with an error status (Postgres query failure: `UNAVAILABLE`, naming `resume from global_nonce N`) instead of an empty result or a silently ended stream. The cursor is never advanced past undelivered events. | #350 / #356 | v0.17.0 | v0.17.0 |
 | `undecodable_events_surfaced` | A stored event the server cannot decode is reported as `DATA_LOSS` at its position (also in trailing metadata) and is never skipped. A subscription delivers the events before it, then ends with the error. A unary read (`ReadAll`, `ReadStream`) whose page contains it fails as a whole; no partial page is returned. | #351 / #359 | v0.17.0 | v0.17.0 |
+| `literal_subscription_prefix` | `SubscribeRequest.aggregate_id_prefix` is matched literally: `\`, `%` and `_` are ordinary characters. Older Postgres servers used it as an unescaped SQL `LIKE` pattern, so such a prefix could deliver foreign aggregates (`_`, `%`) or miss its own (`\`). | #361 | v0.17.0 | v0.17.0 |
 
 Notes:
 
 - A v0.16.x server has the #337 fix but predates `GetServerInfo`, so it reads
   as legacy. If you must accept v0.16.x, verify the deployment some other way
   (image digest pin) and document why; the helpers cannot prove it.
-- Both built-in backends advertise all three flags. A custom backend
+- Both built-in backends advertise all four flags. A custom backend
   advertises nothing unless it overrides `EventStore::capabilities()`.
 - **Postgres** provides each guarantee through the fixes listed above.
 - **Memory** provides them as follows:
@@ -63,12 +64,15 @@ Notes:
   - `undecodable_events_surfaced`: events are held as decoded protobuf
     messages, so there is no decode step that could fail or skip an event.
     The guarantee holds by construction.
+  - `literal_subscription_prefix`: the prefix is compared with
+    `str::starts_with`, which has no wildcards.
 - Each flag is checked against behavior in tests, not only as a string:
   commit order (`eventstore-backend-memory/tests/live_order.rs`,
   `eventstore-backend-postgres/tests/it_commit_order.rs`), subscription errors
   (`it_subscribe_faults.rs`, `eventstore-bin/tests/subscribe_errors.rs`,
   memory lag and shutdown tests), undecodable events (`it_subscribe_undecodable.rs`,
-  `subscribe_errors.rs`).
+  `subscribe_errors.rs`), literal prefixes (`it_subscribe_prefix.rs`, memory
+  `live_order.rs`).
 
 ## Who is exposed by #337
 

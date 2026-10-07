@@ -403,15 +403,36 @@ After Terraform creates the VM:
    ```bash
    ssh -i ~/.ssh/nuc-proxmox ubuntu@192.168.0.100
    ```
-4. **Run Ansible configuration**:
+4. **Build and save both Docker images** (event store + auth gateway, ADR-024 — Ansible fails without both):
    ```bash
    cd infra-as-code
+   make docker-build-and-save
+   ```
+5. **Run Ansible configuration**:
+   ```bash
    make proxmox-ansible-configure
    ```
-5. **Verify Event Store** is running:
+6. **Verify Event Store** is running:
    ```bash
    curl http://192.168.0.100:8080/health
    ```
+7. **Verify the gRPC gateway requires auth** (ADR-024 — `eventstore-bin` itself has no auth; the `gateway` service in front of it is the trust boundary). `eventstore-bin` doesn't enable gRPC server reflection, so pass `-proto` (from the repo root) or `list` fails with "server does not support the reflection API" regardless of auth:
+   ```bash
+   # Without credentials — should fail with 401/Unauthorized (doesn't need
+   # -proto, since it never gets past the auth check)
+   grpcurl -plaintext 192.168.0.100:50051 list
+
+   # With credentials — should succeed
+   # Use `tr -d '\n'` after base64, not `-w0` (GNU-only, not on macOS/BSD
+   # base64) — a wrapped/newline-containing token breaks the auth header.
+   TOKEN=$(echo -n "admin:$ESP_GATEWAY_PASSWORD" | base64 | tr -d '\n')
+   grpcurl -plaintext \
+     -import-path event-store/eventstore-proto/proto \
+     -proto eventstore/v1/eventstore.proto \
+     -H "authorization: Basic $TOKEN" \
+     192.168.0.100:50051 list
+   ```
+   Note: the Rust SDK supports Basic Auth via `ClientConfig::basic_auth` (see `event-store/gateway/README.md`). The TS/Python SDK clients don't yet; for those, `grpcurl` is the verified way to exercise the gateway-protected port. TS/Python credential support is tracked in #302.
 
 ## Security Checklist
 
@@ -429,6 +450,13 @@ Before deploying to production:
 - [ ] Enable Proxmox audit logging
 - [ ] Regularly update Proxmox and templates
 - [ ] Use separate tokens per environment
+- [ ] Set a strong `ESP_GATEWAY_PASSWORD` (ADR-024) — `eventstore-bin` has no
+      auth of its own; an unset or default password leaves the gRPC service
+      effectively open to anyone who can reach the gateway's published port
+- [ ] Put TLS termination in front of the gateway before exposing it beyond
+      a trusted network — Basic Auth over plaintext HTTP/2 is only safe
+      behind TLS (not yet wired into this repo's infra, see ADR-024 "Bad /
+      accepted tradeoffs")
 
 ## Troubleshooting Checklist
 
@@ -894,3 +922,5 @@ If the Proxmox console shows "Starting serial terminal interface 00" and gets st
 
 - [Architecture Decisions](./architecture-decisions.md) - Core principles and design decisions
 - [Infrastructure as Code Structure](./infra-as-code-structure.md)
+- [ADR-024: nginx Gateway Two-Port Authentication Model](https://github.com/syntropic137/event-sourcing-platform/blob/main/docs/adrs/ADR-024-nginx-gateway-two-port-grpc-auth.md) - why the gateway exists and what it does/doesn't protect against (repo link, not a docs-site page - `docs/adrs/` isn't published here)
+- [`event-store/gateway/README.md`](https://github.com/syntropic137/event-sourcing-platform/blob/main/event-store/gateway/README.md) - gateway config reference and manual verification commands

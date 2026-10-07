@@ -37,6 +37,7 @@ terraform_required_vars=(
 # Check required Ansible variables
 ansible_required_vars=(
     "POSTGRES_PASSWORD"
+    "ESP_GATEWAY_PASSWORD"
 )
 
 missing_vars=()
@@ -59,6 +60,19 @@ echo "✓ All required variables present"
 
 # Generate local.yml configuration
 echo "📝 Generating proxmox/provision/config/local.yml..."
+
+# YAML single-quote-escape the gateway password (ADR-024): it's inserted
+# into a heredoc unquoted-by-default, so a password containing `#` or `: `
+# would corrupt the generated YAML (or worse, be silently truncated at the
+# `#`), and a value that just happens to look like `key: value` could
+# become invalid/misparsed YAML. Standard YAML single-quoted scalar
+# escaping is doubling embedded single quotes.
+ESP_GATEWAY_PASSWORD_YAML=${ESP_GATEWAY_PASSWORD//\'/\'\'}
+ESP_GATEWAY_USER_YAML=${ESP_GATEWAY_USER//\'/\'\'}
+
+# Owner-only: this file embeds the gateway and Postgres passwords.
+( umask 077 && : > proxmox/provision/config/local.yml )
+chmod 600 proxmox/provision/config/local.yml
 cat > proxmox/provision/config/local.yml << EOF
 # Proxmox local environment configuration for the event store deployment
 # Generated from .env file - DO NOT EDIT DIRECTLY
@@ -131,7 +145,13 @@ ansible:
     backend: ${EVENT_STORE_BACKEND:-postgres}
     binary_url: ${EVENT_STORE_BINARY_URL:-}
     rust_log: ${RUST_LOG:-info}
-  
+
+  # Gateway configuration (ADR-024) - eventstore-bin has no auth of its own;
+  # the nginx gateway enforces Basic Auth on the published gRPC port.
+  gateway:
+    user: '${ESP_GATEWAY_USER_YAML:-admin}'
+    password: '${ESP_GATEWAY_PASSWORD_YAML:-changeme}'
+
   # Service configuration
   service:
     user: eventstore
