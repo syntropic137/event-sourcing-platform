@@ -121,8 +121,12 @@ of a cloud volume. Treat absolute numbers as this-machine numbers; the ratios
   capacity vs 250 ev/s offered).
 - **Warmup and windows**: each loaded scenario has a warmup (1 s quick, 3 s
   full) whose samples are discarded, then a measurement window (5 s quick, 15 s
-  full). Throughput = events acknowledged for requests started in the window /
-  window length.
+  full). Throughput = events acknowledged for requests started (closed loop)
+  or scheduled (open loop) in the window, divided by the time from window
+  start to the later of window end and the last completion. Under overload the
+  backlog drain therefore lowers the rate: it is achieved, not offered.
+  Resource and lock sampling stops at the window end. A scenario that measured
+  nothing, or had any request error, fails the run.
 - **Percentiles**: HDR histograms (microsecond resolution, 3 significant
   digits) over every sample; per-worker histograms are merged, never averaged.
 

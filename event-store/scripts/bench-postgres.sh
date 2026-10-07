@@ -40,7 +40,11 @@ command -v docker >/dev/null || { echo "docker is required" >&2; exit 2; }
 echo "Building release server and bench ..."
 cargo build --release -p eventstore-bin -p eventstore-bench
 
-cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
+cleanup() {
+  if docker inspect "$NAME" >/dev/null 2>&1 && ! docker rm -f "$NAME" >/dev/null; then
+    echo "WARNING: failed to remove container $NAME; remove it with: docker rm -f $NAME" >&2
+  fi
+}
 trap cleanup EXIT
 
 echo "Starting $PG_IMAGE as $NAME (cpus=$PG_CPUS mem=$PG_MEM durability=$DURABILITY) ..."

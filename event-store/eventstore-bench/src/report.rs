@@ -30,15 +30,25 @@ impl Results {
     /// failed. Latency is recorded for successful requests only, so a run
     /// with errors would publish a success-only tail; it fails instead.
     pub fn all_verified(&self) -> bool {
-        self.appends.iter().all(|a| a.verify.ok && a.errors == 0)
+        // Every scenario must also have measured something: an empty window
+        // (e.g. a stalled host) would otherwise verify trivially.
+        self.appends
+            .iter()
+            .all(|a| a.verify.ok && a.errors == 0 && a.latency.count > 0)
             && self.preloads.iter().all(|p| p.errors == 0)
-            && self.read_all.iter().all(|r| r.verify.ok)
-            && self.read_stream.iter().all(|r| r.invalid == 0)
-            && self.catchup.iter().all(|c| c.check.exact)
+            && self.read_all.iter().all(|r| r.verify.ok && r.history > 0)
             && self
-                .e2e
+                .read_stream
                 .iter()
-                .all(|e| e.verify.ok && e.subscribers_exact && e.append_errors == 0)
+                .all(|r| r.invalid == 0 && r.latency.count > 0)
+            && self.catchup.iter().all(|c| c.check.exact && c.history > 0)
+            && self.e2e.iter().all(|e| {
+                e.verify.ok
+                    && e.subscribers_exact
+                    && e.append_errors == 0
+                    && e.append_latency.count > 0
+                    && e.delivery.count > 0
+            })
     }
 }
 
