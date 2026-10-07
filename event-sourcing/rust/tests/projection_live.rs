@@ -3,7 +3,7 @@
 mod common;
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -850,17 +850,17 @@ impl CheckpointedProjection<TodoStore> for TodoProjection {
 
 struct Notifier {
     passes: AtomicUsize,
-    fail_passes: AtomicUsize,
+    fail_passes: AtomicU32,
     sent: Mutex<Vec<String>>,
     store: Arc<TodoStore>,
     key: CheckpointKey,
 }
 
 impl Notifier {
-    fn new(store: &Arc<TodoStore>, key: &CheckpointKey, fail_passes: usize) -> Arc<Self> {
+    fn new(store: &Arc<TodoStore>, key: &CheckpointKey, fail_passes: u32) -> Arc<Self> {
         Arc::new(Self {
             passes: AtomicUsize::new(0),
-            fail_passes: AtomicUsize::new(fail_passes),
+            fail_passes: AtomicU32::new(fail_passes),
             sent: Mutex::new(vec![]),
             store: store.clone(),
             key: key.clone(),
@@ -886,11 +886,7 @@ async fn eventually(what: &str, cond: impl Fn() -> bool) {
 impl LiveProcessor for Notifier {
     async fn process_pending(&self) -> Result<usize> {
         self.passes.fetch_add(1, Ordering::SeqCst);
-        if self
-            .fail_passes
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-            .is_ok()
-        {
+        if common::take(&self.fail_passes) {
             return Err(Error::from(tonic::Status::unavailable("smtp down")));
         }
         let todos = self.store.state(&self.key);
