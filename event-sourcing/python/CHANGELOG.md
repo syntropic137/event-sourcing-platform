@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (projection failures are never stepped over, syntropic137#1696)
+
+- `SubscriptionCoordinator` no longer checkpoints past an event a projection
+  failed to apply. A projection whose `handle_event` returns `FAILURE` or
+  raises is held below the event and fed it again on a track of its own, with
+  backoff (1s doubling to 30s); every other projection keeps consuming
+  (ADR-026). Before, the failure was logged and the projection's next event
+  checkpointed past it, losing the event silently.
+- New `ProjectionHandlerFailedError` (exported from `event_sourcing` and
+  `event_sourcing.subscriptions`). `dispatch_event()` now raises it (an
+  `ExceptionGroup` of them when several projections fail one event) after
+  offering the event to every projection.
+- New `SubscriptionCoordinator.held_projections`; `is_healthy` is False while
+  any projection is held.
+
 ### Added (gateway credentials, #302)
 
 - Gateway credentials (ADR-024, #302): `GrpcEventStoreClient` and

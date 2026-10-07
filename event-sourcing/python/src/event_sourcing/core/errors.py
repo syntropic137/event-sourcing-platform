@@ -129,12 +129,13 @@ class UndecodableEventError(EventStoreError):
 class ProjectionHandlerFailedError(EventSourcingError):
     """A projection did not apply an event it is subscribed to.
 
-    Raised by ``SubscriptionCoordinator`` when ``handle_event`` returns
-    FAILURE or raises (the original exception is the ``__cause__``). It fails
-    the subscription attempt instead of letting the track move on, because the
-    projection's next successful event would checkpoint past this one and
-    nothing re-reads below a checkpoint. ``start()`` retries with backoff from
-    the held checkpoint, which delivers this event again.
+    Raised inside ``SubscriptionCoordinator`` when ``handle_event`` returns
+    FAILURE or raises (the original exception is the ``__cause__``). The
+    projection is not allowed to move on: its next successful event would
+    checkpoint past this one, and nothing re-reads below a checkpoint. Under
+    ``start()`` the projection alone is held below the event and fed it again
+    with backoff (``held_projections``); the others keep consuming.
+    ``dispatch_event()`` raises it to its caller.
     """
 
     def __init__(self, projection_name: str, event_type: str, global_nonce: int) -> None:
