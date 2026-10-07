@@ -624,6 +624,8 @@ dependencies = [
  "eventstore-backend-postgres",
  "eventstore-core",
  "eventstore-proto",
+ "serde",
+ "serde_json",
  "serial_test",
  "sqlx",
  "testcontainers",

@@ -26,3 +26,7 @@ testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 uuid = { version = "1", features = ["v4"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio"] }
+# Recovery drill harness (tests/drill_*.rs, docs/operations/BACKUP-RESTORE.md)
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

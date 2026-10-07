@@ -74,6 +74,7 @@ help:
 	@echo "  test-fast         - Run tests with fast infrastructure (⚡)"
 	@echo "  qa                - Run fast QA checks (no slow tests/coverage)"
 	@echo "  qa-full           - Run full QA sweep (may be slow)"
+	@echo "  recovery-drill    - Event-store restart/outage/backup-restore drills (Docker, slow)"
 	@echo "  clean             - Clean all build artifacts"
 	@echo ""
 	@echo "Fast Development Infrastructure:"
@@ -267,6 +268,10 @@ qa-event-store-fast:
 qa-event-store-full:
 	@echo "Full QA for event-store..."
 	$(call RUN_EVENT_STORE_QA,qa-full)
+
+.PHONY: recovery-drill
+recovery-drill:
+	$(MAKE) -C event-store recovery-drill
 
 qa-event-sourcing:
 	@echo "QA checks for event-sourcing..."
