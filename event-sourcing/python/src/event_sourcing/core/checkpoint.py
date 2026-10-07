@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from event_sourcing.core.event import DomainEvent, EventEnvelope
 
 
@@ -203,6 +205,29 @@ class ProjectionCheckpointStore(Protocol):
 
         Returns:
             List of all stored checkpoints
+        """
+        ...
+
+
+@runtime_checkable
+class BatchCheckpointStore(ProjectionCheckpointStore, Protocol):
+    """A checkpoint store that can save several checkpoints in one write.
+
+    Optional. The SubscriptionCoordinator uses it, when the store provides
+    it, to save the checkpoints of every projection that skipped an event in
+    one round trip and one commit instead of one per projection. Without it
+    the coordinator saves them one by one.
+    """
+
+    async def save_checkpoints(self, checkpoints: "Sequence[ProjectionCheckpoint]") -> None:
+        """
+        Save every checkpoint in ``checkpoints`` atomically: all or none.
+
+        Upsert semantics, as ``save_checkpoint``. Projection names are unique
+        within one call.
+
+        Args:
+            checkpoints: Checkpoints to save
         """
         ...
 

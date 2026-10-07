@@ -5,6 +5,7 @@ from event_sourcing.core.checkpoint import (
     CheckpointedProjection,
     DispatchContext,
     ProjectionCheckpoint,
+    BatchCheckpointStore,
     ProjectionCheckpointStore,
     ProjectionResult,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "CheckpointedProjection",
     "DispatchContext",
     "ProjectionCheckpoint",
+    "BatchCheckpointStore",
     "ProjectionCheckpointStore",
     "ProjectionResult",
     # Process Manager (To-Do List pattern)
