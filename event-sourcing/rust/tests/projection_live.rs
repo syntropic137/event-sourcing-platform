@@ -1001,3 +1001,134 @@ async fn drain_on_live_start_resumes_stranded_items_after_replay() {
     cancel.cancel();
     task.await.unwrap().unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// Ordering, task lifetime, prefix validation
+// ---------------------------------------------------------------------------
+
+/// Swaps the first two live events, like a backend that broadcasts out of
+/// commit order.
+struct ReorderingPort(EventStoreClient);
+
+#[async_trait]
+impl EventStorePort for ReorderingPort {
+    async fn append(&self, req: proto::AppendRequest) -> Result<proto::AppendResponse> {
+        self.0.append(req).await
+    }
+    async fn read_stream(
+        &self,
+        req: proto::ReadStreamRequest,
+    ) -> Result<proto::ReadStreamResponse> {
+        self.0.read_stream(req).await
+    }
+    async fn read_all(&self, req: proto::ReadAllRequest) -> Result<proto::ReadAllResponse> {
+        self.0.read_all(req).await
+    }
+    async fn subscribe(&self, req: proto::SubscribeRequest) -> Result<EventDataStream> {
+        use tokio_stream::StreamExt;
+        let mut inner = self.0.subscribe(req).await?;
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        tokio::spawn(async move {
+            let Some(first) = inner.next().await else {
+                return;
+            };
+            let Some(second) = inner.next().await else {
+                return;
+            };
+            for item in [second, first] {
+                if tx.send(item).await.is_err() {
+                    return;
+                }
+            }
+            while let Some(item) = inner.next().await {
+                if tx.send(item).await.is_err() {
+                    return;
+                }
+            }
+        });
+        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
+    }
+}
+
+#[tokio::test]
+async fn out_of_order_live_delivery_fails_loudly() {
+    let f = fixture().await;
+    let g1 = append(&f.client, &f.tenant, "a", 1, "Deposited", 1).await;
+    let port: Arc<dyn EventStorePort> = Arc::new(ReorderingPort(f.client.clone()));
+    let store = Arc::new(MemStore::new());
+    let mut runner = ProjectionRunner::new(
+        port,
+        store.clone(),
+        BalanceProjection::new(&Probe::default()),
+        &f.tenant,
+    );
+    let mut progress = runner.progress();
+    let task = tokio::spawn(async move { runner.run(CancellationToken::new()).await });
+    wait_for(&mut progress, |p| p.is_live && p.position == g1).await;
+
+    let g2 = append(&f.client, &f.tenant, "a", 2, "Deposited", 2).await;
+    let g3 = append(&f.client, &f.tenant, "b", 1, "Deposited", 4).await;
+    let err = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("runner must stop")
+        .unwrap()
+        .expect_err("reordered live event must not be skipped silently");
+    match err {
+        Error::OutOfOrderDelivery {
+            last_applied,
+            received,
+            ..
+        } => assert_eq!((last_applied, received), (g3, g2)),
+        other => panic!("expected OutOfOrderDelivery, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn dropping_run_stops_the_live_processor() {
+    let f = fixture().await;
+    let store = Arc::new(TodoStore::new());
+    let mut runner =
+        ProjectionRunner::new(f.port.clone(), store.clone(), TodoProjection, &f.tenant);
+    // Fails forever and retries every 5 ms: keeps calling while alive.
+    let notifier = Notifier::new(&store, runner.key(), u32::MAX);
+    runner = runner
+        .with_live_processor(notifier.clone())
+        .with_processor_retry_delay(Duration::from_millis(5));
+    let mut progress = runner.progress();
+    let task = tokio::spawn(async move { runner.run(CancellationToken::new()).await });
+    wait_for(&mut progress, |p| p.is_live).await;
+    eventually("processor retrying", || {
+        notifier.passes.load(Ordering::SeqCst) >= 2
+    })
+    .await;
+
+    task.abort();
+    let _ = task.await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    let after_abort = notifier.passes.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(
+        notifier.passes.load(Ordering::SeqCst),
+        after_abort,
+        "processor task outlived its runner"
+    );
+}
+
+#[tokio::test]
+async fn like_wildcards_in_feed_prefix_are_rejected() {
+    let f = fixture().await;
+    for prefix in ["acct\\", "acct%", "acct_"] {
+        let mut runner = ProjectionRunner::new(
+            f.port.clone(),
+            Arc::new(MemStore::new()),
+            BalanceProjection::new(&Probe::default()),
+            &f.tenant,
+        )
+        .with_feed_prefix(prefix);
+        let err = runner
+            .run(CancellationToken::new())
+            .await
+            .expect_err("wildcard prefix rejected");
+        assert!(err.to_string().contains("#361"), "{err}");
+    }
+}

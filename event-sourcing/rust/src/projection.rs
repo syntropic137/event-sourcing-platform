@@ -18,6 +18,13 @@
 //! * **At-least-once delivery, exactly-once effect**: every event at or below
 //!   the committed position is skipped, so duplicate delivery (subscription
 //!   overlap, retries, restarts) is harmless.
+//! * **Ordering requirement**: the event store must deliver a tenant's live
+//!   events in global-nonce commit order (the `commit_ordered_global_nonce`
+//!   capability, see #366). A live event below the last applied position
+//!   that is not provably a duplicate stops the runner with
+//!   [`Error::OutOfOrderDelivery`] rather than being skipped and lost.
+//! * **Feed prefixes** may not contain `\`, `%` or `_` until the backend
+//!   escapes subscription prefixes (#361); `run` rejects them.
 //! * **Atomicity**: for each event the runner calls
 //!   [`ProjectionStore::begin`], [`CheckpointedProjection::handle`], then
 //!   [`ProjectionStore::commit`] with the event's position. A transactional
@@ -623,6 +630,17 @@ where
     /// occurs. Errors are returned, never swallowed; the checkpoint stays at
     /// the last event that committed.
     pub async fn run(&mut self, cancel: CancellationToken) -> Result<RunExit> {
+        // The Postgres backend matches `aggregate_id_prefix` with an unescaped
+        // SQL LIKE, so these characters change what the live subscription
+        // delivers (events can be missed, not just over-delivered). Reject
+        // them until the backend escapes the pattern (#361).
+        if self.key.feed.contains(['\\', '%', '_']) {
+            return Err(Error::invalid_state(format!(
+                "feed prefix '{}' contains '\\', '%' or '_', which the event store \
+                 subscription treats as LIKE wildcards (see #361); not supported yet",
+                self.key.feed
+            )));
+        }
         let Some(boundary) = self.catch_up_until(&cancel).await? else {
             return Ok(RunExit::Cancelled {
                 position: self.position,
@@ -670,6 +688,19 @@ where
             // reach the projection or advance its checkpoint.
             if !event.aggregate_id.starts_with(&self.key.feed) {
                 continue;
+            }
+            // Live delivery must be in commit (global nonce) order. A nonce
+            // above the catch-up boundary but below the last applied one is
+            // either a reordered event never seen (skipping it would lose it
+            // silently) or a late duplicate; the two cannot be told apart,
+            // so fail loudly instead of guessing. The last applied nonce
+            // itself is a provable duplicate and is skipped.
+            if event.global_nonce > boundary && event.global_nonce < self.position {
+                break Err(Error::OutOfOrderDelivery {
+                    projection: self.key.to_string(),
+                    last_applied: self.position,
+                    received: event.global_nonce,
+                });
             }
             let ctx = DispatchContext {
                 is_catching_up: event.global_nonce <= boundary,
@@ -795,7 +826,7 @@ where
 struct Drain {
     wake: Arc<Notify>,
     stop: CancellationToken,
-    handle: tokio::task::JoinHandle<()>,
+    handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Drain {
@@ -835,7 +866,11 @@ impl Drain {
                 }
             }
         });
-        Self { wake, stop, handle }
+        Self {
+            wake,
+            stop,
+            handle: Some(handle),
+        }
     }
 
     fn wake(&self) {
@@ -844,9 +879,23 @@ impl Drain {
     }
 
     /// Let the current pass finish, then stop.
-    async fn stop(self) {
+    async fn stop(mut self) {
         self.stop.cancel();
-        let _ = self.handle.await;
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.await;
+        }
+    }
+}
+
+impl Drop for Drain {
+    /// `run()` was dropped or aborted without a graceful stop: the processor
+    /// must not outlive its runner. Cancel and abort the task (an interrupted
+    /// pass is safe because `process_pending` is idempotent).
+    fn drop(&mut self) {
+        self.stop.cancel();
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
     }
 }
 

@@ -114,6 +114,12 @@ async fn balance(pool: &PgPool, tenant: &str, version: i32) -> i64 {
 #[tokio::test]
 async fn postgres_store_commits_read_model_and_checkpoint_atomically() {
     let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
+        // Locally the Postgres test is opt-in; under CI a missing database
+        // must fail, never pass silently.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "TEST_DATABASE_URL must be set when running postgres-feature tests in CI"
+        );
         eprintln!("skipping: TEST_DATABASE_URL not set");
         return;
     };

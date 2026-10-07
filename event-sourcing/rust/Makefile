@@ -1,6 +1,6 @@
 # Rust Event Sourcing SDK Makefile
 
-.PHONY: help build test check fmt clippy clean qa qa-fast qa-full setup
+.PHONY: help build test check fmt clippy clean qa qa-fast qa-full setup test-postgres
 
 help:
 	@echo "Rust Event Sourcing SDK - Available Targets:"
@@ -43,6 +43,11 @@ qa-fast: fmt clippy check
 	cargo test --tests
 	cargo test --doc
 	@echo "✅ Fast QA passed for Rust SDK"
+
+# Requires TEST_DATABASE_URL (a Postgres database the tests may write to).
+test-postgres:
+	@test -n "$$TEST_DATABASE_URL" || { echo "TEST_DATABASE_URL must be set"; exit 1; }
+	cargo test --features postgres --tests
 
 qa: qa-fast
 	@echo "⚠️  The slow tests have NOT run. For full QA, run: make qa-full"
