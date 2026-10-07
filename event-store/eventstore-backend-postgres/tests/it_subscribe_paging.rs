@@ -244,15 +244,20 @@ async fn prefix_filtered_replay_pages_only_matching_events() {
     assert_eq!(until_caught_up(&mut stream).await, expected);
 }
 
+/// A live burst spanning many pages is drained page after page without
+/// waiting for NOTIFY or the 5 s fallback poll between full pages (ADR-026
+/// "Paged replay"). Waiting for the poll would cost about 5 s per page
+/// (~55 s here); the bound leaves ample slack for a loaded host.
 #[tokio::test]
-async fn live_burst_larger_than_a_page_is_delivered_in_order() {
-    const PAGE: usize = 4;
+async fn live_burst_larger_than_a_page_is_drained_without_waiting_for_the_poll() {
+    const PAGE: usize = 2;
     let tenant = unique_tenant("live-burst");
     let store = connect(PAGE).await;
     let mut stream = store.subscribe(request(&tenant, "", 0));
     assert!(until_caught_up(&mut stream).await.is_empty());
 
     let burst = append(&store, &tenant, "Order-1", 0, 23).await;
+    let started = tokio::time::Instant::now();
     let mut seen = Vec::new();
     while seen.len() < burst.len() {
         match next(&mut stream).await {
@@ -264,7 +269,12 @@ async fn live_burst_larger_than_a_page_is_delivered_in_order() {
             other => panic!("expected live events, got {other:?}"),
         }
     }
+    let elapsed = started.elapsed();
     assert_eq!(seen, burst);
+    assert!(
+        elapsed < Duration::from_secs(12),
+        "12 pages took {elapsed:?}: a full live page must be followed immediately"
+    );
 }
 
 /// Appends race a paging replay that started at 0. Each page reads a fresh
