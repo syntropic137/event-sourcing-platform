@@ -11,8 +11,11 @@ network:
   public_subnet_ids:
     - subnet-aaaaaaaa
     - subnet-bbbbbbbb
+  # Admin CIDRs for SSH, and for gRPC while allow_public_grpc is false.
+  # Replace the TEST-NET placeholder with your own range; never 0.0.0.0/0
+  # while the gateway has no TLS (#301).
   ssh_allowed_cidrs:
-    - 0.0.0.0/0
+    - 203.0.113.0/24
 
 compute:
   instance_type: t3.small
@@ -23,12 +26,22 @@ compute:
 
 security:
   iam_instance_profile: event-store-instance-profile
-  allow_public_grpc: true
+  # false until TLS fronts the gateway (#301): its Basic Auth credential is
+  # sent in plaintext, so gRPC ingress is limited to the admin CIDRs.
+  allow_public_grpc: false
   allow_public_dashboard: false
 
 postgres:
   database_url_secret_arn: arn:aws:secretsmanager:us-west-2:123456789012:secret:event-store/prod/database
   extra_env: {}
+
+# Gateway configuration (ADR-024) - eventstore-bin has no auth of its own;
+# the nginx gateway enforces Basic Auth using this credential. Same
+# Secrets Manager pattern as postgres.database_url_secret_arn above - do
+# not put a plaintext password here.
+gateway:
+  secret_arn: arn:aws:secretsmanager:us-west-2:123456789012:secret:event-store/prod/gateway
+  user: admin
 
 metadata:
   environment: prod
