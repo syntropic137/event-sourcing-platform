@@ -7,18 +7,25 @@ APIs for aggregates, commands, events, and repositories.
 """
 
 from event_sourcing.client import (
+    BasicAuth,
+    BearerToken,
     EventStoreClient,
     EventStoreClientFactory,
     GrpcEventStoreClient,
     MemoryEventStoreClient,
+    SharedToken,
+    TlsConfig,
+    TokenProviderAuth,
 )
 from event_sourcing.core.aggregate import AggregateRoot, BaseAggregate
 from event_sourcing.core.checkpoint import DispatchContext, ProjectionReadStore, ProjectionStore
 from event_sourcing.core.command import Command, CommandBus, CommandHandler, InMemoryCommandBus
 from event_sourcing.core.errors import (
     AggregateNotFoundError,
+    ClientConfigError,
     ConcurrencyConflictError,
     EventSourcingError,
+    EventStoreAuthenticationError,
     EventStoreError,
     InvalidAggregateStateError,
     StreamAlreadyExistsError,
@@ -127,6 +134,12 @@ __all__ = [
     "EventStoreClientFactory",
     "GrpcEventStoreClient",
     "MemoryEventStoreClient",
+    # Connection credentials and TLS (ADR-024 gateway)
+    "BasicAuth",
+    "BearerToken",
+    "TokenProviderAuth",
+    "SharedToken",
+    "TlsConfig",
     # Class Decorators (for aggregate, command, event classes)
     "aggregate",
     "command",
@@ -148,6 +161,8 @@ __all__ = [
     "StreamAlreadyExistsError",
     "InvalidAggregateStateError",
     "EventStoreError",
+    "EventStoreAuthenticationError",
+    "ClientConfigError",
     "UndecodableEventError",
     "SubscriptionHaltedError",
 ]

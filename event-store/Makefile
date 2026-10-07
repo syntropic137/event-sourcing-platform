@@ -13,12 +13,12 @@ COVERAGE_MIN ?= 75
 # Crates excluded from fast unit/doc tests (space-separated)
 FAST_TEST_EXCLUDES ?= eventstore-backend-postgres
 
-.PHONY: help build clean qa qa-full qa-fast fmt clippy check test run gen-ts gen-py smoke-py-import smoke cov-setup coverage
+.PHONY: help build clean qa qa-full qa-fast fmt clippy check test run gen-ts gen-py test-sdk-py smoke-py-import smoke cov-setup coverage
 .PHONY: ps run-bg stop dev-init dev-start dev-stop dev-restart dev-clean dev-test dev-status dev-logs dev-shell
 .PHONY: bench-pg bench-pg-full
 
 help:
-	@echo "Targets: build, clean, qa, qa-full, fmt, clippy, check, test, run, smoke, gen-ts, gen-py, smoke-py-import"
+	@echo "Targets: build, clean, qa, qa-full, fmt, clippy, check, test, run, smoke, gen-ts, gen-py, test-sdk-py, smoke-py-import"
 	@echo ""
 	@echo "Performance (Docker; see docs/performance/POSTGRES-BASELINE.md):"
 	@echo "  bench-pg      - Postgres baseline, quick profile (~2 min)"
@@ -254,6 +254,12 @@ gen-py:
 	  echo "absolute eventstore import left in generated stubs"; exit 1; fi
 
 # Install sdk-py into a throwaway environment and import it from there (#367).
+# sdk-py unit tests (credentials, TLS, plaintext guard) against in-process servers.
+test-sdk-py:
+	@if ! command -v uv >/dev/null 2>&1; then echo "uv not found"; exit 2; fi
+	@cd sdks/sdk-py && uv run --isolated --no-project --with 'grpcio>=1.76.0' --with 'protobuf>=6.31.1,<7' \
+	  --with pytest python -m pytest -q -p no:cacheprovider tests
+
 smoke-py-import:
 	@if ! command -v uv >/dev/null 2>&1; then echo "uv not found"; exit 2; fi
 	@# Built from a copy, so the build leaves no egg-info/build dirs in the tree.

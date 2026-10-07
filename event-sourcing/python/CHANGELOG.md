@@ -5,6 +5,21 @@ All notable changes to the Python Event Sourcing SDK will be documented in this 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Gateway credentials (ADR-024, #302): `GrpcEventStoreClient` and
+  `EventStoreClientFactory.create_grpc_client` take `auth` (`BasicAuth`,
+  `BearerToken`, `TokenProviderAuth` with a sync or async provider, e.g.
+  `SharedToken`), `tls` (`True` or `TlsConfig`) and
+  `allow_insecure_credentials`. The `authorization` header is added to every
+  call, including `subscribe()`. Addresses accept `http://` and `https://`.
+- Credentials over plaintext to a non-loopback host raise `ClientConfigError`
+  unless `allow_insecure_credentials=True`. Secrets are redacted from `repr`.
+- `EventStoreAuthenticationError` (an `EventStoreError`) for gRPC
+  `UNAUTHENTICATED`, including from a failing token provider.
+
 ## [0.14.0] - 2026-04-16
 
 ### Added
