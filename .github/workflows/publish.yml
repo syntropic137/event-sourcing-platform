@@ -23,9 +23,10 @@ on:
 permissions:
   contents: read
 
-# One publish at a time so the "already published?" check cannot race.
+# Serialize runs for the same version so the "already published?" check
+# cannot race. Per-version so a queued run for another version is not dropped.
 concurrency:
-  group: publish-npm
+  group: publish-npm-${{ inputs.tag || github.event.release.tag_name || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -177,8 +178,15 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # npm view exits 0 with empty output for a missing version, so compare.
-          FOUND=$(npm view "@syntropic137/event-sourcing-typescript@${VERSION}" version 2>/dev/null || true)
+          # npm view exits 0 with empty output for a missing version, and
+          # E404 for a missing package. Any other failure is a real error.
+          if ! FOUND=$(npm view "@syntropic137/event-sourcing-typescript@${VERSION}" version 2>npm-view.err); then
+            if ! grep -q E404 npm-view.err; then
+              cat npm-view.err
+              exit 1
+            fi
+            FOUND=""
+          fi
           if [ "$FOUND" = "$VERSION" ]; then
             echo "Version ${VERSION} already published, skipping"
             echo "exists=true" >> "$GITHUB_OUTPUT"

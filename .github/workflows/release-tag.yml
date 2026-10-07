@@ -12,7 +12,8 @@ name: Release Tag
 # `gh workflow run --ref vX.Y.Z` (workflow_dispatch is exempt from that rule).
 # No extra secret is needed.
 #
-# Idempotent: if tag vX.Y.Z already exists, nothing is created or dispatched.
+# Idempotent: if tag vX.Y.Z already exists at this SHA, nothing is created or
+# dispatched. If it exists at another SHA, the job fails.
 # Recovery when a dispatch failed after the release was created:
 #   gh workflow run publish.yml --ref vX.Y.Z -f tag=vX.Y.Z
 #   gh workflow run release-container.yml --ref vX.Y.Z -f version=vX.Y.Z
@@ -25,8 +26,9 @@ on:
 
 permissions: {}
 
+# Per-SHA: reruns for one commit serialize; other commits never drop each other.
 concurrency:
-  group: release-tag
+  group: release-tag-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
 jobs:
@@ -84,7 +86,8 @@ jobs:
         run: |
           if TAG_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/commits/refs/tags/${TAG}" --jq .sha 2>/dev/null); then
             if [ "$TAG_SHA" != "$SHA" ]; then
-              echo "::warning::Tag ${TAG} exists at ${TAG_SHA}, not ${SHA}. Version not bumped? Nothing done."
+              echo "::error::Tag ${TAG} exists at ${TAG_SHA}, not ${SHA}. Version not bumped?"
+              exit 1
             else
               echo "Tag ${TAG} already exists at ${SHA}, nothing to do"
             fi
