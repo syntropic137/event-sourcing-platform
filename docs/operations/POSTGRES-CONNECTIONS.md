@@ -15,7 +15,7 @@ default. The effective settings are logged at `info` on startup.
 |---|---|---|
 | `PG_POOL_MAX_CONNECTIONS` | `10` | Most connections in the pool (at least 1). |
 | `PG_POOL_MIN_CONNECTIONS` | `0` | Connections kept open while idle (at most the max). |
-| `PG_ACQUIRE_TIMEOUT_MS` | `10000` | Longest wait for a pooled connection, including opening one. At least 1. |
+| `PG_ACQUIRE_TIMEOUT_MS` | `30000` | Longest wait for a pooled connection, including opening one. At least 1. Same as the old fixed value: under heavy load requests queue for a connection rather than fail. |
 | `PG_STATEMENT_TIMEOUT_MS` | `30000` | Server `statement_timeout`. Also sets the client deadline (below). `0` disables both. |
 | `PG_LOCK_TIMEOUT_MS` | `10000` | Server `lock_timeout`: longest wait for a row lock or the append-order advisory lock. `0` disables. |
 | `PG_IDLE_IN_TRANSACTION_TIMEOUT_MS` | `10000` | Server `idle_in_transaction_session_timeout`. `0` disables. |
@@ -83,7 +83,7 @@ Worst-case time to an error on a black-holed path: about
 the stall (it first waits for a connection), and the client deadline for one
 already running. A live subscription adds up to its 5 s fallback poll,
 because an idle subscription issues no query. With the defaults: an
-in-flight append fails within 35 s, a new one within 45 s.
+in-flight append fails within 35 s, a new one within 65 s.
 **(drilled** with 2 s / 3 s settings: `drill_blackhole`, see
 [BACKUP-RESTORE.md](BACKUP-RESTORE.md).**)**
 

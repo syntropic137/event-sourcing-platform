@@ -48,7 +48,7 @@ impl Default for PostgresConfig {
         Self {
             max_connections: 10,
             min_connections: 0,
-            acquire_timeout: Duration::from_secs(10),
+            acquire_timeout: Duration::from_secs(30),
             statement_timeout: Some(Duration::from_secs(30)),
             lock_timeout: Some(Duration::from_secs(10)),
             idle_in_transaction_timeout: Some(Duration::from_secs(10)),
@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(c, PostgresConfig::default());
         assert_eq!(c.max_connections, 10);
         assert_eq!(c.min_connections, 0);
-        assert_eq!(c.acquire_timeout, Duration::from_secs(10));
+        assert_eq!(c.acquire_timeout, Duration::from_secs(30));
         assert_eq!(c.statement_timeout, Some(Duration::from_secs(30)));
         assert_eq!(c.lock_timeout, Some(Duration::from_secs(10)));
         assert_eq!(c.idle_in_transaction_timeout, Some(Duration::from_secs(10)));
