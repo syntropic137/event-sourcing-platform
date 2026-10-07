@@ -57,7 +57,7 @@ data-integrity error under the same "stop, never skip" rule.
 |--------|-----------------------|
 | gRPC server (`eventstore-bin`) | Logs the error, maps it with `StoreError::to_status()`, ends the response stream with that status. |
 | Rust SDK (`sdk-rs`) | `tonic::Streaming` yields `Err(Status)` with `Code::Unavailable`. |
-| TypeScript SDK (`sdk-ts`) | The async iterator rejects with the gRPC error (`code` 14). |
+| TypeScript SDK (`sdk-ts`) | The async iterator rejects with the gRPC error (`code` 14). Messages and a terminal error/end that arrive while the consumer is busy are buffered and delivered on later `next()` calls (`streamToAsyncIterator`), so a failure is never lost between reads. |
 | Python (`event_sourcing` `GrpcEventStoreClient.subscribe`) | Raises `EventStoreError`. `SubscriptionCoordinator` retries with exponential backoff and resumes each projection from its saved checkpoint. |
 
 ## Consequences
