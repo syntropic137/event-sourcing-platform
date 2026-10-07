@@ -431,3 +431,21 @@ class TestBuildAwsAnsibleConfig:
 
         with pytest.raises(SystemExit, match="gateway.secret_arn"):
             render_config._build_aws_ansible_config(cfg, ansible_dir)
+
+
+class TestPrivateFileModes:
+    """Rendered artifacts hold secrets; they must be owner-only (0600)."""
+
+    @pytest.mark.parametrize("writer", ["write_json", "write_yaml", "write_text"])
+    def test_writers_create_0600(self, tmp_path: Path, writer: str) -> None:
+        path = tmp_path / "nested" / "out"
+        payload = "x" if writer == "write_text" else {"esp_gateway_password": "s"}
+        getattr(render_config, writer)(path, payload)
+        assert path.stat().st_mode & 0o777 == 0o600
+
+    def test_existing_world_readable_file_is_tightened(self, tmp_path: Path) -> None:
+        path = tmp_path / "all.yml"
+        path.write_text("old")
+        path.chmod(0o644)
+        render_config.write_yaml(path, {"k": "v"})
+        assert path.stat().st_mode & 0o777 == 0o600

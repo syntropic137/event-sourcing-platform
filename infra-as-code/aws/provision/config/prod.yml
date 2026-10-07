@@ -23,7 +23,9 @@ compute:
 
 security:
   iam_instance_profile: event-store-instance-profile
-  allow_public_grpc: true
+  # false until TLS fronts the gateway (#301): its Basic Auth credential is
+  # sent in plaintext, so gRPC ingress is limited to the admin CIDRs.
+  allow_public_grpc: false
   allow_public_dashboard: false
 
 postgres:

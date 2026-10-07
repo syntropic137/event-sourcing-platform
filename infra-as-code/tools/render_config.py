@@ -24,22 +24,32 @@ def load_yaml(path: Path) -> dict:
         return yaml.safe_load(handle)
 
 
-def write_json(path: Path, data: dict) -> None:
+def _open_private(path: Path):
+    """Open `path` for writing as owner-only (0600).
+
+    Rendered artifacts carry secrets (Postgres/gateway passwords, Proxmox
+    token), so they must not inherit a umask-022 world-readable mode. chmod
+    also covers files that already existed with a looser mode.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    return os.fdopen(fd, "w", encoding="utf-8")
+
+
+def write_json(path: Path, data: dict) -> None:
+    with _open_private(path) as handle:
         json.dump(data, handle, indent=2)
         handle.write("\n")
 
 
 def write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    with _open_private(path) as handle:
         handle.write(content)
 
 
 def write_yaml(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    with _open_private(path) as handle:
         yaml.safe_dump(data, handle, sort_keys=False)
 
 

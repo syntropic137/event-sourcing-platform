@@ -38,11 +38,10 @@ services:
       context: ./event-store/gateway
     container_name: event-store-gateway
     ports:
-      # ESP_GATEWAY_BIND defaults to 0.0.0.0 (matches this repo's pre-ADR-024
-      # behavior). If ESP_GATEWAY_PASSWORD is unset (auth disabled, local-dev
-      # mode), set ESP_GATEWAY_BIND=127.0.0.1 too - otherwise the
-      # unauthenticated port is reachable from your LAN, not just localhost.
-      - "${ESP_GATEWAY_BIND:-0.0.0.0}:${GRPC_PORT:-50051}:8081"
+      # ESP_GATEWAY_BIND defaults to 127.0.0.1 so the default (password
+      # unset = auth off) setup is never reachable from the LAN. To expose
+      # it, set ESP_GATEWAY_PASSWORD AND ESP_GATEWAY_BIND=0.0.0.0.
+      - "${ESP_GATEWAY_BIND:-127.0.0.1}:${GRPC_PORT:-50051}:8081"
     environment:
       ESP_UPSTREAM: "event-store:${GRPC_PORT:-50051}"
       ESP_GATEWAY_USER: ${ESP_GATEWAY_USER:-admin}

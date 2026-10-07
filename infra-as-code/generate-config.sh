@@ -70,6 +70,9 @@ echo "📝 Generating proxmox/provision/config/local.yml..."
 ESP_GATEWAY_PASSWORD_YAML=${ESP_GATEWAY_PASSWORD//\'/\'\'}
 ESP_GATEWAY_USER_YAML=${ESP_GATEWAY_USER//\'/\'\'}
 
+# Owner-only: this file embeds the gateway and Postgres passwords.
+( umask 077 && : > proxmox/provision/config/local.yml )
+chmod 600 proxmox/provision/config/local.yml
 cat > proxmox/provision/config/local.yml << EOF
 # Proxmox local environment configuration for the event store deployment
 # Generated from .env file - DO NOT EDIT DIRECTLY

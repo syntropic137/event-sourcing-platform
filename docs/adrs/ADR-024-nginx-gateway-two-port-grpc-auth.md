@@ -103,6 +103,10 @@ ADR when undertaken.
   `docker-compose.yml` / `infra-as-code/` — Basic Auth credentials are only
   safe in transit once that's added (e.g. via a tunnel or load balancer that
   terminates TLS).
+  Until then the shipped defaults limit exposure: root compose binds the
+  gateway to 127.0.0.1 unless `ESP_GATEWAY_BIND` is set, and the AWS prod
+  config sets `allow_public_grpc: false` (gRPC ingress only from the admin
+  CIDRs).
 
 ## References
 

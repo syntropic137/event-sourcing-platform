@@ -102,6 +102,10 @@
     # from .env in a prior round, to stop sharing DB credentials with the
     # gateway container) - it needs the same protection .env already has.
     mode: "0600"
+  # Rendered file embeds ESP_GATEWAY_PASSWORD; keep it out of --diff output
+  # and task logs.
+  diff: false
+  no_log: true
 
 - name: Create .env file from template
   ansible.builtin.template:
@@ -110,6 +114,9 @@
     owner: "{{ ansible_user }}"
     group: "{{ ansible_user }}"
     mode: "0600"
+  # Carries DATABASE_URL/POSTGRES_PASSWORD; keep out of --diff and logs.
+  diff: false
+  no_log: true
 
 - name: Start Event Store with Docker Compose
   community.docker.docker_compose_v2:
