@@ -268,10 +268,12 @@ impl EventStoreTrait for PostgresStore {
         // visible in commit order.
         // #350: failed subscription queries end the stream with UNAVAILABLE.
         // #351: undecodable rows end subscriptions/reads with DATA_LOSS.
+        // #361: the subscription prefix is an escaped LIKE pattern.
         vec![
             eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE,
             eventstore_core::capabilities::SUBSCRIPTION_ERRORS_SURFACED,
             eventstore_core::capabilities::UNDECODABLE_EVENTS_SURFACED,
+            eventstore_core::capabilities::LITERAL_SUBSCRIPTION_PREFIX,
         ]
     }
 
@@ -778,6 +780,9 @@ impl EventStoreTrait for PostgresStore {
     /// `from_global_nonce` (inclusive). A response with `event: None` marks
     /// "caught up" (end of replay) or is a live keep-alive.
     ///
+    /// `aggregate_id_prefix` is matched literally: `\`, `%` and `_` in it
+    /// are not wildcards (#361).
+    ///
     /// Failures are never hidden. If a replay or live query fails, the stream
     /// yields one [`StoreError::Unavailable`] (gRPC `UNAVAILABLE`) and ends;
     /// no caught-up marker is sent for a replay that failed, and the internal
@@ -1059,8 +1064,8 @@ impl EventStoreTrait for PostgresStore {
     }
 }
 
-/// Events of `tenant` (optionally restricted to `prefix`) with
-/// `global_nonce > after`, in global order.
+/// Events of `tenant` (optionally restricted to ids starting with `prefix`,
+/// literally) with `global_nonce > after`, in global order.
 async fn fetch_events_after(
     pool: &PgPool,
     tenant: &str,
@@ -1080,19 +1085,35 @@ async fn fetch_events_after(
         .fetch_all(pool)
         .await
     } else {
+        // E'\\' is one backslash whatever standard_conforming_strings is.
         sqlx::query(
             r#"
             SELECT * FROM events
-            WHERE tenant_id = $1 AND global_nonce > $2 AND aggregate_id LIKE $3
+            WHERE tenant_id = $1 AND global_nonce > $2
+              AND aggregate_id LIKE $3 ESCAPE E'\\'
             ORDER BY global_nonce ASC
             "#,
         )
         .bind(tenant)
         .bind(after)
-        .bind(format!("{prefix}%"))
+        .bind(like_prefix_pattern(prefix))
         .fetch_all(pool)
         .await
     }
+}
+
+/// LIKE pattern matching ids that start with `prefix` literally: `\`, `%`
+/// and `_` are escaped with `\` (the query's ESCAPE character) (#361).
+fn like_prefix_pattern(prefix: &str) -> String {
+    let mut pattern = String::with_capacity(prefix.len() + 1);
+    for c in prefix.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('%');
+    pattern
 }
 
 /// The error a subscription yields, as its last item, when a query fails.
@@ -1300,6 +1321,16 @@ mod tests {
     #[tokio::test]
     async fn subscribe_surfaces_replay_query_failure_with_prefix() {
         assert_replay_failure_surfaces("Order-").await;
+    }
+
+    #[test]
+    fn like_prefix_pattern_escapes_wildcards_and_escape_char() {
+        assert_eq!(like_prefix_pattern("Order-"), "Order-%");
+        assert_eq!(like_prefix_pattern("a_b"), r"a\_b%");
+        assert_eq!(like_prefix_pattern("50%"), r"50\%%");
+        assert_eq!(like_prefix_pattern(r"c:\x"), r"c:\\x%");
+        assert_eq!(like_prefix_pattern(r"\%_"), r"\\\%\_%");
+        assert_eq!(like_prefix_pattern("ü_"), r"ü\_%");
     }
 
     #[test]
