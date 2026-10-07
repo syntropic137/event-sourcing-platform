@@ -54,7 +54,17 @@ message AppendRequest {
 
   uint64 expected_aggregate_nonce = 4;  // optimistic concurrency check; 0 => expect stream does not yet exist
 
-  string idempotency_key          = 5;  // whole-batch idempotency
+  // Whole-batch idempotency, scoped to (tenant_id, aggregate_id). Checked
+  // BEFORE expected_aggregate_nonce (ADR-028):
+  //   key committed, identical batch  => original AppendResponse, nothing
+  //                                      written (even if the stream has since
+  //                                      advanced past expected_aggregate_nonce)
+  //   key committed, different batch  => ALREADY_EXISTS, nothing written
+  //   key unused (or empty)           => normal concurrency check (ABORTED on a
+  //                                      stale expected_aggregate_nonce)
+  // "Identical" compares event metadata (header order ignored, server-set
+  // fields excluded) and payloads.
+  string idempotency_key          = 5;
   repeated EventData events       = 6;  // client provides strictly consecutive aggregate_nonces
 }
 
