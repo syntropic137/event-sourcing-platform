@@ -34,6 +34,22 @@ pub struct ReadAllResult {
     pub scan_mismatches: u64,
 }
 
+/// Verifies every scan against the acknowledged history and counts scans
+/// whose global-nonce sequence differs from the first scan's.
+pub fn verify_scans(scans: &[Vec<verify::Stored>], acked: &HashSet<String>) -> (Verify, u64) {
+    let mut v = Verify::empty_ok();
+    let mut mismatches = 0;
+    for s in scans {
+        v.merge(&verify::check(s, acked, &HashSet::new()));
+        let same =
+            scans[0].len() == s.len() && scans[0].iter().zip(s).all(|(a, b)| a.global == b.global);
+        if !same {
+            mismatches += 1;
+        }
+    }
+    (v, mismatches)
+}
+
 /// Median of `values` (upper median for even lengths); 0 when empty.
 pub fn median(values: &[f64]) -> f64 {
     let mut v = values.to_vec();
@@ -55,9 +71,7 @@ pub async fn read_all_scan(
     let mut scan_secs = Vec::with_capacity(reps);
     let mut scan_events = Vec::with_capacity(reps);
     let mut rates = Vec::with_capacity(reps);
-    let mut first: Option<Vec<u64>> = None;
-    let mut v = Verify::empty_ok();
-    let mut scan_mismatches = 0;
+    let mut scans = Vec::with_capacity(reps);
     let mon = ctx.monitors(Instant::now());
     for _ in 0..reps {
         let t0 = Instant::now();
@@ -66,16 +80,16 @@ pub async fn read_all_scan(
         scan_secs.push(secs);
         scan_events.push(stored.len() as u64);
         rates.push(stored.len() as f64 / secs);
-        v.merge(&verify::check(&stored, acked, &HashSet::new()));
-        let seq: Vec<u64> = stored.iter().map(|s| s.global).collect();
-        match &first {
-            None => first = Some(seq),
-            Some(f) if *f != seq => scan_mismatches += 1,
-            Some(_) => {}
-        }
+        scans.push(stored);
     }
+    // Verification runs after sampling stops so its CPU does not count
+    // against the scans' resource figures.
     let (pg, resources) = mon.stop().await;
-    let seq = first.unwrap_or_default();
+    let (v, scan_mismatches) = verify_scans(&scans, acked);
+    let seq: Vec<u64> = scans
+        .first()
+        .map(|s| s.iter().map(|e| e.global).collect())
+        .unwrap_or_default();
     Ok((
         ReadAllResult {
             history: seq.len() as u64,
@@ -273,5 +287,39 @@ mod tests {
         assert_eq!(median(&[]), 0.0);
         // A truncated scan is a low outlier, not the reported rate.
         assert_eq!(median(&[100.0, 1.0, 110.0]), 100.0);
+    }
+
+    fn scan(n: u64) -> Vec<verify::Stored> {
+        (1..=n)
+            .map(|i| verify::Stored {
+                global: i * 2,
+                aggregate_id: "a".into(),
+                aggregate_nonce: i,
+                event_id: crate::event_id("a", i),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_scan_is_verified() {
+        let acked: HashSet<String> = (1..=3).map(|i| crate::event_id("a", i)).collect();
+        let (v, m) = verify_scans(&[scan(3), scan(3), scan(3)], &acked);
+        assert!(v.ok);
+        assert_eq!(m, 0);
+        // Truncated later scan: missing events and a sequence mismatch.
+        let (v, m) = verify_scans(&[scan(3), scan(2), scan(3)], &acked);
+        assert!(!v.ok);
+        assert_eq!(v.missing_acked, 1);
+        assert_eq!(m, 1);
+        // Empty later scan.
+        let (v, m) = verify_scans(&[scan(3), scan(3), Vec::new()], &acked);
+        assert!(!v.ok);
+        assert_eq!(m, 1);
+        // Same events, different order in a later scan.
+        let mut swapped = scan(3);
+        swapped.swap(0, 1);
+        let (v, m) = verify_scans(&[scan(3), swapped], &acked);
+        assert!(!v.ok);
+        assert_eq!(m, 1);
     }
 }
