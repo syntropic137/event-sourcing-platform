@@ -135,6 +135,51 @@ The `authorization` header goes on every call, including `subscribe()`.
 Credentials over plaintext to a non-loopback host raise `ClientConfigError`
 unless `allow_insecure_credentials=True`; TLS options are in `TlsConfig`.
 Rejected credentials raise `EventStoreAuthenticationError`.
+### Event versions and upcasting
+
+Events use the cross-language envelope
+([ADR-027](../../docs/adrs/ADR-027-cross-language-event-envelope.md)): the
+payload holds only the event's fields; `event_type` and `schema_version` are
+written as metadata. Readers decode by `(event_type, event_version)`, so a
+stored v1 event is never validated as a v2 model.
+
+```python
+from typing import ClassVar
+
+from event_sourcing import DomainEvent, Upcasters, event
+
+
+@event("MoneyDeposited", "v2")
+class MoneyDeposited(DomainEvent):
+    event_type: ClassVar[str] = "MoneyDeposited"
+    schema_version: ClassVar[int] = 2  # what is written and decoded
+    amount: int
+    currency: str
+
+
+upcasters = (
+    Upcasters()
+    .register("MoneyDeposited", 1, 2, lambda body: {**body, "currency": "EUR"})
+    .rename("CashAdded", 1, "MoneyDeposited", 1, lambda body: body)
+)
+client = EventStoreClientFactory.create_grpc_client(tenant_id="my-tenant", upcasters=upcasters)
+```
+
+- The `@event` version string is descriptive metadata; `schema_version`
+  (default 1) is the wire version.
+- A registered type at a version with no class (after upcasting) raises
+  `UnknownEventVersionError`; a payload the model rejects raises
+  `EventPayloadError`; a non-JSON content type raises
+  `UnsupportedContentTypeError`; a failing step raises `UpcastError`. All are
+  `EventDecodeError`, an `UndecodableEventError`: a `SubscriptionCoordinator`
+  halts at the event instead of retrying. None is skipped.
+- A type with no registered class is a `GenericDomainEvent` (ADR-023).
+- `metadata.event_type`/`event_version` are what the event was decoded as;
+  `metadata.stored_event_type`/`stored_event_version` are as stored.
+- Payloads written by the TypeScript SDK <= 0.17 contain `eventType` and
+  `schemaVersion` keys; readers drop them, so strict models accept them.
+- `on_invalid_payload="generic"` restores the pre-ADR-027 fallback to
+  `GenericDomainEvent` for a payload the model rejects (a migration aid).
 
 ## VSA Integration
 

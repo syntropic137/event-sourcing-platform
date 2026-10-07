@@ -112,6 +112,71 @@ export function toEventStoreError(message: string, err: unknown): EventStoreErro
     : new EventStoreError(message, original);
 }
 
+/**
+ * A stored event cannot be decoded by this reader (ADR-027).
+ *
+ * Thrown on read instead of handing the event to code written for another
+ * schema; never skipped. Retrying does not help: fix it in code (register the
+ * event class or an upcaster). `eventType`/`eventVersion` are as stored
+ * (version 0 read as 1), or as produced by the upcaster chain when a later
+ * stage failed. `globalNonce` is the event's store position (0 if unknown).
+ */
+export class EventDecodeError extends BaseEventSourcingError {
+  readonly code: string = 'EVENT_DECODE_ERROR';
+  readonly eventType: string;
+  readonly eventVersion: number;
+  readonly reason: string;
+  readonly globalNonce: number;
+  readonly cause?: Error;
+
+  constructor(
+    eventType: string,
+    eventVersion: number,
+    reason: string,
+    globalNonce = 0,
+    cause?: Error
+  ) {
+    super(`Cannot decode event '${eventType}' v${eventVersion}: ${reason}`, {
+      eventType,
+      eventVersion,
+      globalNonce,
+      originalError: cause?.message,
+    });
+    this.eventType = eventType;
+    this.eventVersion = eventVersion;
+    this.reason = reason;
+    this.globalNonce = globalNonce;
+    this.cause = cause;
+  }
+}
+
+/** No event class is registered for the type (strict decode only; the gRPC
+ * adapter returns an unregistered type as a generic event, ADR-023). */
+export class UnknownEventTypeError extends EventDecodeError {
+  readonly code: string = 'UNKNOWN_EVENT_TYPE';
+}
+
+/** The type is registered, but not at this version, and no upcaster maps the
+ * stored version to a registered one. */
+export class UnknownEventVersionError extends EventDecodeError {
+  readonly code: string = 'UNKNOWN_EVENT_VERSION';
+}
+
+/** The payload is not JSON, or not a JSON object. */
+export class EventPayloadError extends EventDecodeError {
+  readonly code: string = 'EVENT_PAYLOAD_ERROR';
+}
+
+/** The stored content type is neither empty nor `application/json`. */
+export class UnsupportedContentTypeError extends EventDecodeError {
+  readonly code: string = 'UNSUPPORTED_CONTENT_TYPE';
+}
+
+/** An upcaster step threw or did not return a JSON object, or the chain cycled. */
+export class UpcastError extends EventDecodeError {
+  readonly code: string = 'UPCAST_ERROR';
+}
+
 /** Serialization error */
 export class SerializationError extends BaseEventSourcingError {
   readonly code = 'SERIALIZATION_ERROR';

@@ -3,7 +3,9 @@
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Protocol
 
+from event_sourcing.core.envelope import InvalidPayloadPolicy
 from event_sourcing.core.event import DomainEvent, EventEnvelope
+from event_sourcing.core.upcast import Upcasters
 
 if TYPE_CHECKING:
     from event_sourcing.client.auth import Credentials, TlsConfig
@@ -179,6 +181,8 @@ class EventStoreClientFactory:
         auth: "Credentials | None" = None,
         tls: "TlsConfig | bool | None" = None,
         allow_insecure_credentials: bool = False,
+        upcasters: Upcasters | None = None,
+        on_invalid_payload: InvalidPayloadPolicy = "raise",
     ) -> EventStoreClient:
         """
         Create a gRPC event store client for production.
@@ -192,6 +196,8 @@ class EventStoreClientFactory:
             tls: ``True`` or a ``TlsConfig`` to connect over TLS
             allow_insecure_credentials: allow ``auth`` over plaintext to a
                 non-loopback host
+            upcasters: Steps that migrate stored events before decoding (ADR-027)
+            on_invalid_payload: See ``GrpcEventStoreClient``
 
         Returns:
             GrpcEventStoreClient instance
@@ -205,4 +211,6 @@ class EventStoreClientFactory:
             auth=auth,
             tls=tls,
             allow_insecure_credentials=allow_insecure_credentials,
+            upcasters=upcasters,
+            on_invalid_payload=on_invalid_payload,
         )

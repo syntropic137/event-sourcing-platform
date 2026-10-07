@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from event_sourcing.core.event import DomainEvent
 
@@ -21,12 +21,17 @@ T = TypeVar("T", bound=type)
 # types from the wire format instead of always falling back to GenericDomainEvent.
 _EVENT_TYPE_REGISTRY: dict[str, type[DomainEvent]] = {}
 
+# event_type -> schema_version -> class (ADR-027). Readers decode by
+# (event_type, event_version), so every registered version is kept.
+_EVENT_VERSION_REGISTRY: dict[str, dict[int, type[DomainEvent]]] = {}
+
 
 def get_event_type_registry() -> dict[str, type[DomainEvent]]:
     """Return the global event type registry (read-only snapshot).
 
     The registry maps event type strings (e.g. ``"WorkflowCreated"``) to their
-    concrete ``DomainEvent`` subclass.  Populated automatically by ``@event``.
+    concrete ``DomainEvent`` subclass at the highest registered
+    ``schema_version``.  Populated automatically by ``@event``.
 
     Returns:
         A copy of the registry dict.
@@ -35,15 +40,29 @@ def get_event_type_registry() -> dict[str, type[DomainEvent]]:
 
 
 def resolve_event_type(event_type: str) -> type[DomainEvent] | None:
-    """Look up a concrete DomainEvent class by event type string.
+    """Look up the class registered for ``event_type`` at its highest version.
 
-    Unlike ``get_event_type_registry()`` this does not copy the registry,
-    making it suitable for hot-path lookups (e.g. per-event in gRPC client).
+    Readers decode by ``(event_type, event_version)``: use
+    :func:`resolve_event_class` for that.
 
     Returns:
         The registered class, or ``None`` if not found.
     """
     return _EVENT_TYPE_REGISTRY.get(event_type)
+
+
+def resolve_event_class(event_type: str, event_version: int) -> type[DomainEvent] | None:
+    """Look up the class registered for ``(event_type, event_version)``.
+
+    ``event_version`` is the class's ``schema_version`` (the value written to
+    the store's ``event_version``), not the ``@event`` version string.
+    """
+    return _EVENT_VERSION_REGISTRY.get(event_type, {}).get(event_version)
+
+
+def registered_event_versions(event_type: str) -> tuple[int, ...]:
+    """The ``schema_version`` values registered for ``event_type``, ascending."""
+    return tuple(sorted(_EVENT_VERSION_REGISTRY.get(event_type, {})))
 
 
 # ============================================================================
@@ -125,12 +144,24 @@ def _is_valid_event_version(version: str) -> bool:
 
 
 def _try_register_event_type(event_type: str, cls: type) -> None:
-    """Register cls in the event type registry if it's a DomainEvent subclass."""
+    """Register cls in the event type registry if it's a DomainEvent subclass.
+
+    Keyed by ``(event_type, cls.schema_version)``. A later registration of the
+    same pair overwrites the earlier one (ADR-023).
+    """
     try:
-        if issubclass(cls, DomainEvent):
-            _EVENT_TYPE_REGISTRY[event_type] = cls
+        if not issubclass(cls, DomainEvent):
+            return
     except TypeError:
-        pass
+        return
+    version: Any = cls.schema_version  # runtime-checked: subclasses may assign anything
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        msg = f"{cls.__name__}.schema_version must be an int >= 1 (ADR-027), got {version!r}"
+        raise ValueError(msg)
+    by_version = _EVENT_VERSION_REGISTRY.setdefault(event_type, {})
+    by_version[version] = cls
+    if version == max(by_version):
+        _EVENT_TYPE_REGISTRY[event_type] = cls
 
 
 def event(event_type: str, version: str) -> Callable[[T], T]:
@@ -144,9 +175,13 @@ def event(event_type: str, version: str) -> Callable[[T], T]:
         version: The event version. Must be either:
                  - Simple format: "v1", "v2", "v3", etc. (recommended)
                  - Semantic format: "1.0.0", "2.1.3", etc. (advanced)
+                 This string is descriptive metadata. The version written to
+                 the store (``event_version``) and used to decode is the
+                 class's ``schema_version`` ClassVar (default 1), ADR-027.
 
     Raises:
-        ValueError: If version format is invalid
+        ValueError: If version format is invalid, or ``schema_version`` is not
+            an int >= 1
 
     Example (simple versioning - recommended):
         @event("TaskCreated", "v1")
@@ -157,6 +192,7 @@ def event(event_type: str, version: str) -> Callable[[T], T]:
     Example (semantic versioning - advanced):
         @event("TaskCreated", "2.0.0")
         class TaskCreatedEventV2(DomainEvent):
+            schema_version: ClassVar[int] = 2  # what is written and decoded
             task_id: str
             title: str
             description: str  # New field in v2

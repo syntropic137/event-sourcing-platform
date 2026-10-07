@@ -3,7 +3,9 @@
 **Status:** Accepted
 **Date:** 2026-04-07
 **Deciders:** NeuralEmpowerment
-**Relates to:** ADR-007 (Event Versioning), ADR-010 (Decorator Patterns)
+**Relates to:** ADR-007 (Event Versioning), ADR-010 (Decorator Patterns), ADR-027 (Cross-Language Event Envelope)
+
+> **Amended by ADR-027 (#382).** The registry is keyed by `(event_type, schema_version)`, not `event_type` alone, and readers decode by the stored `event_version` after upcasting. The `GenericDomainEvent` / generic fallback below still applies to a type with no registered class. It no longer applies to a registered type at an unregistered version (`UnknownEventVersionError`) or, in Python, to a payload the registered class rejects (`EventPayloadError`; `on_invalid_payload="generic"` keeps the old fallback). Registering a new version no longer replaces the old one.
 
 ## Context
 

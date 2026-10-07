@@ -133,8 +133,7 @@ async function write(addr, tenant, id) {
 async function read(addr, tenant, id) {
   const { adapter } = repo(addr, tenant);
   const envelopes = await adapter.readEvents(`Account-${id}`);
-  // The adapter reports the registered class's schemaVersion, not the stored
-  // one (ADR-027 known deviation), so also read the wire metadata directly.
+  // The wire metadata too, so the test can check what the SDK reports.
   const raw = await (await adapter.clientPromise).readStream({
     tenantId: tenant,
     aggregateId: id,
@@ -145,8 +144,11 @@ async function read(addr, tenant, id) {
   const out = envelopes.map((env, i) => ({
     event_type: env.event.eventType,
     event_version: env.event.schemaVersion,
+    stored_event_type: env.metadata.storedEventType,
+    stored_event_version: env.metadata.storedEventVersion,
     wire_event_type: raw.events[i].meta.eventType,
     wire_event_version: raw.events[i].meta.eventVersion,
+    class: env.event instanceof es.BaseDomainEvent ? env.event.constructor.name : "generic",
     aggregate_type: env.metadata.aggregateType,
     aggregate_nonce: env.metadata.aggregateNonce,
     content_type: env.metadata.contentType,
