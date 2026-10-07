@@ -67,6 +67,9 @@ A minimal gRPC-based Event Store implemented in Rust with an in-memory backend. 
     - `BACKEND` = `memory` | `postgres`
     - `DATABASE_URL` when `BACKEND=postgres`
     - `BIND_ADDR` (default `0.0.0.0:50051`)
+    - Postgres pool size and timeouts (`PG_POOL_MAX_CONNECTIONS` default 10,
+      `PG_STATEMENT_TIMEOUT_MS` default 30000, ...): see
+      [`docs/operations/POSTGRES-CONNECTIONS.md`](../docs/operations/POSTGRES-CONNECTIONS.md)
 
 ### How-To: Smoke test
 

@@ -72,7 +72,7 @@ pub async fn capture(pool: &PgPool, container: Option<&str>) -> Environment {
         os: sh("uname", &["-srm"]).await,
         host_load_at_start: sh("uptime", &[]).await,
         rustc: sh("rustc", &["--version"]).await,
-        server_pool_max: crate::sampler::SERVER_POOL_MAX,
+        server_pool_max: crate::sampler::server_pool_max(),
         pg_container: container.map(str::to_owned),
         ..Default::default()
     };

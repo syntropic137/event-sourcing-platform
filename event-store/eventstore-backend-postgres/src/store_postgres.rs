@@ -1,4 +1,6 @@
 use std::collections::{HashMap, VecDeque};
+use std::future::Future;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -7,9 +9,13 @@ use async_trait::async_trait;
 use eventstore_core::fingerprint::{batch_fingerprint, fingerprint_matches};
 use eventstore_core::{proto, EventStore as EventStoreTrait, StoreError, StoreStream};
 use futures::stream;
-use sqlx::{postgres::PgPoolOptions, types::Json, PgPool, Row};
+use sqlx::pool::PoolConnection;
+use sqlx::postgres::{PgConnectOptions, PgListener, PgPoolOptions};
+use sqlx::{types::Json, Connection, PgConnection, PgPool, Postgres, Row};
 use tokio::sync::broadcast;
 use tokio::time::{interval, Duration, Interval};
+
+use crate::config::PostgresConfig;
 
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 
@@ -17,6 +23,9 @@ const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 const NOTIFY_CHANNEL: &str = "eventstore_events";
 const NOTIFY_BROADCAST_CAPACITY: usize = 256;
 const FALLBACK_POLL_SECS: u64 = 5;
+/// Postgres rejects NOTIFY payloads of 8000 bytes or more; `tenant:nonce`
+/// stays below that for tenant ids shorter than this.
+const NOTIFY_MAX_TENANT_BYTES: i32 = 7900;
 
 /// Default rows per subscription page (#369). Bounds what one subscriber
 /// holds in memory; large enough that paging costs little throughput.
@@ -36,6 +45,9 @@ struct NotifyPayload {
 }
 
 impl NotifyPayload {
+    /// The append statement builds the same string in SQL
+    /// (`$tenant || ':' || last_global`).
+    #[cfg(test)]
     fn encode(tenant_id: &str, last_global_nonce: i64) -> String {
         format!("{tenant_id}:{last_global_nonce}")
     }
@@ -199,55 +211,103 @@ fn normalize_event(
     Ok(event)
 }
 
+/// How long the LISTEN connection may sit without traffic before it is
+/// probed. An idle connection on a silently dropped network path never
+/// errors by itself; the probe finds it so the listener reconnects instead
+/// of leaving subscriptions on the fallback poll forever (#368).
+const LISTENER_IDLE_PROBE: Duration = Duration::from_secs(30);
+/// Bound on the probe round trip.
+const LISTENER_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Spawns a background task that maintains a dedicated PostgreSQL connection
 /// for LISTEN/NOTIFY. Notifications are forwarded to the broadcast channel
 /// so that subscription streams wake immediately on new events.
+///
+/// The connection comes from its own one-connection pool, so it never takes
+/// a slot of the main pool. Notifications are hints; the subscription's DB
+/// query is the source of truth and the fallback poll covers any gap.
 fn spawn_pg_listener(
-    database_url: String,
+    connect_options: Option<PgConnectOptions>,
+    acquire_timeout: Duration,
     notify_tx: broadcast::Sender<NotifyPayload>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let Some(connect_options) = connect_options else {
+            tracing::warn!("invalid database URL for LISTEN; subscriptions rely on polling");
+            return;
+        };
         let mut backoff = Duration::from_secs(1);
         let max_backoff = Duration::from_secs(30);
 
         loop {
-            match sqlx::postgres::PgListener::connect(&database_url).await {
-                Ok(mut listener) => {
-                    if let Err(e) = listener.listen(NOTIFY_CHANNEL).await {
-                        tracing::warn!(error = %e, "LISTEN on '{}' failed, retrying", NOTIFY_CHANNEL);
-                        tokio::time::sleep(backoff).await;
-                        backoff = (backoff * 2).min(max_backoff);
-                        continue;
-                    }
-                    tracing::info!("PgListener connected to channel '{}'", NOTIFY_CHANNEL);
-                    backoff = Duration::from_secs(1);
+            let connected = async {
+                let pool = PgPoolOptions::new()
+                    .max_connections(1)
+                    .acquire_timeout(acquire_timeout)
+                    .connect_lazy_with(connect_options.clone());
+                let mut listener = PgListener::connect_with(&pool).await?;
+                listener.listen(NOTIFY_CHANNEL).await?;
+                Ok::<_, sqlx::Error>(listener)
+            };
+            let mut listener = match tokio::time::timeout(acquire_timeout, connected).await {
+                Ok(Ok(listener)) => listener,
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "PgListener connect failed, retrying");
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(max_backoff);
+                    continue;
+                }
+                Err(_) => {
+                    tracing::warn!("PgListener connect timed out, retrying");
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(max_backoff);
+                    continue;
+                }
+            };
+            tracing::info!("PgListener connected to channel '{}'", NOTIFY_CHANNEL);
+            backoff = Duration::from_secs(1);
 
-                    loop {
-                        match listener.recv().await {
-                            Ok(notification) => {
-                                if let Some(payload) = NotifyPayload::parse(notification.payload())
-                                {
-                                    let _ = notify_tx.send(payload);
-                                }
+            loop {
+                match tokio::time::timeout(LISTENER_IDLE_PROBE, listener.recv()).await {
+                    Ok(Ok(notification)) => {
+                        if let Some(payload) = NotifyPayload::parse(notification.payload()) {
+                            let _ = notify_tx.send(payload);
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!(error = %e, "PgListener recv error, reconnecting");
+                        break;
+                    }
+                    Err(_) => {
+                        // Idle: prove the path is alive. A cancelled recv may
+                        // leave the connection mid-message; the probe then
+                        // fails and we reconnect, which is always safe.
+                        let probe = sqlx::query("SELECT 1").execute(&mut listener);
+                        match tokio::time::timeout(LISTENER_PROBE_TIMEOUT, probe).await {
+                            Ok(Ok(_)) => {}
+                            Ok(Err(e)) => {
+                                tracing::warn!(error = %e, "PgListener probe failed, reconnecting");
+                                break;
                             }
-                            Err(e) => {
+                            Err(_) => {
                                 tracing::warn!(
-                                    error = %e,
-                                    "PgListener recv error, reconnecting"
+                                    "PgListener probe timed out (network path stalled?), reconnecting"
                                 );
-                                tokio::time::sleep(backoff).await;
-                                backoff = (backoff * 2).min(max_backoff);
                                 break;
                             }
                         }
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "PgListener connect failed, retrying");
-                    tokio::time::sleep(backoff).await;
-                    backoff = (backoff * 2).min(max_backoff);
-                }
             }
+            // Known limit: sqlx's PgListener drop spawns an `UNLISTEN *` +
+            // return-to-pool task with no timeout. On a dead path that task
+            // and its socket live until the OS gives up on the unacknowledged
+            // write (TCP retransmission timeout, minutes), then end. At most
+            // one per reconnect cycle (>= 40 s apart while stalled), and it
+            // holds no slot of the main pool.
+            drop(listener);
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(max_backoff);
         }
     })
 }
@@ -256,6 +316,9 @@ pub struct PostgresStore {
     pool: PgPool,
     notify_tx: broadcast::Sender<NotifyPayload>,
     listener_handle: tokio::task::JoinHandle<()>,
+    /// Client-side bound on one database operation; see
+    /// [`PostgresConfig::operation_deadline`].
+    deadline: Option<Duration>,
     /// Rows per subscription page; see [`PostgresStore::set_subscribe_page_size`].
     subscribe_page_size: AtomicUsize,
     /// Subscription page queries issued (all subscriptions of this store).
@@ -269,27 +332,77 @@ impl Drop for PostgresStore {
 }
 
 impl PostgresStore {
+    /// Wrap an existing pool. Uses the default client deadline and opens the
+    /// LISTEN connection from `database_url`.
     pub fn new(pool: PgPool, database_url: String) -> Arc<Self> {
+        let options = PgConnectOptions::from_str(&database_url).ok();
+        let cfg = PostgresConfig::default();
+        Self::from_parts(pool, options, cfg.acquire_timeout, cfg.operation_deadline())
+    }
+
+    fn from_parts(
+        pool: PgPool,
+        listener_options: Option<PgConnectOptions>,
+        acquire_timeout: Duration,
+        deadline: Option<Duration>,
+    ) -> Arc<Self> {
         let (notify_tx, _) = broadcast::channel(NOTIFY_BROADCAST_CAPACITY);
-        let listener_handle = spawn_pg_listener(database_url, notify_tx.clone());
+        let listener_handle =
+            spawn_pg_listener(listener_options, acquire_timeout, notify_tx.clone());
         Arc::new(Self {
             pool,
             notify_tx,
             listener_handle,
+            deadline,
             subscribe_page_size: AtomicUsize::new(DEFAULT_SUBSCRIBE_PAGE_SIZE),
             subscribe_page_queries: Arc::new(AtomicU64::new(0)),
         })
     }
 
+    /// Connect with [`PostgresConfig::default`].
     pub async fn connect(database_url: &str) -> anyhow::Result<Arc<Self>> {
+        Self::connect_with_config(database_url, &PostgresConfig::default()).await
+    }
+
+    /// Connect with explicit pool and timeout settings (#368, #370).
+    ///
+    /// Migrations run on a separate connection without the session
+    /// timeouts, so a slow migration is never killed by `statement_timeout`.
+    pub async fn connect_with_config(
+        database_url: &str,
+        config: &PostgresConfig,
+    ) -> anyhow::Result<Arc<Self>> {
+        config.validate()?;
+        let base = PgConnectOptions::from_str(database_url)?;
+        {
+            // Connecting is bounded like a pool acquire; the migrations
+            // themselves are not.
+            let mut conn =
+                tokio::time::timeout(config.acquire_timeout, PgConnection::connect_with(&base))
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!(
+                            "connecting to Postgres for migrations timed out after {:?}",
+                            config.acquire_timeout
+                        )
+                    })??;
+            sqlx::migrate!("./migrations").run(&mut conn).await?;
+            conn.close().await?;
+        }
+        let options = config.apply(base);
         let pool = PgPoolOptions::new()
-            .max_connections(5)
-            .acquire_timeout(Duration::from_secs(30))
+            .max_connections(config.max_connections)
+            .min_connections(config.min_connections)
+            .acquire_timeout(config.acquire_timeout)
             .idle_timeout(Duration::from_secs(600))
-            .connect(database_url)
+            .connect_with(options.clone())
             .await?;
-        sqlx::migrate!("./migrations").run(&pool).await?;
-        Ok(Self::new(pool, database_url.to_owned()))
+        Ok(Self::from_parts(
+            pool,
+            Some(options),
+            config.acquire_timeout,
+            config.operation_deadline(),
+        ))
     }
 
     /// Connect with test-friendly configuration
@@ -334,91 +447,26 @@ impl PostgresStore {
     pub fn subscribe_page_queries(&self) -> u64 {
         self.subscribe_page_queries.load(Ordering::Relaxed)
     }
-}
 
-fn map_db_error(e: sqlx::Error) -> StoreError {
-    match e {
-        sqlx::Error::Database(db_err) => {
-            let code = db_err.code().map(|c| c.to_string()).unwrap_or_default();
-            let message = db_err.message().to_string();
-            if code == "23505" {
-                StoreError::Concurrency {
-                    message,
-                    detail: None,
-                }
-            } else if code == "23514" {
-                StoreError::Invalid(message)
-            } else {
-                StoreError::Internal(anyhow::anyhow!(message))
-            }
-        }
-        other => StoreError::Internal(anyhow::anyhow!(other)),
-    }
-}
-
-#[async_trait]
-impl EventStoreTrait for PostgresStore {
-    fn backend_kind(&self) -> &'static str {
-        "postgres"
+    /// Check out a connection; waiting is bounded by the pool's acquire
+    /// timeout, and failure is `UNAVAILABLE`.
+    async fn acquire(&self) -> Result<Checkout, StoreError> {
+        Checkout::acquire(&self.pool).await.map_err(map_db_error)
     }
 
-    fn capabilities(&self) -> Vec<&'static str> {
-        // #337: appends take a per-tenant transaction-scoped advisory lock
-        // before allocating global nonces, so within a tenant they become
-        // visible in commit order.
-        // #350: failed subscription queries end the stream with UNAVAILABLE.
-        // #351: undecodable rows end subscriptions/reads with DATA_LOSS.
-        // #361: the subscription prefix is an escaped LIKE pattern.
-        vec![
-            eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE,
-            eventstore_core::capabilities::SUBSCRIPTION_ERRORS_SURFACED,
-            eventstore_core::capabilities::UNDECODABLE_EVENTS_SURFACED,
-            eventstore_core::capabilities::LITERAL_SUBSCRIPTION_PREFIX,
-        ]
-    }
-
-    async fn append(&self, req: proto::AppendRequest) -> Result<proto::AppendResponse, StoreError> {
-        if req.tenant_id.is_empty() {
-            return Err(StoreError::Unauthenticated(
-                "tenant_id is required on AppendRequest".into(),
-            ));
-        }
-        if req.aggregate_id.is_empty() {
-            return Err(StoreError::Invalid(
-                "aggregate_id is required on AppendRequest".into(),
-            ));
-        }
-        if req.aggregate_type.is_empty() {
-            return Err(StoreError::Invalid(
-                "aggregate_type is required on AppendRequest".into(),
-            ));
-        }
-        if req.events.is_empty() {
-            return Err(StoreError::Invalid(
-                "AppendRequest.events must not be empty".into(),
-            ));
-        }
-
+    /// The append transaction. Runs on `conn` so the caller can discard the
+    /// connection if the client deadline passes mid-transaction.
+    async fn append_tx(
+        &self,
+        conn: &mut PgConnection,
+        req: &proto::AppendRequest,
+        fingerprint: Vec<u8>,
+        events: Vec<proto::EventData>,
+    ) -> Result<proto::AppendResponse, StoreError> {
         let tenant_id = req.tenant_id.clone();
         let aggregate_id = req.aggregate_id.clone();
         let aggregate_type = req.aggregate_type.clone();
-
-        let mut events: Vec<proto::EventData> = Vec::with_capacity(req.events.len());
-        for ev in req.events.into_iter() {
-            events.push(normalize_event(
-                ev,
-                &tenant_id,
-                &aggregate_id,
-                &aggregate_type,
-            )?);
-        }
-
-        let fingerprint = batch_fingerprint(&events);
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
+        let mut tx = conn.begin().await.map_err(map_db_error)?;
 
         // Precedence (ADR-028): the idempotency key decides first, then the
         // concurrency precondition. A retry after a lost ack therefore gets
@@ -553,119 +601,99 @@ impl EventStoreTrait for PostgresStore {
             return rollback_with(tx, Err(conflict(head_nonce, head_global))).await;
         }
 
-        let mut last_global_nonce = current_last_global;
-        let mut assigned_events: Vec<proto::EventData> = Vec::with_capacity(events.len());
-        for mut ev in events.into_iter() {
-            let mut meta = ev.meta.take().expect("normalized event must have metadata");
-            let now_ms = now_unix_ms();
-            meta.recorded_time_unix_ms = now_ms;
-            let headers_json = Json(meta.headers.clone());
-            let payload_sha = if meta.payload_sha256.is_empty() {
-                None
-            } else {
-                Some(meta.payload_sha256.clone())
-            };
+        // Everything written while the lock is held goes in ONE statement
+        // (#370): all events, the stream head, the idempotency record and the
+        // NOTIFY. The lock is held for the lock, the #363 re-checks (one or
+        // two plain reads), this write and COMMIT, whatever the batch size,
+        // instead of one round trip per event plus three. Same transaction, same rows, same constraints and triggers
+        // (the per-row nonce-contiguity trigger sees earlier rows of the
+        // statement because rows are inserted in `ord` order).
+        let recorded_ms = now_unix_ms() as i64;
+        let n = events.len();
+        let mut aggregate_nonces = Vec::with_capacity(n);
+        let mut event_ids = Vec::with_capacity(n);
+        let mut event_types = Vec::with_capacity(n);
+        let mut event_versions = Vec::with_capacity(n);
+        let mut content_types = Vec::with_capacity(n);
+        let mut content_schemas = Vec::with_capacity(n);
+        let mut correlation_ids = Vec::with_capacity(n);
+        let mut causation_ids = Vec::with_capacity(n);
+        let mut actor_ids = Vec::with_capacity(n);
+        let mut timestamps = Vec::with_capacity(n);
+        let mut payload_shas = Vec::with_capacity(n);
+        let mut headers = Vec::with_capacity(n);
+        let mut payloads = Vec::with_capacity(n);
+        let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_owned());
+        for ev in &events {
+            let meta = ev
+                .meta
+                .as_ref()
+                .expect("normalized event must have metadata");
+            aggregate_nonces.push(meta.aggregate_nonce as i64);
+            event_ids.push(meta.event_id.clone());
+            event_types.push(meta.event_type.clone());
+            event_versions.push(meta.event_version as i32);
+            content_types.push(meta.content_type.clone());
+            content_schemas.push(non_empty(&meta.content_schema));
+            correlation_ids.push(non_empty(&meta.correlation_id));
+            causation_ids.push(non_empty(&meta.causation_id));
+            actor_ids.push(non_empty(&meta.actor_id));
+            timestamps.push(meta.timestamp_unix_ms as i64);
+            payload_shas
+                .push((!meta.payload_sha256.is_empty()).then(|| meta.payload_sha256.clone()));
+            headers.push(Json(meta.headers.clone()));
+            payloads.push(ev.payload.clone());
+        }
 
-            let row = sqlx::query(
-                r#"
+        let rows = sqlx::query(
+            r#"
+            WITH ins AS (
                 INSERT INTO events (
                     tenant_id, aggregate_id, aggregate_type, aggregate_nonce,
                     event_id, event_type, event_version, content_type, content_schema,
                     correlation_id, causation_id, actor_id, timestamp_unix_ms,
                     recorded_time_unix_ms, payload_sha256, headers, payload
-                ) VALUES (
-                    $1, $2, $3, $4,
-                    $5, $6, $7, $8, $9,
-                    $10, $11, $12, $13,
-                    $14, $15, $16, $17
                 )
-                RETURNING global_nonce
-                "#,
-            )
-            .bind(&tenant_id)
-            .bind(&aggregate_id)
-            .bind(&aggregate_type)
-            .bind(meta.aggregate_nonce as i64)
-            .bind(&meta.event_id)
-            .bind(&meta.event_type)
-            .bind(meta.event_version as i32)
-            .bind(&meta.content_type)
-            .bind(if meta.content_schema.is_empty() {
-                None::<&str>
-            } else {
-                Some(meta.content_schema.as_str())
-            })
-            .bind(if meta.correlation_id.is_empty() {
-                None::<&str>
-            } else {
-                Some(meta.correlation_id.as_str())
-            })
-            .bind(if meta.causation_id.is_empty() {
-                None::<&str>
-            } else {
-                Some(meta.causation_id.as_str())
-            })
-            .bind(if meta.actor_id.is_empty() {
-                None::<&str>
-            } else {
-                Some(meta.actor_id.as_str())
-            })
-            .bind(meta.timestamp_unix_ms as i64)
-            .bind(now_ms as i64)
-            .bind(payload_sha)
-            .bind(headers_json)
-            .bind(&ev.payload)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(map_db_error)?;
-
-            let global_nonce: i64 = row.get("global_nonce");
-            meta.global_nonce = global_nonce as u64;
-            last_global_nonce = meta.global_nonce;
-
-            assigned_events.push(proto::EventData {
-                meta: Some(meta.clone()),
-                payload: ev.payload,
-            });
-        }
-
-        let last_committed = assigned_events
-            .last()
-            .and_then(|ev| ev.meta.as_ref().map(|m| m.aggregate_nonce))
-            .unwrap_or(current_last_nonce);
-        let first_committed = assigned_events
-            .first()
-            .and_then(|ev| ev.meta.as_ref().map(|m| m.aggregate_nonce))
-            .unwrap_or(current_last_nonce + 1);
-
-        sqlx::query(
-            r#"
-            INSERT INTO aggregates (tenant_id, aggregate_id, aggregate_type, last_nonce, last_global_nonce)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (tenant_id, aggregate_id)
-            DO UPDATE SET
-                aggregate_type = EXCLUDED.aggregate_type,
-                last_nonce = EXCLUDED.last_nonce,
-                last_global_nonce = EXCLUDED.last_global_nonce,
-                updated_at = NOW()
-            "#,
-        )
-        .bind(&tenant_id)
-        .bind(&aggregate_id)
-        .bind(&aggregate_type)
-        .bind(last_committed as i64)
-        .bind(last_global_nonce as i64)
-        .execute(&mut *tx)
-        .await
-        .map_err(map_db_error)?;
-
-        if !req.idempotency_key.is_empty() {
-            sqlx::query(
-                r#"
+                SELECT $1, $2, $3, t.aggregate_nonce,
+                       t.event_id, t.event_type, t.event_version, t.content_type, t.content_schema,
+                       t.correlation_id, t.causation_id, t.actor_id, t.timestamp_unix_ms,
+                       $7, t.payload_sha256, t.headers, t.payload
+                FROM unnest(
+                    $8::int8[], $9::text[], $10::text[], $11::int4[], $12::text[], $13::text[],
+                    $14::text[], $15::text[], $16::text[], $17::int8[], $18::bytea[],
+                    $19::jsonb[], $20::bytea[]
+                ) WITH ORDINALITY AS t(
+                    aggregate_nonce, event_id, event_type, event_version, content_type,
+                    content_schema, correlation_id, causation_id, actor_id,
+                    timestamp_unix_ms, payload_sha256, headers, payload, ord
+                )
+                ORDER BY t.ord
+                RETURNING aggregate_nonce, global_nonce
+            ),
+            head AS (
+                SELECT min(aggregate_nonce) AS first_nonce,
+                       max(aggregate_nonce) AS last_nonce,
+                       max(global_nonce) AS last_global
+                FROM ins
+            ),
+            agg AS (
+                INSERT INTO aggregates (tenant_id, aggregate_id, aggregate_type, last_nonce, last_global_nonce)
+                SELECT $1, $2, $3, last_nonce, last_global FROM head
+                ON CONFLICT (tenant_id, aggregate_id)
+                DO UPDATE SET
+                    aggregate_type = EXCLUDED.aggregate_type,
+                    last_nonce = EXCLUDED.last_nonce,
+                    last_global_nonce = EXCLUDED.last_global_nonce,
+                    updated_at = NOW()
+                RETURNING 1
+            ),
+            idem AS (
                 INSERT INTO idempotency (
                     tenant_id, aggregate_id, idempotency_key,
                     request_fingerprint, first_committed_nonce, last_committed_nonce, last_global_nonce
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                )
+                SELECT $1, $2, $4, $5, first_nonce, last_nonce, last_global FROM head
+                WHERE $4 <> ''
                 ON CONFLICT (tenant_id, aggregate_id, idempotency_key)
                 DO UPDATE SET
                     request_fingerprint = EXCLUDED.request_fingerprint,
@@ -673,36 +701,77 @@ impl EventStoreTrait for PostgresStore {
                     last_committed_nonce = EXCLUDED.last_committed_nonce,
                     last_global_nonce = EXCLUDED.last_global_nonce,
                     updated_at = NOW()
-                "#,
+                RETURNING 1
+            ),
+            -- Delivered at COMMIT. A payload must stay under 8000 bytes; for
+            -- a longer tenant id no NOTIFY is sent and subscribers see the
+            -- events on their fallback poll (a failing pg_notify would abort
+            -- the transaction).
+            notified AS (
+                SELECT pg_notify($6, $1 || ':' || last_global) FROM head
+                WHERE octet_length($1) < $21
             )
-            .bind(&tenant_id)
-            .bind(&aggregate_id)
-            .bind(&req.idempotency_key)
-            .bind(&fingerprint)
-            .bind(first_committed as i64)
-            .bind(last_committed as i64)
-            .bind(last_global_nonce as i64)
-            .execute(&mut *tx)
-            .await
-            .map_err(map_db_error)?;
-        }
+            SELECT ins.aggregate_nonce, ins.global_nonce,
+                   (SELECT count(*) FROM agg) AS agg_rows,
+                   (SELECT count(*) FROM idem) AS idem_rows,
+                   (SELECT count(*) FROM notified) AS notified
+            FROM ins
+            ORDER BY ins.aggregate_nonce
+            "#,
+        )
+        .bind(&tenant_id)
+        .bind(&aggregate_id)
+        .bind(&aggregate_type)
+        .bind(&req.idempotency_key)
+        .bind(&fingerprint)
+        .bind(NOTIFY_CHANNEL)
+        .bind(recorded_ms)
+        .bind(&aggregate_nonces)
+        .bind(&event_ids)
+        .bind(&event_types)
+        .bind(&event_versions)
+        .bind(&content_types)
+        .bind(&content_schemas)
+        .bind(&correlation_ids)
+        .bind(&causation_ids)
+        .bind(&actor_ids)
+        .bind(&timestamps)
+        .bind(&payload_shas)
+        .bind(&headers)
+        .bind(&payloads)
+        .bind(NOTIFY_MAX_TENANT_BYTES)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(map_db_error)?;
 
-        // Notify subscribers of new events (delivered only after commit).
-        // Best-effort: notification failure must not abort the append.
-        // The 5s fallback poll ensures delivery even if NOTIFY fails.
-        let notify_payload = NotifyPayload::encode(&tenant_id, last_global_nonce as i64);
-        if let Err(e) = sqlx::query("SELECT pg_notify($1, $2)")
-            .bind(NOTIFY_CHANNEL)
-            .bind(&notify_payload)
-            .execute(&mut *tx)
-            .await
-        {
-            tracing::warn!(error = %e, "pg_notify failed (non-fatal, fallback poll will deliver)");
+        // Defensive: one row per event, in aggregate order, with strictly
+        // increasing global nonces. Anything else would break the
+        // aggregate-order = global-order invariant; refuse to commit it.
+        let mut assigned: Vec<(u64, u64)> = Vec::with_capacity(n);
+        for row in &rows {
+            assigned.push((
+                row.get::<i64, _>("aggregate_nonce") as u64,
+                row.get::<i64, _>("global_nonce") as u64,
+            ));
         }
+        let in_order = assigned.len() == n
+            && assigned
+                .iter()
+                .enumerate()
+                .all(|(i, (agg, _))| *agg == current_last_nonce + i as u64 + 1)
+            && assigned.windows(2).all(|w| w[0].1 < w[1].1);
+        let head_written = rows.first().map(|r| r.get::<i64, _>("agg_rows")) == Some(1);
+        if !in_order || !head_written {
+            tx.rollback().await.map_err(map_db_error)?;
+            return Err(StoreError::Internal(anyhow::anyhow!(
+                "append wrote unexpected rows {assigned:?} (head written: {head_written}); rolled back"
+            )));
+        }
+        let (last_committed, last_global_nonce) = assigned[n - 1];
 
-        tx.commit()
-            .await
-            .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
+        // A failed COMMIT (lost connection) has an unknown outcome:
+        // UNAVAILABLE, retry with the same idempotency key.
+        tx.commit().await.map_err(map_db_error)?;
 
         // Also broadcast in-process for zero-latency same-instance delivery.
         // This intentionally duplicates the PgListener path — the subscriber's
@@ -716,6 +785,213 @@ impl EventStoreTrait for PostgresStore {
             last_global_nonce,
             last_aggregate_nonce: last_committed,
         })
+    }
+}
+
+/// A pooled connection that is closed, not returned to the pool, unless the
+/// operation using it ran to completion ([`Checkout::completed`]).
+///
+/// sqlx pings a connection returned to the pool, without a timeout. A
+/// connection abandoned mid-query (client deadline passed, or the caller's
+/// future was dropped: gRPC deadline, client disconnect) may sit on a stalled
+/// network path, where that ping would hang forever and hold a pool slot.
+/// Closing instead is bounded (sqlx gives a graceful close 5 s, then drops
+/// the socket) and frees the slot.
+struct Checkout {
+    conn: PoolConnection<Postgres>,
+    completed: bool,
+}
+
+impl Checkout {
+    async fn acquire(pool: &PgPool) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            conn: pool.acquire().await?,
+            completed: false,
+        })
+    }
+
+    /// The operation finished (successfully or with a database error): the
+    /// connection is in a known state and may go back to the pool.
+    fn completed(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl std::ops::Deref for Checkout {
+    type Target = PgConnection;
+    fn deref(&self) -> &PgConnection {
+        &self.conn
+    }
+}
+
+impl std::ops::DerefMut for Checkout {
+    fn deref_mut(&mut self) -> &mut PgConnection {
+        &mut self.conn
+    }
+}
+
+/// Bound on handing a completed connection back to the pool (sqlx pings it
+/// first). Past it the connection is dropped and its slot freed.
+const RETURN_TO_POOL_TIMEOUT: Duration = Duration::from_secs(5);
+
+impl Drop for Checkout {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.conn.close_on_drop();
+            return;
+        }
+        // sqlx's own return path pings without a timeout: a path that
+        // stalls right after the result arrived would hold the slot. Drive
+        // the same return ourselves under a bound; dropping the unfinished
+        // return closes the socket and releases the slot.
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let ret = self.conn.return_to_pool();
+            rt.spawn(async move {
+                if tokio::time::timeout(RETURN_TO_POOL_TIMEOUT, ret)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("returning a connection to the pool stalled; dropped it");
+                }
+            });
+        }
+    }
+}
+
+/// Outcome of [`within`]: the future's output, or the deadline that passed.
+async fn within<T>(
+    deadline: Option<Duration>,
+    fut: impl Future<Output = T>,
+) -> Result<T, Duration> {
+    match deadline {
+        None => Ok(fut.await),
+        Some(d) => tokio::time::timeout(d, fut).await.map_err(|_| d),
+    }
+}
+
+/// A database operation that exceeded the client deadline. Its connection is
+/// discarded (a [`Checkout`] not marked completed).
+fn deadline_exceeded(op: &str, deadline: Duration) -> StoreError {
+    tracing::warn!(op, ?deadline, "database operation exceeded client deadline");
+    StoreError::Unavailable(format!(
+        "{op}: database did not answer within {} ms (client deadline); \
+         the outcome is unknown, retry (appends: with the same idempotency key)",
+        deadline.as_millis()
+    ))
+}
+
+/// SQLSTATEs that mean "the database is (temporarily) not serving this
+/// request": connection exceptions (class 08), query cancelled (57014, e.g.
+/// statement_timeout), lock_timeout (55P03), idle-in-transaction timeout
+/// (25P03), shutdown / startup (57P01..57P03), too many connections (53300).
+fn is_unavailable_sqlstate(code: &str) -> bool {
+    code.starts_with("08")
+        || matches!(
+            code,
+            "57014" | "55P03" | "25P03" | "57P01" | "57P02" | "57P03" | "53300"
+        )
+}
+
+fn map_db_error(e: sqlx::Error) -> StoreError {
+    match e {
+        sqlx::Error::Database(db_err) => {
+            let code = db_err.code().map(|c| c.to_string()).unwrap_or_default();
+            let message = db_err.message().to_string();
+            if code == "23505" {
+                StoreError::Concurrency {
+                    message,
+                    detail: None,
+                }
+            } else if code == "23514" {
+                StoreError::Invalid(message)
+            } else if is_unavailable_sqlstate(&code) {
+                StoreError::Unavailable(format!("database unavailable ({code}): {message}"))
+            } else {
+                StoreError::Internal(anyhow::anyhow!(message))
+            }
+        }
+        // ADR-026: losing the database is retryable, not an internal error.
+        e @ (sqlx::Error::Io(_)
+        | sqlx::Error::Tls(_)
+        | sqlx::Error::PoolTimedOut
+        | sqlx::Error::PoolClosed
+        | sqlx::Error::WorkerCrashed) => {
+            StoreError::Unavailable(format!("database unavailable: {e}"))
+        }
+        other => StoreError::Internal(anyhow::anyhow!(other)),
+    }
+}
+
+#[async_trait]
+impl EventStoreTrait for PostgresStore {
+    fn backend_kind(&self) -> &'static str {
+        "postgres"
+    }
+
+    fn capabilities(&self) -> Vec<&'static str> {
+        // #337: appends take a per-tenant transaction-scoped advisory lock
+        // before allocating global nonces, so within a tenant they become
+        // visible in commit order.
+        // #350: failed subscription queries end the stream with UNAVAILABLE.
+        // #351: undecodable rows end subscriptions/reads with DATA_LOSS.
+        // #361: the subscription prefix is an escaped LIKE pattern.
+        vec![
+            eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE,
+            eventstore_core::capabilities::SUBSCRIPTION_ERRORS_SURFACED,
+            eventstore_core::capabilities::UNDECODABLE_EVENTS_SURFACED,
+            eventstore_core::capabilities::LITERAL_SUBSCRIPTION_PREFIX,
+        ]
+    }
+
+    async fn append(
+        &self,
+        mut req: proto::AppendRequest,
+    ) -> Result<proto::AppendResponse, StoreError> {
+        if req.tenant_id.is_empty() {
+            return Err(StoreError::Unauthenticated(
+                "tenant_id is required on AppendRequest".into(),
+            ));
+        }
+        if req.aggregate_id.is_empty() {
+            return Err(StoreError::Invalid(
+                "aggregate_id is required on AppendRequest".into(),
+            ));
+        }
+        if req.aggregate_type.is_empty() {
+            return Err(StoreError::Invalid(
+                "aggregate_type is required on AppendRequest".into(),
+            ));
+        }
+        if req.events.is_empty() {
+            return Err(StoreError::Invalid(
+                "AppendRequest.events must not be empty".into(),
+            ));
+        }
+
+        let tenant_id = req.tenant_id.clone();
+        let aggregate_id = req.aggregate_id.clone();
+        let aggregate_type = req.aggregate_type.clone();
+
+        let mut events: Vec<proto::EventData> = Vec::with_capacity(req.events.len());
+        for ev in std::mem::take(&mut req.events) {
+            events.push(normalize_event(
+                ev,
+                &tenant_id,
+                &aggregate_id,
+                &aggregate_type,
+            )?);
+        }
+
+        let fingerprint = batch_fingerprint(&events);
+        let mut conn = self.acquire().await?;
+        let tx = self.append_tx(&mut conn, &req, fingerprint, events);
+        match within(self.deadline, tx).await {
+            Ok(result) => {
+                conn.completed();
+                result
+            }
+            Err(deadline) => Err(deadline_exceeded("append", deadline)),
+        }
     }
 
     async fn read_stream(
@@ -739,39 +1015,50 @@ impl EventStoreTrait for PostgresStore {
             req.from_aggregate_nonce
         } as i64;
 
-        let rows = if req.forward {
-            sqlx::query(
-                r#"
+        let mut conn = self.acquire().await?;
+        let query = async {
+            if req.forward {
+                sqlx::query(
+                    r#"
                 SELECT * FROM events
                 WHERE tenant_id = $1 AND aggregate_id = $2 AND aggregate_nonce >= $3
                 ORDER BY aggregate_nonce ASC
                 LIMIT $4
                 "#,
-            )
-            .bind(&req.tenant_id)
-            .bind(&req.aggregate_id)
-            .bind(start_nonce)
-            .bind(req.max_count as i64)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(map_db_error)?
-        } else {
-            sqlx::query(
-                r#"
+                )
+                .bind(&req.tenant_id)
+                .bind(&req.aggregate_id)
+                .bind(start_nonce)
+                .bind(req.max_count as i64)
+                .fetch_all(&mut *conn)
+                .await
+            } else {
+                sqlx::query(
+                    r#"
                 SELECT * FROM events
                 WHERE tenant_id = $1 AND aggregate_id = $2 AND aggregate_nonce <= $3
                 ORDER BY aggregate_nonce DESC
                 LIMIT $4
                 "#,
-            )
-            .bind(&req.tenant_id)
-            .bind(&req.aggregate_id)
-            .bind(start_nonce)
-            .bind(req.max_count as i64)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(map_db_error)?
+                )
+                .bind(&req.tenant_id)
+                .bind(&req.aggregate_id)
+                .bind(start_nonce)
+                .bind(req.max_count as i64)
+                .fetch_all(&mut *conn)
+                .await
+            }
         };
+        let rows = match within(self.deadline, query).await {
+            Ok(rows) => {
+                conn.completed();
+                rows.map_err(map_db_error)?
+            }
+            Err(deadline) => {
+                return Err(deadline_exceeded("read_stream", deadline));
+            }
+        };
+        drop(conn);
 
         let mut events = Vec::with_capacity(rows.len());
         for row in rows.into_iter() {
@@ -825,37 +1112,48 @@ impl EventStoreTrait for PostgresStore {
 
         let from_global = req.from_global_nonce as i64;
 
-        let rows = if req.forward {
-            sqlx::query(
-                r#"
+        let mut conn = self.acquire().await?;
+        let query = async {
+            if req.forward {
+                sqlx::query(
+                    r#"
                 SELECT * FROM events
                 WHERE tenant_id = $1 AND global_nonce >= $2
                 ORDER BY global_nonce ASC
                 LIMIT $3
                 "#,
-            )
-            .bind(&req.tenant_id)
-            .bind(from_global)
-            .bind(max_count)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(map_db_error)?
-        } else {
-            sqlx::query(
-                r#"
+                )
+                .bind(&req.tenant_id)
+                .bind(from_global)
+                .bind(max_count)
+                .fetch_all(&mut *conn)
+                .await
+            } else {
+                sqlx::query(
+                    r#"
                 SELECT * FROM events
                 WHERE tenant_id = $1 AND global_nonce <= $2
                 ORDER BY global_nonce DESC
                 LIMIT $3
                 "#,
-            )
-            .bind(&req.tenant_id)
-            .bind(from_global)
-            .bind(max_count)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(map_db_error)?
+                )
+                .bind(&req.tenant_id)
+                .bind(from_global)
+                .bind(max_count)
+                .fetch_all(&mut *conn)
+                .await
+            }
         };
+        let rows = match within(self.deadline, query).await {
+            Ok(rows) => {
+                conn.completed();
+                rows.map_err(map_db_error)?
+            }
+            Err(deadline) => {
+                return Err(deadline_exceeded("read_all", deadline));
+            }
+        };
+        drop(conn);
 
         let mut events = Vec::with_capacity(rows.len());
         for row in rows.into_iter() {
@@ -910,6 +1208,7 @@ impl EventStoreTrait for PostgresStore {
     fn subscribe(&self, req: proto::SubscribeRequest) -> StoreStream<proto::SubscribeResponse> {
         let sub = Subscription {
             pool: self.pool.clone(),
+            deadline: self.deadline,
             like_pattern: (!req.aggregate_id_prefix.is_empty())
                 .then(|| like_prefix_pattern(&req.aggregate_id_prefix)),
             tenant: req.tenant_id,
@@ -964,6 +1263,9 @@ enum Mode {
 ///   it, and nothing after it is ever decoded or delivered (#351).
 struct Subscription {
     pool: PgPool,
+    /// Client deadline per page query (#368). Each query reads at most one
+    /// page, so it bounds a page, never the subscription's lifetime.
+    deadline: Option<Duration>,
     tenant: String,
     prefix: String,
     /// Escaped LIKE pattern for `prefix`; `None` for the whole tenant log.
@@ -1057,8 +1359,9 @@ impl Subscription {
     async fn fetch_page(&mut self, phase: &str) -> Result<(), StoreError> {
         debug_assert!(self.buf.is_empty() && self.pending_error.is_none());
         self.page_queries.fetch_add(1, Ordering::Relaxed);
-        let rows = match fetch_page_after(
+        let rows = match fetch_page_after_bounded(
             &self.pool,
+            self.deadline,
             &self.tenant,
             self.like_pattern.as_deref(),
             self.cursor,
@@ -1088,11 +1391,45 @@ impl Subscription {
     }
 }
 
+/// [`fetch_page_after`] on a pooled connection, bounded by the client
+/// `deadline` (#368). A stalled network path surfaces as an I/O timeout,
+/// which the subscription reports as `UNAVAILABLE` (ADR-026). Each query
+/// reads one page (#369), so neither the deadline nor `statement_timeout`
+/// grows with history, and an idle live subscription runs no query at all.
+async fn fetch_page_after_bounded(
+    pool: &PgPool,
+    deadline: Option<Duration>,
+    tenant: &str,
+    pattern: Option<&str>,
+    after: i64,
+    limit: i64,
+) -> Result<Vec<sqlx::postgres::PgRow>, sqlx::Error> {
+    let mut conn = Checkout::acquire(pool).await?;
+    match within(
+        deadline,
+        fetch_page_after(&mut *conn, tenant, pattern, after, limit),
+    )
+    .await
+    {
+        Ok(rows) => {
+            conn.completed();
+            rows
+        }
+        Err(d) => Err(sqlx::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            format!(
+                "database did not answer within {} ms (client deadline)",
+                d.as_millis()
+            ),
+        ))),
+    }
+}
+
 /// One keyset page: events of `tenant` (optionally restricted to the escaped
 /// LIKE `pattern`) with `global_nonce > after`, in global order, at most
 /// `limit` rows.
 async fn fetch_page_after(
-    pool: &PgPool,
+    pool: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     pattern: Option<&str>,
     after: i64,
@@ -1299,6 +1636,7 @@ mod tests {
                 .expect("lazy connect should not attempt network"),
             notify_tx,
             listener_handle: tokio::spawn(async {}),
+            deadline: None,
             subscribe_page_size: AtomicUsize::new(DEFAULT_SUBSCRIBE_PAGE_SIZE),
             subscribe_page_queries: Arc::new(AtomicU64::new(0)),
         };
@@ -1320,9 +1658,162 @@ mod tests {
                 .expect("lazy connect should not attempt network"),
             notify_tx,
             listener_handle: tokio::spawn(async {}),
+            deadline: Some(Duration::from_secs(5)),
             subscribe_page_size: AtomicUsize::new(DEFAULT_SUBSCRIBE_PAGE_SIZE),
             subscribe_page_queries: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// A "database" that accepts TCP connections and never answers (a
+    /// black-holed path), and a store pointed at it with a 1 s acquire
+    /// timeout. Keeps accepted sockets open so nothing errors by itself.
+    async fn black_holed_store() -> (PostgresStore, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hole = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((sock, _)) = listener.accept().await {
+                held.push(sock);
+            }
+        });
+        let (notify_tx, _) = broadcast::channel(NOTIFY_BROADCAST_CAPACITY);
+        let store = PostgresStore {
+            pool: PgPoolOptions::new()
+                .acquire_timeout(Duration::from_secs(1))
+                .connect_lazy(&format!("postgres://test:test@{addr}/test"))
+                .expect("lazy connect should not attempt network"),
+            notify_tx,
+            listener_handle: tokio::spawn(async {}),
+            deadline: Some(Duration::from_secs(2)),
+            subscribe_page_size: AtomicUsize::new(DEFAULT_SUBSCRIBE_PAGE_SIZE),
+            subscribe_page_queries: Arc::new(AtomicU64::new(0)),
+        };
+        (store, hole)
+    }
+
+    fn one_event_append() -> proto::AppendRequest {
+        proto::AppendRequest {
+            tenant_id: "t".into(),
+            aggregate_id: "a".into(),
+            aggregate_type: "A".into(),
+            expected_aggregate_nonce: 0,
+            idempotency_key: String::new(),
+            events: vec![proto::EventData {
+                meta: Some(proto::EventMetadata {
+                    event_id: "e1".into(),
+                    aggregate_nonce: 1,
+                    event_type: "E".into(),
+                    ..Default::default()
+                }),
+                payload: vec![],
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn black_holed_database_surfaces_unavailable_within_bound() {
+        use futures::StreamExt;
+        let (store, hole) = black_holed_store().await;
+        let bound = Duration::from_secs(5);
+
+        let started = std::time::Instant::now();
+        let res = tokio::time::timeout(bound, store.append(one_event_append()))
+            .await
+            .expect("append to a black-holed database must not hang");
+        assert!(matches!(res, Err(StoreError::Unavailable(_))), "{res:?}");
+
+        let res = tokio::time::timeout(
+            bound,
+            store.read_all(proto::ReadAllRequest {
+                tenant_id: "t".into(),
+                from_global_nonce: 0,
+                max_count: 10,
+                forward: true,
+            }),
+        )
+        .await
+        .expect("read_all must not hang");
+        assert!(matches!(res, Err(StoreError::Unavailable(_))), "{res:?}");
+
+        let res = tokio::time::timeout(
+            bound,
+            store.read_stream(proto::ReadStreamRequest {
+                tenant_id: "t".into(),
+                aggregate_id: "a".into(),
+                from_aggregate_nonce: 1,
+                max_count: 10,
+                forward: true,
+            }),
+        )
+        .await
+        .expect("read_stream must not hang");
+        assert!(matches!(res, Err(StoreError::Unavailable(_))), "{res:?}");
+
+        let mut stream = store.subscribe(proto::SubscribeRequest {
+            tenant_id: "t".into(),
+            aggregate_id_prefix: String::new(),
+            from_global_nonce: 3,
+        });
+        match tokio::time::timeout(bound, stream.next()).await {
+            Ok(Some(Err(StoreError::Unavailable(msg)))) => {
+                assert!(msg.contains("resume from global_nonce 3"), "{msg}")
+            }
+            other => panic!("subscribe must surface Unavailable, got {other:?}"),
+        }
+        assert!(started.elapsed() < Duration::from_secs(15));
+        hole.abort();
+    }
+
+    #[tokio::test]
+    async fn startup_against_a_black_holed_database_fails_within_acquire_timeout() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hole = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((sock, _)) = listener.accept().await {
+                held.push(sock);
+            }
+        });
+        let cfg = PostgresConfig {
+            acquire_timeout: Duration::from_secs(1),
+            ..Default::default()
+        };
+        let url = format!("postgres://test:test@{addr}/test");
+        let res = tokio::time::timeout(
+            Duration::from_secs(10),
+            PostgresStore::connect_with_config(&url, &cfg),
+        )
+        .await
+        .expect("startup must not hang on a black-holed database");
+        assert!(res.is_err());
+        hole.abort();
+    }
+
+    #[test]
+    fn connection_and_timeout_errors_map_to_unavailable() {
+        for e in [
+            sqlx::Error::PoolTimedOut,
+            sqlx::Error::PoolClosed,
+            sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "x")),
+        ] {
+            assert!(
+                matches!(map_db_error(e), StoreError::Unavailable(_)),
+                "pool/io errors are UNAVAILABLE (ADR-026)"
+            );
+        }
+        for code in ["57014", "55P03", "25P03", "08006", "57P01", "53300"] {
+            assert!(is_unavailable_sqlstate(code), "{code}");
+        }
+        for code in ["23505", "23514", "42P01", "40P01", ""] {
+            assert!(!is_unavailable_sqlstate(code), "{code}");
+        }
+    }
+
+    #[tokio::test]
+    async fn within_bounds_only_when_a_deadline_is_set() {
+        assert_eq!(within(None, async { 7 }).await, Ok(7));
+        let d = Duration::from_millis(20);
+        assert_eq!(within(Some(d), std::future::pending::<()>()).await, Err(d));
     }
 
     async fn assert_replay_failure_surfaces(prefix: &str) {
