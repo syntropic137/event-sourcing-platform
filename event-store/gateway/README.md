@@ -82,7 +82,34 @@ grpcurl -plaintext \
   // add `.allow_insecure_credentials(true)` and accept the risk.
   ```
 
-- **TypeScript / Python**: not yet (tracked in #302). Use `grpcurl` as above.
+- **TypeScript** (`event-store/sdks/sdk-ts`, and `event-sourcing/typescript`
+  via `connection`): same semantics, header added by a grpc-js interceptor on
+  every call including `subscribe`:
+
+  ```ts
+  const client = new EventStoreClientTS("https://es.example.com:50051", {
+    auth: Credentials.basic("admin", process.env.ESP_GATEWAY_PASSWORD!),
+    // allowInsecureCredentials: true, // plaintext to a remote host (#301)
+  });
+  ```
+
+- **Python** (`event-sourcing/python` `GrpcEventStoreClient`, and
+  `event-store/sdks/sdk-py` `EventStoreClientRT`): same semantics, via
+  channel interceptors:
+
+  ```python
+  client = GrpcEventStoreClient(
+      "https://es.example.com:50051",
+      auth=BasicAuth("admin", os.environ["ESP_GATEWAY_PASSWORD"]),
+      # allow_insecure_credentials=True,  # plaintext to a remote host (#301)
+  )
+  ```
+
+All clients also accept a bearer token or a per-call token provider,
+redact credentials from their string forms, and surface a gateway rejection
+as a typed `UNAUTHENTICATED` error (TS `UnauthenticatedError` /
+`EventStoreAuthenticationError`, Python `EventStoreAuthenticationError` /
+`UnauthenticatedError`).
 
 ## Known limitation
 

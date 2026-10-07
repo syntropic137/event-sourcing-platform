@@ -13,6 +13,12 @@ from collections.abc import AsyncIterator, Sequence
 
 import grpc
 
+from event_sourcing.client.auth import (
+    Credentials,
+    ResolvedConnection,
+    TlsConfig,
+    resolve_connection,
+)
 from event_sourcing.client.server_info import (
     LEGACY_SERVER_INFO,
     ServerInfo,
@@ -29,6 +35,7 @@ from event_sourcing.core.envelope import (
 )
 from event_sourcing.core.errors import (
     ConcurrencyConflictError,
+    EventStoreAuthenticationError,
     EventStoreError,
     StreamAlreadyExistsError,
     UndecodableEventError,
@@ -61,6 +68,16 @@ def _undecodable_global_nonce(error: grpc.RpcError) -> int | None:
     return None
 
 
+def _raise_if_unauthenticated(error: grpc.RpcError, context: str) -> None:
+    """Raise EventStoreAuthenticationError for gRPC UNAUTHENTICATED (ADR-024 gateway)."""
+    try:
+        code = error.code()
+    except AttributeError:
+        return
+    if code == grpc.StatusCode.UNAUTHENTICATED:
+        raise EventStoreAuthenticationError(f"{context}: credentials rejected", error) from error
+
+
 def _raise_if_undecodable(error: grpc.RpcError, context: str) -> None:
     """Raise UndecodableEventError when the store reports an undecodable event."""
     nonce = _undecodable_global_nonce(error)
@@ -82,6 +99,9 @@ class GrpcEventStoreClient:
         tenant_id: str = "default",
         credentials: grpc.ChannelCredentials | None = None,
         *,
+        auth: Credentials | None = None,
+        tls: TlsConfig | bool | None = None,
+        allow_insecure_credentials: bool = False,
         upcasters: Upcasters | None = None,
         on_invalid_payload: InvalidPayloadPolicy = "raise",
     ) -> None:
@@ -89,23 +109,46 @@ class GrpcEventStoreClient:
         Initialize the gRPC client.
 
         Args:
-            address: The gRPC server address (host:port)
+            address: ``host:port``, ``http://host:port`` or ``https://host:port``
             tenant_id: The tenant ID for multi-tenancy support
-            credentials: Optional gRPC credentials for TLS/auth
+            credentials: Optional custom gRPC channel credentials (counts as TLS;
+                mutually exclusive with ``tls``)
+            auth: Credentials sent on every call, unary and streaming
+                (``BasicAuth`` for the ADR-024 gateway, ``BearerToken``,
+                ``TokenProviderAuth``)
+            tls: ``True`` or a ``TlsConfig`` for TLS; implied by ``https://``
+            allow_insecure_credentials: allow ``auth`` over plaintext to a
+                non-loopback host (default: refused)
             upcasters: Steps that migrate stored events to registered
                 versions before decoding (ADR-007, ADR-027).
             on_invalid_payload: ``"raise"`` (default): a payload the
                 registered class rejects is an ``EventPayloadError``.
                 ``"generic"``: return it as a ``GenericDomainEvent`` instead
                 (the pre-ADR-027 behaviour; a migration aid).
+
+        Raises:
+            ClientConfigError: invalid endpoint, TLS or credentials, or
+                credentials over plaintext to a non-loopback host.
         """
         self.address = address
         self.tenant_id = tenant_id
         self.upcasters = upcasters
         self.on_invalid_payload: InvalidPayloadPolicy = on_invalid_payload
-        self._channel: grpc.Channel | None = None
+        self._channel: grpc.aio.Channel | None = None
         self._stub: eventstore_pb2_grpc.EventStoreStub | None = None
-        self._credentials = credentials
+        self._connection: ResolvedConnection = resolve_connection(
+            address,
+            tls=tls,
+            channel_credentials=credentials,
+            auth=auth,
+            allow_insecure_credentials=allow_insecure_credentials,
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"GrpcEventStoreClient(address={self.address!r}, tenant_id={self.tenant_id!r}, "
+            f"tls={self._connection.tls}, auth={bool(self._connection.interceptors)})"
+        )
 
     async def connect(self) -> None:
         """Connect to the event store.
@@ -119,10 +162,18 @@ class GrpcEventStoreClient:
 
         logger.info(f"Connecting to event store at {self.address}")
 
-        if self._credentials:
-            self._channel = grpc.aio.secure_channel(self.address, self._credentials)
+        conn = self._connection
+        if conn.channel_credentials is not None:
+            self._channel = grpc.aio.secure_channel(
+                conn.target,
+                conn.channel_credentials,
+                options=conn.options,
+                interceptors=conn.interceptors,
+            )
         else:
-            self._channel = grpc.aio.insecure_channel(self.address)
+            self._channel = grpc.aio.insecure_channel(
+                conn.target, options=conn.options, interceptors=conn.interceptors
+            )
 
         self._stub = eventstore_pb2_grpc.EventStoreStub(self._channel)  # type: ignore[no-untyped-call]
         logger.info("Connected to event store")
@@ -149,6 +200,7 @@ class GrpcEventStoreClient:
         except grpc.RpcError as e:
             if e.code() == grpc.StatusCode.UNIMPLEMENTED:
                 return LEGACY_SERVER_INFO
+            _raise_if_unauthenticated(e, "Failed to get server info")
             raise EventStoreError(f"Failed to get server info: {e}", e) from e
         return ServerInfo(
             server_version=resp.server_version,
@@ -219,6 +271,7 @@ class GrpcEventStoreClient:
 
         except grpc.RpcError as e:
             # Typed and actionable: the caller logs it, not once per attempt here (#360).
+            _raise_if_unauthenticated(e, "Failed to read stream")
             _raise_if_undecodable(e, "Failed to read stream")
             logger.error(f"gRPC error reading stream: {e}")
             raise EventStoreError(f"Failed to read stream: {e}") from e
@@ -288,6 +341,7 @@ class GrpcEventStoreClient:
                     raise StreamAlreadyExistsError(stream_name, actual_version) from e
                 raise ConcurrencyConflictError(expected_ver, actual_version) from e
 
+            _raise_if_unauthenticated(e, "Failed to append events")
             logger.error(f"gRPC error appending events: {e}")
             raise EventStoreError(f"Failed to append events: {e}") from e
 
@@ -460,6 +514,7 @@ class GrpcEventStoreClient:
 
         except grpc.RpcError as e:
             # Typed and actionable: the caller logs it, not once per attempt here (#360).
+            _raise_if_unauthenticated(e, "Failed to read all events")
             _raise_if_undecodable(e, "Failed to read all events")
             logger.error(f"gRPC error in ReadAll: {e}")
             raise EventStoreError(f"Failed to read all events: {e}") from e
@@ -536,6 +591,7 @@ class GrpcEventStoreClient:
                 logger.info("Subscription cancelled")
                 return
             # Typed and actionable: the caller logs it, not once per attempt here (#360).
+            _raise_if_unauthenticated(e, "Subscription failed")
             _raise_if_undecodable(e, "Subscription failed")
             logger.error(f"gRPC error in subscription: {e}")
             raise EventStoreError(f"Subscription failed: {e}") from e

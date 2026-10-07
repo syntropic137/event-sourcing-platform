@@ -19,12 +19,17 @@ import { EventStoreClientFactory } from '@neurale/event-sourcing-ts';
 
 // Production: gRPC client
 const client = EventStoreClientFactory.createGrpcClient({
-  endpoint: 'localhost:50051',
-  credentials: {
-    username: 'user',
-    password: 'pass'
-  }
+  serverAddress: 'https://events.example.com:443', // or host:port for plaintext
+  tenantId: 'my-tenant',
+  connection: {
+    // ADR-024 gateway: Basic auth on every call
+    auth: { basic: { username: 'admin', password: process.env.ESP_GATEWAY_PASSWORD! } },
+    // Credentials over plaintext to a non-loopback host are refused unless:
+    // allowInsecureCredentials: true,
+  },
 });
+await client.connect(); // rejects on a bad connection config
+// Rejected credentials throw EventStoreAuthenticationError (code 'EVENT_STORE_UNAUTHENTICATED').
 
 // Development/Testing: In-memory client
 const memoryClient = EventStoreClientFactory.createMemoryClient();

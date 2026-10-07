@@ -310,6 +310,9 @@ jobs:
       - name: sdk-py import smoke test (installed package)
         run: make -C event-store smoke-py-import
 
+      - name: sdk-py unit tests (credentials, TLS)
+        run: make -C event-store test-sdk-py
+
       - name: Object ratchet — no increases allowed
         if: github.event_name == 'pull_request'
         env:
