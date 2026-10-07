@@ -2,7 +2,7 @@ import path from "node:path";
 import { loadPackageDefinition } from "@grpc/grpc-js";
 import { loadSync } from "@grpc/proto-loader";
 import type { PackageDefinition } from "@grpc/proto-loader";
-import { credentials } from "@grpc/grpc-js";
+import { mapGrpcError, resolveConnection, type ConnectionOptions } from "./auth.js";
 import { fileURLToPath } from "node:url";
 import { streamToAsyncIterator } from "./stream-iterator.js";
 
@@ -14,8 +14,10 @@ export class EventStoreClientRT {
   private readonly addr: string;
   private readonly client: any;
 
-  constructor(addr: string) {
-    this.addr = addr;
+  /** Same endpoint forms and options as `EventStoreClientTS`. */
+  constructor(addr: string, opts: ConnectionOptions = {}) {
+    const conn = resolveConnection(addr, opts);
+    this.addr = conn.target;
     const protoPath = path.resolve(__dirname, "../../../eventstore-proto/proto/eventstore/v1/eventstore.proto");
     const def: PackageDefinition = loadSync(protoPath, {
       keepCase: true,
@@ -27,13 +29,13 @@ export class EventStoreClientRT {
     });
     const pkg = loadPackageDefinition(def) as any;
     const Svc = pkg.eventstore.v1.EventStore;
-    this.client = new Svc(this.addr, credentials.createInsecure());
+    this.client = new Svc(conn.target, conn.channelCredentials, conn.options);
   }
 
   append(req: any): Promise<any> {
     return new Promise((resolve, reject) => {
       this.client.Append(req, (err: any, resp: any) => {
-        if (err) return reject(err);
+        if (err) return reject(mapGrpcError(err));
         resolve(resp);
       });
     });
@@ -42,13 +44,13 @@ export class EventStoreClientRT {
   readStream(req: any): Promise<any> {
     return new Promise((resolve, reject) => {
       this.client.ReadStream(req, (err: any, resp: any) => {
-        if (err) return reject(err);
+        if (err) return reject(mapGrpcError(err));
         resolve(resp);
       });
     });
   }
 
   subscribe(req: any): AsyncIterable<any> {
-    return streamToAsyncIterator<any>(this.client.Subscribe(req));
+    return streamToAsyncIterator<any>(this.client.Subscribe(req), mapGrpcError);
   }
 }

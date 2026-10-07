@@ -47,6 +47,27 @@ node --experimental-specifier-resolution=node \
   experiments/005-rust-event-store/sdks/sdk-ts/src/examples/typed-basic.ts
 ```
 
+## Credentials and TLS (ADR-024 gateway)
+
+```ts
+import { Credentials, EventStoreClientTS, UnauthenticatedError } from "@eventstore/sdk-ts";
+
+const client = new EventStoreClientTS("https://es.example.com:50051", {
+  auth: Credentials.basic("admin", process.env.ESP_GATEWAY_PASSWORD!),
+  // Credentials.bearer(token) | Credentials.tokenProvider(() => token)
+  // tls: { rootCerts, serverName }      // custom CA / name override
+  // allowInsecureCredentials: true,      // plaintext to a non-loopback host
+});
+```
+
+- Endpoint forms: `host:port` (plaintext), `http://host:port`, `https://host:port` (TLS).
+- The `authorization` header is added by an interceptor to every call, unary and `subscribe`.
+- Credentials over plaintext to a non-loopback host throw `ConfigError` unless
+  `allowInsecureCredentials` is set.
+- Rejected credentials (or a failing token provider) reject with `UnauthenticatedError`.
+- Secrets are redacted from `toString`, `util.inspect` and `JSON.stringify`.
+- `EventStoreClientRT` takes the same options.
+
 ## Importing in your app
 
 ```ts

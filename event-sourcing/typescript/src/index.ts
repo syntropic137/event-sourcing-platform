@@ -19,7 +19,7 @@ export type { EventStoreClient, EventStoreClientConfig } from './client/event-st
 export { EventStoreClientFactory } from './client/event-store-client';
 
 // gRPC adapter (thin wrapper around event-store TS SDK)
-export { GrpcEventStoreAdapter } from './integrations/grpc-event-store';
+export { GrpcEventStoreAdapter, type GrpcConnectionOptions } from './integrations/grpc-event-store';
 
 // In-memory store for local dev and tests
 export { MemoryEventStoreClient } from './client/event-store-memory';

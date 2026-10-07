@@ -239,6 +239,25 @@ const client = EventStoreClientFactory.createGrpcClient({
 await client.connect();
 ```
 
+Through the ADR-024 gateway (Basic auth on every call), optionally over TLS:
+
+```ts
+const client = EventStoreClientFactory.createGrpcClient({
+  serverAddress: 'https://es.example.com:50051', // host:port = plaintext
+  tenantId: 'my-tenant',
+  connection: {
+    auth: { basic: { username: 'admin', password: process.env.ESP_GATEWAY_PASSWORD! } },
+    // or { bearerToken } / { tokenProvider: () => token }
+    // allowInsecureCredentials: true, // plaintext to a non-loopback host
+  },
+});
+```
+
+Credentials over plaintext to a non-loopback host are refused unless
+`allowInsecureCredentials` is set. Rejected credentials throw
+`EventStoreAuthenticationError` (an `EventStoreError` with code
+`EVENT_STORE_UNAUTHENTICATED`).
+
 ## Examples
 
 See the [examples directory](../../examples/) for complete working examples:

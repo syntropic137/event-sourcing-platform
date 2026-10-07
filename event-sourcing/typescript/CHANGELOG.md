@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Gateway credentials (ADR-024, #302): `EventStoreClientConfig.connection`
+  (and `GrpcEventStoreConfig.connection`) passes TLS, `auth` (Basic, Bearer,
+  token provider) and `allowInsecureCredentials` to the event store TS SDK.
+  `serverAddress` accepts `http://` and `https://`. Credentials go on every
+  call and are refused over plaintext to a non-loopback host unless allowed.
+- `EventStoreAuthenticationError` (code `EVENT_STORE_UNAUTHENTICATED`) for
+  rejected credentials; `streamExists` now throws it instead of returning
+  `false`. `connect()` on a gRPC client rejects on a bad connection config.
+
 ### Breaking Changes
 
 #### Removed AutoDispatchAggregate Class

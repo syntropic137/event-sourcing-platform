@@ -74,7 +74,7 @@ export class CommandValidationError extends BaseEventSourcingError {
 
 /** Event store communication error */
 export class EventStoreError extends BaseEventSourcingError {
-  readonly code = 'EVENT_STORE_ERROR';
+  readonly code: 'EVENT_STORE_ERROR' | 'EVENT_STORE_UNAUTHENTICATED' = 'EVENT_STORE_ERROR';
 
   constructor(message: string, originalError?: Error) {
     super(`Event store error: ${message}`, {
@@ -82,6 +82,34 @@ export class EventStoreError extends BaseEventSourcingError {
       originalStack: originalError?.stack,
     });
   }
+}
+
+/**
+ * The event store (or the ADR-024 gateway in front of it) rejected the
+ * client's credentials: gRPC `UNAUTHENTICATED`. Retrying without new
+ * credentials will not help. Never contains the credentials.
+ */
+export class EventStoreAuthenticationError extends EventStoreError {
+  override readonly code = 'EVENT_STORE_UNAUTHENTICATED' as const;
+}
+
+/** gRPC status code UNAUTHENTICATED. */
+const GRPC_UNAUTHENTICATED = 16;
+
+/** True for a gRPC `UNAUTHENTICATED` error. */
+export function isUnauthenticatedError(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === GRPC_UNAUTHENTICATED;
+}
+
+/**
+ * Wrap a failed event store call: {@link EventStoreAuthenticationError} for
+ * gRPC `UNAUTHENTICATED`, {@link EventStoreError} otherwise.
+ */
+export function toEventStoreError(message: string, err: unknown): EventStoreError {
+  const original = err as Error;
+  return isUnauthenticatedError(err)
+    ? new EventStoreAuthenticationError(message, original)
+    : new EventStoreError(message, original);
 }
 
 /** Serialization error */

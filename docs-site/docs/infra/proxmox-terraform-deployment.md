@@ -432,7 +432,7 @@ After Terraform creates the VM:
      -H "authorization: Basic $TOKEN" \
      192.168.0.100:50051 list
    ```
-   Note: the Rust SDK supports Basic Auth via `ClientConfig::basic_auth` (see `event-store/gateway/README.md`). The TS/Python SDK clients don't yet; for those, `grpcurl` is the verified way to exercise the gateway-protected port. TS/Python credential support is tracked in #302.
+   Note: the Rust, TypeScript and Python SDK clients all support Basic Auth (Rust `ClientConfig::basic_auth`, TS `auth: Credentials.basic(...)`, Python `auth=BasicAuth(...)`); see "Client SDK support" in `event-store/gateway/README.md`. Over plaintext to this host they need the explicit insecure-credentials opt-in until TLS lands (#301).
 
 ## Security Checklist
 

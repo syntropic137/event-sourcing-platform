@@ -7,7 +7,7 @@ import type {
   EventStoreClient as RepoEventStoreClient,
   ReadAllResult,
 } from '../client/event-store-client';
-import { EventStoreError } from '../core/errors';
+import { EventStoreError, isUnauthenticatedError, toEventStoreError } from '../core/errors';
 import type { JsonObject, JsonValue } from '../types/common';
 
 type EventStoreSdkModule = typeof import('@eventstore/sdk-ts');
@@ -23,6 +23,8 @@ async function loadEventStoreClient(): Promise<EventStoreSdkModule['EventStoreCl
 }
 
 type EventStoreClient = import('@eventstore/sdk-ts').EventStoreClientTS;
+/** Connection options of the event store TS SDK (TLS, `auth`, plaintext guard). */
+export type GrpcConnectionOptions = import('@eventstore/sdk-ts').ClientOptions;
 
 type ReadStreamMetadata = {
   eventId: string;
@@ -49,6 +51,13 @@ export interface GrpcEventStoreConfig {
   serverAddress: string;
   /** Tenant identifier for multi-tenant stores */
   tenantId: string;
+  /**
+   * TLS, credentials (`auth`) and `allowInsecureCredentials`, passed to the
+   * event store TS SDK client. Credentials are sent on every call; they are
+   * refused over plaintext to a non-loopback host unless
+   * `allowInsecureCredentials` is set (ADR-024).
+   */
+  connection?: GrpcConnectionOptions;
 }
 
 /**
@@ -60,7 +69,13 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
   private readonly tenantId: string;
 
   constructor(cfg: GrpcEventStoreConfig) {
-    this.clientPromise = loadEventStoreClient().then((Ctor) => new Ctor(cfg.serverAddress));
+    this.clientPromise = loadEventStoreClient().then(
+      (Ctor) => new Ctor(cfg.serverAddress, cfg.connection)
+    );
+    // A bad connection config (e.g. credentials over plaintext to a remote
+    // host) rejects connect() and every call; do not also crash the process
+    // with an unhandled rejection before the first call.
+    this.clientPromise.catch(() => undefined);
     this.tenantId = cfg.tenantId;
   }
 
@@ -92,7 +107,7 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
       }
       return all;
     } catch (err) {
-      throw new EventStoreError(
+      throw toEventStoreError(
         `readEvents failed for ${aggregateType}:${aggregateId}`,
         err as Error
       );
@@ -143,10 +158,7 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
       if (process.env.NODE_ENV !== 'production') {
         console.error('appendEvents error', original);
       }
-      throw new EventStoreError(
-        `appendEvents failed for ${aggregateType}:${aggregateId}`,
-        original
-      );
+      throw toEventStoreError(`appendEvents failed for ${aggregateType}:${aggregateId}`, original);
     }
   }
 
@@ -162,7 +174,9 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
         forward: true,
       });
       return resp.events.length > 0;
-    } catch {
+    } catch (err) {
+      // Rejected credentials are not "stream absent".
+      if (isUnauthenticatedError(err)) throw toEventStoreError('streamExists failed', err);
       return false;
     }
   }
@@ -200,7 +214,7 @@ export class GrpcEventStoreAdapter implements RepoEventStoreClient {
         nextFromGlobalNonce: resp.nextFromGlobalNonce,
       };
     } catch (err) {
-      throw new EventStoreError('readAll failed', err as Error);
+      throw toEventStoreError('readAll failed', err);
     }
   }
 }

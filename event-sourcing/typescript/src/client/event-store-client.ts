@@ -4,7 +4,10 @@
 
 import { EventEnvelope } from '../core/event';
 import { BaseConfig } from '../types/common';
-import { GrpcEventStoreAdapter } from '../integrations/grpc-event-store';
+import {
+  GrpcEventStoreAdapter,
+  type GrpcConnectionOptions,
+} from '../integrations/grpc-event-store';
 import { MemoryEventStoreClient } from './event-store-memory';
 
 /** Configuration for the event store client */
@@ -17,6 +20,13 @@ export interface EventStoreClientConfig extends BaseConfig {
 
   /** Connection timeout in milliseconds */
   timeoutMs?: number;
+
+  /**
+   * TLS, credentials (`auth`: Basic, Bearer or a token provider) and
+   * `allowInsecureCredentials` for the ADR-024 gateway. `serverAddress` may be
+   * `host:port`, `http://host:port` or `https://host:port`.
+   */
+  connection?: GrpcConnectionOptions;
 }
 
 /** Result from readAll operation */
@@ -72,6 +82,7 @@ export class EventStoreClientFactory {
     const adapter = new GrpcEventStoreAdapter({
       serverAddress: config.serverAddress,
       tenantId: config.tenantId ?? 'default',
+      connection: config.connection,
     });
     // Provide a simple wrapper with connect/disconnect no-ops to match interface
     return {
@@ -92,7 +103,8 @@ export class EventStoreClientFactory {
         return adapter.readAll(fromGlobalNonce, maxCount, forward);
       },
       async connect() {
-        // no-op; underlying gRPC client is ready on construction
+        // Surfaces a bad connection config (TLS, credentials guard).
+        await adapter.connect();
       },
       async disconnect() {
         // no-op; underlying gRPC client uses channel managed by Node
