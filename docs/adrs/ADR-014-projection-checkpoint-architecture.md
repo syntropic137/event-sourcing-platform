@@ -536,6 +536,29 @@ class SubscriptionCoordinator:
    - New `projection_checkpoints` table required
    - Simple migration, no data loss
 
+### Update (2026-10): checkpoint cost per event (Python coordinator)
+
+Measured on Syntropic137 production (30 projections), checkpoint upserts and
+reads were the largest steady Postgres load: every projection that skipped a
+live event (most of them) cost a read and its own commit, and every projection
+that handled it another read.
+
+The Python `SubscriptionCoordinator` now:
+
+- holds the checkpoint a projection earns by skipping an event (type not
+  subscribed, or `ProjectionResult.SKIP`) on its track and writes all of them
+  in **one batched write per live event** (`BatchCheckpointStore.advance_checkpoints`,
+  one `UNNEST` upsert on Postgres that never moves a checkpoint backwards).
+  While catching up it batches every 500 events, as before;
+- keeps each projection's checkpoint position in memory, seeded from the store
+  when it plans its tracks, so it **reads no checkpoint per event**.
+
+Checkpoints a projection saves itself in `handle_event()` are unchanged, so its
+data and position stay atomic. A crash between a handler's own save and the
+skip batch loses only skip positions: on restart those projections re-skip the
+same events, which writes nothing else. A ProcessManager's handled events are
+checkpointed by itself, as before, so no to-do item is written twice by this.
+
 ## Alternatives Considered
 
 ### 1. In-Memory Checkpoints Only

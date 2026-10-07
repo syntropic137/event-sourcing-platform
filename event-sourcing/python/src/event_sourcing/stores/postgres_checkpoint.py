@@ -14,11 +14,11 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Sequence
 
 from event_sourcing.core.checkpoint import (
+    BatchCheckpointStore,
     ProjectionCheckpoint,
-    ProjectionCheckpointStore,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,6 +106,18 @@ class PostgresCheckpointStore:
             global_position = EXCLUDED.global_position,
             updated_at = EXCLUDED.updated_at,
             version = EXCLUDED.version;
+    """
+
+    # One statement, so one implicit transaction: every row or none. A row
+    # already at or past the new position is left alone.
+    ADVANCE_CHECKPOINTS_SQL = """
+        INSERT INTO projection_checkpoints (projection_name, global_position, updated_at, version)
+        SELECT * FROM UNNEST($1::text[], $2::bigint[], $3::timestamptz[], $4::integer[])
+        ON CONFLICT (projection_name) DO UPDATE SET
+            global_position = EXCLUDED.global_position,
+            updated_at = EXCLUDED.updated_at,
+            version = EXCLUDED.version
+        WHERE projection_checkpoints.global_position < EXCLUDED.global_position;
     """
 
     DELETE_CHECKPOINT_SQL = """
@@ -226,6 +238,32 @@ class PostgresCheckpointStore:
             },
         )
 
+    async def advance_checkpoints(self, checkpoints: Sequence[ProjectionCheckpoint]) -> None:
+        """
+        Advance several checkpoints, never backwards, in one atomic upsert:
+        one round trip, one commit.
+
+        Args:
+            checkpoints: Checkpoints to save, unique by projection name
+        """
+        if not checkpoints:
+            return
+        await self._ensure_table()
+
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                self.ADVANCE_CHECKPOINTS_SQL,
+                [checkpoint.projection_name for checkpoint in checkpoints],
+                [checkpoint.global_position for checkpoint in checkpoints],
+                [checkpoint.updated_at for checkpoint in checkpoints],
+                [checkpoint.version for checkpoint in checkpoints],
+            )
+
+        logger.debug(
+            "Advanced checkpoints",
+            extra={"projection_names": [checkpoint.projection_name for checkpoint in checkpoints]},
+        )
+
     async def delete_checkpoint(self, projection_name: str) -> None:
         """
         Delete a checkpoint (used for projection rebuilds).
@@ -265,5 +303,5 @@ class PostgresCheckpointStore:
 
 
 # Protocol compliance assertion (static check)
-# PostgresCheckpointStore implements ProjectionCheckpointStore
-_: type[ProjectionCheckpointStore] = PostgresCheckpointStore
+# PostgresCheckpointStore implements BatchCheckpointStore
+_: type[BatchCheckpointStore] = PostgresCheckpointStore

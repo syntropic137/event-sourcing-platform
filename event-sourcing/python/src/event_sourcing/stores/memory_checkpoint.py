@@ -5,10 +5,11 @@ This is for TEST ENVIRONMENTS ONLY (per ADR-004).
 """
 
 import os
+from collections.abc import Sequence
 
 from event_sourcing.core.checkpoint import (
+    BatchCheckpointStore,
     ProjectionCheckpoint,
-    ProjectionCheckpointStore,
 )
 
 
@@ -89,6 +90,18 @@ class MemoryCheckpointStore:
         """
         self._checkpoints[checkpoint.projection_name] = checkpoint
 
+    async def advance_checkpoints(self, checkpoints: Sequence[ProjectionCheckpoint]) -> None:
+        """
+        Advance several checkpoints, never backwards, through ``save_checkpoint``.
+
+        Args:
+            checkpoints: Checkpoints to save
+        """
+        for checkpoint in checkpoints:
+            stored = self._checkpoints.get(checkpoint.projection_name)
+            if stored is None or stored.global_position < checkpoint.global_position:
+                await self.save_checkpoint(checkpoint)
+
     async def delete_checkpoint(self, projection_name: str) -> None:
         """
         Delete a checkpoint.
@@ -113,5 +126,5 @@ class MemoryCheckpointStore:
 
 
 # Protocol compliance assertion (static check)
-# MemoryCheckpointStore implements ProjectionCheckpointStore
-_: type[ProjectionCheckpointStore] = MemoryCheckpointStore
+# MemoryCheckpointStore implements BatchCheckpointStore
+_: type[BatchCheckpointStore] = MemoryCheckpointStore

@@ -57,6 +57,7 @@ from event_sourcing.core.historical_poller import (
 from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.core.projection import (
     AutoDispatchProjection,
+    BatchCheckpointStore,
     CheckpointedProjection,
     ProjectionCheckpoint,
     ProjectionCheckpointStore,
@@ -116,6 +117,7 @@ __all__ = [
     "CheckpointedProjection",
     "DispatchContext",
     "ProjectionCheckpoint",
+    "BatchCheckpointStore",
     "ProjectionCheckpointStore",
     "ProjectionReadStore",
     "ProjectionResult",

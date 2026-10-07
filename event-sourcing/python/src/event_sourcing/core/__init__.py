@@ -2,6 +2,7 @@
 
 from event_sourcing.core.aggregate import AggregateRoot, BaseAggregate
 from event_sourcing.core.checkpoint import (
+    BatchCheckpointStore,
     CheckpointedProjection,
     DispatchContext,
     ProjectionCheckpoint,
@@ -23,6 +24,7 @@ __all__ = [
     "CheckpointedProjection",
     "DispatchContext",
     "ProjectionCheckpoint",
+    "BatchCheckpointStore",
     "ProjectionCheckpointStore",
     "ProjectionResult",
     # Process Manager (To-Do List pattern)
