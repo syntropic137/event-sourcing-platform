@@ -881,9 +881,13 @@ impl Drain {
     /// Let the current pass finish, then stop.
     async fn stop(mut self) {
         self.stop.cancel();
-        if let Some(handle) = self.handle.take() {
+        // Await through a reference: if this future is dropped mid-wait
+        // (run() aborted during shutdown), `Drain` still owns the handle and
+        // `Drop` aborts the task instead of detaching it.
+        if let Some(handle) = self.handle.as_mut() {
             let _ = handle.await;
         }
+        self.handle = None;
     }
 }
 

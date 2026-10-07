@@ -1132,3 +1132,61 @@ async fn like_wildcards_in_feed_prefix_are_rejected() {
         assert!(err.to_string().contains("#361"), "{err}");
     }
 }
+
+/// Blocks inside `process_pending` until released.
+#[derive(Default)]
+struct BlockingProcessor {
+    started: AtomicUsize,
+    completed: AtomicUsize,
+    gate: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl LiveProcessor for BlockingProcessor {
+    async fn process_pending(&self) -> Result<usize> {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        self.gate.notified().await;
+        self.completed.fetch_add(1, Ordering::SeqCst);
+        Ok(1)
+    }
+}
+
+#[tokio::test]
+async fn aborting_run_during_graceful_shutdown_still_stops_the_processor() {
+    let f = fixture().await;
+    let store = Arc::new(TodoStore::new());
+    let processor = Arc::new(BlockingProcessor::default());
+    // The startup drain starts a pass that blocks.
+    let mut runner = ProjectionRunner::new(f.port.clone(), store, TodoProjection, &f.tenant)
+        .with_live_processor(processor.clone());
+    let mut progress = runner.progress();
+    let cancel = CancellationToken::new();
+    let task = tokio::spawn({
+        let cancel = cancel.clone();
+        async move { runner.run(cancel).await }
+    });
+    wait_for(&mut progress, |p| p.is_live).await;
+    eventually("pass started", || {
+        processor.started.load(Ordering::SeqCst) == 1
+    })
+    .await;
+
+    // Graceful shutdown waits for the blocked pass; abort run() meanwhile.
+    cancel.cancel();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(
+        !task.is_finished(),
+        "run() is waiting for the in-flight pass"
+    );
+    task.abort();
+    let _ = task.await;
+
+    // Releasing the gate must not let the aborted pass finish its work.
+    processor.gate.notify_waiters();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        processor.completed.load(Ordering::SeqCst),
+        0,
+        "processor pass outlived an aborted runner"
+    );
+}
