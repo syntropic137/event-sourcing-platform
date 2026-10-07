@@ -23,6 +23,9 @@ const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 const NOTIFY_CHANNEL: &str = "eventstore_events";
 const NOTIFY_BROADCAST_CAPACITY: usize = 256;
 const FALLBACK_POLL_SECS: u64 = 5;
+/// Postgres rejects NOTIFY payloads of 8000 bytes or more; `tenant:nonce`
+/// stays below that for tenant ids shorter than this.
+const NOTIFY_MAX_TENANT_BYTES: i32 = 7900;
 
 /// First key of the two-key advisory lock that orders appends per tenant, so
 /// it cannot collide with any other advisory lock in the database. Arbitrary,
@@ -38,6 +41,9 @@ struct NotifyPayload {
 }
 
 impl NotifyPayload {
+    /// The append statement builds the same string in SQL
+    /// (`$tenant || ':' || last_global`).
+    #[cfg(test)]
     fn encode(tenant_id: &str, last_global_nonce: i64) -> String {
         format!("{tenant_id}:{last_global_nonce}")
     }
@@ -470,119 +476,99 @@ impl PostgresStore {
             .await
             .map_err(map_db_error)?;
 
-        let mut last_global_nonce = current_last_global;
-        let mut assigned_events: Vec<proto::EventData> = Vec::with_capacity(events.len());
-        for mut ev in events.into_iter() {
-            let mut meta = ev.meta.take().expect("normalized event must have metadata");
-            let now_ms = now_unix_ms();
-            meta.recorded_time_unix_ms = now_ms;
-            let headers_json = Json(meta.headers.clone());
-            let payload_sha = if meta.payload_sha256.is_empty() {
-                None
-            } else {
-                Some(meta.payload_sha256.clone())
-            };
+        // Everything written while the lock is held goes in ONE statement
+        // (#370): all events, the stream head, the idempotency record and the
+        // NOTIFY. The lock is held for three round trips (lock, write,
+        // COMMIT) whatever the batch size, instead of one per event plus
+        // three. Same transaction, same rows, same constraints and triggers
+        // (the per-row nonce-contiguity trigger sees earlier rows of the
+        // statement because rows are inserted in `ord` order).
+        let recorded_ms = now_unix_ms() as i64;
+        let n = events.len();
+        let mut aggregate_nonces = Vec::with_capacity(n);
+        let mut event_ids = Vec::with_capacity(n);
+        let mut event_types = Vec::with_capacity(n);
+        let mut event_versions = Vec::with_capacity(n);
+        let mut content_types = Vec::with_capacity(n);
+        let mut content_schemas = Vec::with_capacity(n);
+        let mut correlation_ids = Vec::with_capacity(n);
+        let mut causation_ids = Vec::with_capacity(n);
+        let mut actor_ids = Vec::with_capacity(n);
+        let mut timestamps = Vec::with_capacity(n);
+        let mut payload_shas = Vec::with_capacity(n);
+        let mut headers = Vec::with_capacity(n);
+        let mut payloads = Vec::with_capacity(n);
+        let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_owned());
+        for ev in &events {
+            let meta = ev
+                .meta
+                .as_ref()
+                .expect("normalized event must have metadata");
+            aggregate_nonces.push(meta.aggregate_nonce as i64);
+            event_ids.push(meta.event_id.clone());
+            event_types.push(meta.event_type.clone());
+            event_versions.push(meta.event_version as i32);
+            content_types.push(meta.content_type.clone());
+            content_schemas.push(non_empty(&meta.content_schema));
+            correlation_ids.push(non_empty(&meta.correlation_id));
+            causation_ids.push(non_empty(&meta.causation_id));
+            actor_ids.push(non_empty(&meta.actor_id));
+            timestamps.push(meta.timestamp_unix_ms as i64);
+            payload_shas
+                .push((!meta.payload_sha256.is_empty()).then(|| meta.payload_sha256.clone()));
+            headers.push(Json(meta.headers.clone()));
+            payloads.push(ev.payload.clone());
+        }
 
-            let row = sqlx::query(
-                r#"
+        let rows = sqlx::query(
+            r#"
+            WITH ins AS (
                 INSERT INTO events (
                     tenant_id, aggregate_id, aggregate_type, aggregate_nonce,
                     event_id, event_type, event_version, content_type, content_schema,
                     correlation_id, causation_id, actor_id, timestamp_unix_ms,
                     recorded_time_unix_ms, payload_sha256, headers, payload
-                ) VALUES (
-                    $1, $2, $3, $4,
-                    $5, $6, $7, $8, $9,
-                    $10, $11, $12, $13,
-                    $14, $15, $16, $17
                 )
-                RETURNING global_nonce
-                "#,
-            )
-            .bind(&tenant_id)
-            .bind(&aggregate_id)
-            .bind(&aggregate_type)
-            .bind(meta.aggregate_nonce as i64)
-            .bind(&meta.event_id)
-            .bind(&meta.event_type)
-            .bind(meta.event_version as i32)
-            .bind(&meta.content_type)
-            .bind(if meta.content_schema.is_empty() {
-                None::<&str>
-            } else {
-                Some(meta.content_schema.as_str())
-            })
-            .bind(if meta.correlation_id.is_empty() {
-                None::<&str>
-            } else {
-                Some(meta.correlation_id.as_str())
-            })
-            .bind(if meta.causation_id.is_empty() {
-                None::<&str>
-            } else {
-                Some(meta.causation_id.as_str())
-            })
-            .bind(if meta.actor_id.is_empty() {
-                None::<&str>
-            } else {
-                Some(meta.actor_id.as_str())
-            })
-            .bind(meta.timestamp_unix_ms as i64)
-            .bind(now_ms as i64)
-            .bind(payload_sha)
-            .bind(headers_json)
-            .bind(&ev.payload)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(map_db_error)?;
-
-            let global_nonce: i64 = row.get("global_nonce");
-            meta.global_nonce = global_nonce as u64;
-            last_global_nonce = meta.global_nonce;
-
-            assigned_events.push(proto::EventData {
-                meta: Some(meta.clone()),
-                payload: ev.payload,
-            });
-        }
-
-        let last_committed = assigned_events
-            .last()
-            .and_then(|ev| ev.meta.as_ref().map(|m| m.aggregate_nonce))
-            .unwrap_or(current_last_nonce);
-        let first_committed = assigned_events
-            .first()
-            .and_then(|ev| ev.meta.as_ref().map(|m| m.aggregate_nonce))
-            .unwrap_or(current_last_nonce + 1);
-
-        sqlx::query(
-            r#"
-            INSERT INTO aggregates (tenant_id, aggregate_id, aggregate_type, last_nonce, last_global_nonce)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (tenant_id, aggregate_id)
-            DO UPDATE SET
-                aggregate_type = EXCLUDED.aggregate_type,
-                last_nonce = EXCLUDED.last_nonce,
-                last_global_nonce = EXCLUDED.last_global_nonce,
-                updated_at = NOW()
-            "#,
-        )
-        .bind(&tenant_id)
-        .bind(&aggregate_id)
-        .bind(&aggregate_type)
-        .bind(last_committed as i64)
-        .bind(last_global_nonce as i64)
-        .execute(&mut *tx)
-        .await
-        .map_err(map_db_error)?;
-
-        if !req.idempotency_key.is_empty() {
-            sqlx::query(
-                r#"
+                SELECT $1, $2, $3, t.aggregate_nonce,
+                       t.event_id, t.event_type, t.event_version, t.content_type, t.content_schema,
+                       t.correlation_id, t.causation_id, t.actor_id, t.timestamp_unix_ms,
+                       $7, t.payload_sha256, t.headers, t.payload
+                FROM unnest(
+                    $8::int8[], $9::text[], $10::text[], $11::int4[], $12::text[], $13::text[],
+                    $14::text[], $15::text[], $16::text[], $17::int8[], $18::bytea[],
+                    $19::jsonb[], $20::bytea[]
+                ) WITH ORDINALITY AS t(
+                    aggregate_nonce, event_id, event_type, event_version, content_type,
+                    content_schema, correlation_id, causation_id, actor_id,
+                    timestamp_unix_ms, payload_sha256, headers, payload, ord
+                )
+                ORDER BY t.ord
+                RETURNING aggregate_nonce, global_nonce
+            ),
+            head AS (
+                SELECT min(aggregate_nonce) AS first_nonce,
+                       max(aggregate_nonce) AS last_nonce,
+                       max(global_nonce) AS last_global
+                FROM ins
+            ),
+            agg AS (
+                INSERT INTO aggregates (tenant_id, aggregate_id, aggregate_type, last_nonce, last_global_nonce)
+                SELECT $1, $2, $3, last_nonce, last_global FROM head
+                ON CONFLICT (tenant_id, aggregate_id)
+                DO UPDATE SET
+                    aggregate_type = EXCLUDED.aggregate_type,
+                    last_nonce = EXCLUDED.last_nonce,
+                    last_global_nonce = EXCLUDED.last_global_nonce,
+                    updated_at = NOW()
+                RETURNING 1
+            ),
+            idem AS (
                 INSERT INTO idempotency (
                     tenant_id, aggregate_id, idempotency_key,
                     request_fingerprint, first_committed_nonce, last_committed_nonce, last_global_nonce
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+                )
+                SELECT $1, $2, $4, $5, first_nonce, last_nonce, last_global FROM head
+                WHERE $4 <> ''
                 ON CONFLICT (tenant_id, aggregate_id, idempotency_key)
                 DO UPDATE SET
                     request_fingerprint = EXCLUDED.request_fingerprint,
@@ -590,32 +576,73 @@ impl PostgresStore {
                     last_committed_nonce = EXCLUDED.last_committed_nonce,
                     last_global_nonce = EXCLUDED.last_global_nonce,
                     updated_at = NOW()
-                "#,
+                RETURNING 1
+            ),
+            -- Delivered at COMMIT. A payload must stay under 8000 bytes; for
+            -- a longer tenant id no NOTIFY is sent and subscribers see the
+            -- events on their fallback poll (a failing pg_notify would abort
+            -- the transaction).
+            notified AS (
+                SELECT pg_notify($6, $1 || ':' || last_global) FROM head
+                WHERE octet_length($1) < $21
             )
-            .bind(&tenant_id)
-            .bind(&aggregate_id)
-            .bind(&req.idempotency_key)
-            .bind(&fingerprint)
-            .bind(first_committed as i64)
-            .bind(last_committed as i64)
-            .bind(last_global_nonce as i64)
-            .execute(&mut *tx)
-            .await
-            .map_err(map_db_error)?;
-        }
+            SELECT ins.aggregate_nonce, ins.global_nonce,
+                   (SELECT count(*) FROM agg) AS agg_rows,
+                   (SELECT count(*) FROM idem) AS idem_rows,
+                   (SELECT count(*) FROM notified) AS notified
+            FROM ins
+            ORDER BY ins.aggregate_nonce
+            "#,
+        )
+        .bind(&tenant_id)
+        .bind(&aggregate_id)
+        .bind(&aggregate_type)
+        .bind(&req.idempotency_key)
+        .bind(&fingerprint)
+        .bind(NOTIFY_CHANNEL)
+        .bind(recorded_ms)
+        .bind(&aggregate_nonces)
+        .bind(&event_ids)
+        .bind(&event_types)
+        .bind(&event_versions)
+        .bind(&content_types)
+        .bind(&content_schemas)
+        .bind(&correlation_ids)
+        .bind(&causation_ids)
+        .bind(&actor_ids)
+        .bind(&timestamps)
+        .bind(&payload_shas)
+        .bind(&headers)
+        .bind(&payloads)
+        .bind(NOTIFY_MAX_TENANT_BYTES)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(map_db_error)?;
 
-        // Notify subscribers of new events (delivered only after commit).
-        // Best-effort: notification failure must not abort the append.
-        // The 5s fallback poll ensures delivery even if NOTIFY fails.
-        let notify_payload = NotifyPayload::encode(&tenant_id, last_global_nonce as i64);
-        if let Err(e) = sqlx::query("SELECT pg_notify($1, $2)")
-            .bind(NOTIFY_CHANNEL)
-            .bind(&notify_payload)
-            .execute(&mut *tx)
-            .await
-        {
-            tracing::warn!(error = %e, "pg_notify failed (non-fatal, fallback poll will deliver)");
+        // Defensive: one row per event, in aggregate order, with strictly
+        // increasing global nonces. Anything else would break the
+        // aggregate-order = global-order invariant; refuse to commit it.
+        let mut assigned: Vec<(u64, u64)> = Vec::with_capacity(n);
+        for row in &rows {
+            assigned.push((
+                row.get::<i64, _>("aggregate_nonce") as u64,
+                row.get::<i64, _>("global_nonce") as u64,
+            ));
         }
+        let in_order = assigned.len() == n
+            && assigned
+                .iter()
+                .enumerate()
+                .all(|(i, (agg, _))| *agg == current_last_nonce + i as u64 + 1)
+            && assigned.windows(2).all(|w| w[0].1 < w[1].1);
+        let head_written = rows.first().map(|r| r.get::<i64, _>("agg_rows")) == Some(1);
+        if !in_order || !head_written {
+            tx.rollback().await.map_err(map_db_error)?;
+            return Err(StoreError::Internal(anyhow::anyhow!(
+                "append wrote unexpected rows {assigned:?} (head written: {head_written}); rolled back"
+            )));
+        }
+        let (last_committed, last_global_nonce) = assigned[n - 1];
 
         // A failed COMMIT (lost connection) has an unknown outcome:
         // UNAVAILABLE, retry with the same idempotency key.
