@@ -335,6 +335,8 @@ async fn unhandled_type_is_skipped_before_upcasting() {
     .await;
     // Stored type the projection ignores, renamed to one it handles.
     let g6 = append(&f.client, &f.tenant, "a", 6, "Credited", 5).await;
+    // Ignored final event: checkpointed with no later handled event.
+    let g7 = append(&f.client, &f.tenant, "a", 7, "Withdrawn", 2).await;
 
     let fail = |_| Err(Error::domain("cannot migrate"));
     let upcasters = Upcasters::new()
@@ -351,8 +353,14 @@ async fn unhandled_type_is_skipped_before_upcasting() {
         &f.tenant,
     )
     .with_upcasters(upcasters);
-    assert_eq!(runner.catch_up().await.unwrap(), g6);
-    assert_eq!(store.load_checkpoint(runner.key()).await.unwrap(), Some(g6));
+    assert_eq!(runner.catch_up().await.unwrap(), g7);
+    assert_eq!(store.load_checkpoint(runner.key()).await.unwrap(), Some(g7));
+    assert!(probe
+        .contexts
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|c| c.global_nonce == g6));
     assert_eq!(store.state(runner.key()).by_account["a"], 15);
     let seen: Vec<u64> = probe
         .contexts
