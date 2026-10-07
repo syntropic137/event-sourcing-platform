@@ -31,9 +31,55 @@ the checkpoint.
    status channel the protocol does not have. Ending the stream with a
    retryable status is explicit and works with every client.
 
-Scope: this decision covers query failures (#350). Stored rows that cannot be
-decoded are still logged and skipped here; issue #351 replaces that with a
-data-integrity error under the same "stop, never skip" rule.
+## Undecodable stored events (#351)
+
+Before #351, a row that could not be decoded was logged and skipped; later
+valid events moved the cursor past it, and an all-invalid batch advanced the
+cursor explicitly. Consumers built incomplete projections with no error.
+
+Now the same "stop, never skip" rule applies:
+
+1. Rows are decoded in `global_nonce` order. Events **before** the first
+   undecodable row are delivered; then the stream yields
+   `StoreError::UndecodableEvent { global_nonce, reason }` (gRPC `DATA_LOSS`)
+   and ends. No caught-up marker, no later position, no cursor advance.
+2. The error names the position and the column only. Decoder messages are
+   dropped because they can quote stored values; payloads are never logged.
+   The position is also sent as gRPC trailing metadata
+   `esp-undecodable-global-nonce` so clients need not parse the message; the
+   Python client raises `UndecodableEventError(global_nonce)`.
+3. `read_all` / `read_stream` return the same error instead of panicking.
+4. `DATA_LOSS` is not fixed by retrying. A consumer that reconnects from its
+   checkpoint hits the same error at the same position. Alert on it.
+5. No server-side skip or quarantine policy exists. Any future one must be
+   opt-in, observable (metric/log per skipped position) and auditable.
+
+### Operator recovery
+
+1. **Identify.** Take `global_nonce` from the error or the store log
+   (`subscription stopped at an undecodable stored event`). Inspect metadata,
+   not payload:
+   `SELECT tenant_id, aggregate_id, aggregate_nonce, event_id, event_type, event_version, content_type, jsonb_typeof(headers) FROM events WHERE global_nonce = <N>;`
+2. **Choose a fix.**
+   - *Reader cannot read valid data* (version skew, schema drift): deploy an
+     event store version that decodes the row. Consumers resume unchanged.
+   - *Row is corrupt and repairable*: events are append-only (the
+     `trg_events_immutable_update` trigger blocks `UPDATE`). Under change
+     control, in one transaction: `ALTER TABLE events DISABLE TRIGGER
+     trg_events_immutable_update`, correct only the broken column of that one
+     row, re-enable the trigger, commit. Record who, why, the position and the
+     before/after column values in your change log.
+   - *Row is unrecoverable*: skip it explicitly **per consumer** by setting
+     that consumer's checkpoint to `N` (it resumes at `N + 1`). This is the
+     only skip path: deliberate, per consumer, and auditable through the
+     checkpoint write. Record the skipped position; the consumer's read model
+     lacks that event and may need a rebuild or a compensating event.
+     With the Python `SubscriptionCoordinator`, move the checkpoint of every
+     projection it runs that has not passed `N`: one failing track cancels
+     the whole plan. This works even when `N` is the tenant head: the head
+     probe maps `DATA_LOSS` on the head event to its position (via
+     `UndecodableEventError.global_nonce`) instead of failing.
+3. **Verify.** Reconnect; the subscription passes `N` (or resumes at `N + 1`).
 
 ## Consumer contract (at-least-once)
 
@@ -56,9 +102,9 @@ data-integrity error under the same "stop, never skip" rule.
 | Client | On subscription error |
 |--------|-----------------------|
 | gRPC server (`eventstore-bin`) | Logs the error, maps it with `StoreError::to_status()`, ends the response stream with that status. |
-| Rust SDK (`sdk-rs`) | `tonic::Streaming` yields `Err(Status)` with `Code::Unavailable`. |
-| TypeScript SDK (`sdk-ts`) | The async iterator rejects with the gRPC error (`code` 14). Messages and a terminal error/end that arrive while the consumer is busy are buffered and delivered on later `next()` calls (`streamToAsyncIterator`), so a failure is never lost between reads. |
-| Python (`event_sourcing` `GrpcEventStoreClient.subscribe`) | Raises `EventStoreError`. `SubscriptionCoordinator` retries with exponential backoff and resumes each projection from its saved checkpoint. |
+| Rust SDK (`sdk-rs`) | `tonic::Streaming` yields `Err(Status)` with `Code::Unavailable`, or `Code::DataLoss` for an undecodable event (position in trailing metadata `esp-undecodable-global-nonce`). |
+| TypeScript SDK (`sdk-ts`) | The async iterator rejects with the gRPC error (`code` 14 `UNAVAILABLE`, or 15 `DATA_LOSS`). Messages and a terminal error/end that arrive while the consumer is busy are buffered and delivered on later `next()` calls (`streamToAsyncIterator`), so a failure is never lost between reads. |
+| Python (`event_sourcing` `GrpcEventStoreClient.subscribe`) | Raises `EventStoreError`; for `DATA_LOSS` with a position, the subclass `UndecodableEventError` (`.global_nonce`). `SubscriptionCoordinator` retries with exponential backoff and resumes each projection from its saved checkpoint. |
 
 ## Consequences
 
@@ -67,3 +113,11 @@ data-integrity error under the same "stop, never skip" rule.
 - Fault-injection tests (`eventstore-backend-postgres/tests/it_subscribe_faults.rs`)
   cover replay and live failures, with and without a prefix filter, and
   reconnect from the saved checkpoint.
+- An undecodable row halts every consumer that reaches it until an operator
+  acts. That is intended: a visible stop beats a silently incomplete
+  projection. The Python coordinator retries `DATA_LOSS` with backoff like any
+  other error, so it stays stopped at the position and logs each attempt,
+  until an operator repairs the row or moves checkpoints past it.
+- `it_subscribe_undecodable.rs` stores a decoder-invalid row between valid rows
+  (replay and live) and an all-invalid batch, and checks that nothing is
+  delivered past it and reconnecting fails at the same position.

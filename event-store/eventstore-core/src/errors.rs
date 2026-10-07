@@ -5,6 +5,10 @@ use thiserror::Error;
 
 use eventstore_proto::gen as proto;
 
+/// gRPC trailing-metadata key carrying the `global_nonce` of an undecodable
+/// stored event on a `DATA_LOSS` status (decimal ASCII).
+pub const UNDECODABLE_GLOBAL_NONCE_KEY: &str = "esp-undecodable-global-nonce";
+
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("not found: {0}")]
@@ -29,6 +33,13 @@ pub enum StoreError {
     /// consumer reconnects from its own last checkpoint (at-least-once).
     #[error("unavailable: {0}")]
     Unavailable(String),
+    /// A stored event cannot be decoded (data integrity). Not retryable until
+    /// an operator repairs the row or the reader. `reason` never contains
+    /// payload or header values. Subscriptions stop here; see ADR-026.
+    #[error(
+        "data integrity: stored event at global_nonce {global_nonce} cannot be decoded: {reason}"
+    )]
+    UndecodableEvent { global_nonce: u64, reason: String },
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -69,6 +80,13 @@ impl StoreError {
                 tonic::Status::new(Code::ResourceExhausted, msg.clone())
             }
             StoreError::Unavailable(msg) => tonic::Status::new(Code::Unavailable, msg.clone()),
+            StoreError::UndecodableEvent { global_nonce, .. } => {
+                // The position is also sent as metadata so clients need not
+                // parse the message (e.g. to find the head, or to skip it).
+                let mut metadata = tonic::metadata::MetadataMap::new();
+                metadata.insert(UNDECODABLE_GLOBAL_NONCE_KEY, (*global_nonce).into());
+                tonic::Status::with_metadata(Code::DataLoss, self.to_string(), metadata)
+            }
             StoreError::Internal(err) => tonic::Status::new(Code::Internal, err.to_string()),
         }
     }
@@ -83,5 +101,23 @@ mod tests {
         let status = StoreError::Unavailable("db down".into()).to_status();
         assert_eq!(status.code(), tonic::Code::Unavailable);
         assert_eq!(status.message(), "db down");
+    }
+
+    #[test]
+    fn undecodable_event_maps_to_grpc_data_loss_with_position() {
+        let status = StoreError::UndecodableEvent {
+            global_nonce: 42,
+            reason: "column 'headers'".into(),
+        }
+        .to_status();
+        assert_eq!(status.code(), tonic::Code::DataLoss);
+        assert!(status.message().contains("global_nonce 42"), "{status:?}");
+        let nonce = status
+            .metadata()
+            .get(UNDECODABLE_GLOBAL_NONCE_KEY)
+            .expect("position metadata")
+            .to_str()
+            .unwrap();
+        assert_eq!(nonce, "42");
     }
 }
