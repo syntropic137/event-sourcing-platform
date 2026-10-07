@@ -606,6 +606,7 @@ name = "eventstore-bench"
 version = "0.17.0"
 dependencies = [
  "anyhow",
+ "eventstore-backend-postgres",
  "eventstore-proto",
  "hdrhistogram",
  "serde",

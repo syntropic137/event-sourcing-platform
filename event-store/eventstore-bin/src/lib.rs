@@ -156,7 +156,13 @@ pub async fn resolve_backend() -> anyhow::Result<Arc<dyn EventStoreTrait>> {
         "postgres" => {
             let url = std::env::var("DATABASE_URL")
                 .map_err(|_| anyhow::anyhow!("DATABASE_URL must be set when BACKEND=postgres"))?;
-            let store = eventstore_backend_postgres::PostgresStore::connect(&url).await?;
+            // Pool size and timeouts: PG_* env vars, see
+            // docs/operations/POSTGRES-CONNECTIONS.md (#368, #370).
+            let config = eventstore_backend_postgres::PostgresConfig::from_env()?;
+            info!(?config, "postgres pool and timeout settings");
+            let store =
+                eventstore_backend_postgres::PostgresStore::connect_with_config(&url, &config)
+                    .await?;
             Ok(store)
         }
         other => anyhow::bail!("unsupported BACKEND '{other}'. Supported: memory, postgres"),
@@ -261,6 +267,24 @@ mod tests {
             Some(v) => std::env::set_var("BACKEND", v),
             None => std::env::remove_var("BACKEND"),
         }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn resolve_backend_rejects_invalid_postgres_settings_before_connecting() {
+        let prev_backend = set_env_and_get_prev("BACKEND", Some("postgres"));
+        let prev_url = set_env_and_get_prev("DATABASE_URL", Some("postgres://u:p@127.0.0.1:1/db"));
+        let prev_pool = set_env_and_get_prev("PG_POOL_MAX_CONNECTIONS", Some("lots"));
+        let res = resolve_backend().await;
+        for (k, v) in [
+            ("BACKEND", prev_backend),
+            ("DATABASE_URL", prev_url),
+            ("PG_POOL_MAX_CONNECTIONS", prev_pool),
+        ] {
+            set_env_and_get_prev(k, v);
+        }
+        let msg = format!("{:#}", res.err().expect("invalid pool size must fail"));
+        assert!(msg.contains("PG_POOL_MAX_CONNECTIONS"), "{msg}");
     }
 
     #[tokio::test]

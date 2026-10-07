@@ -19,15 +19,25 @@ pub struct EventStoreProc {
     pub addr: SocketAddr,
     database_url: String,
     log_path: PathBuf,
+    /// Extra environment, e.g. `PG_*` pool and timeout settings.
+    env: Vec<(String, String)>,
 }
 
 impl EventStoreProc {
     pub async fn start(database_url: &str) -> Self {
+        Self::start_with_env(database_url, &[]).await
+    }
+
+    pub async fn start_with_env(database_url: &str, env: &[(&str, &str)]) -> Self {
         let mut proc = Self {
             child: None,
             addr: SocketAddr::from(([127, 0, 0, 1], free_port())),
             database_url: database_url.to_owned(),
             log_path: log_path(),
+            env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
         };
         proc.spawn();
         proc.wait_ready().await;
@@ -45,6 +55,7 @@ impl EventStoreProc {
             .env("DATABASE_URL", &self.database_url)
             .env("BIND_ADDR", self.addr.to_string())
             .env("RUST_LOG", "info")
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null())
             .stdout(log.try_clone().unwrap())
             .stderr(log)

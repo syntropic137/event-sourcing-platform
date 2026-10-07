@@ -20,9 +20,17 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
-/// Mirrors `PgPoolOptions::max_connections(5)` in
-/// `PostgresStore::connect` (eventstore-backend-postgres). Keep in sync.
-pub const SERVER_POOL_MAX: i64 = 5;
+/// The server's pool size. The spawned server inherits this process's
+/// environment, so this reads `PG_POOL_MAX_CONNECTIONS` the same way it
+/// does (default from `PostgresConfig`).
+pub fn server_pool_max() -> i64 {
+    static MAX: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *MAX.get_or_init(|| {
+        eventstore_backend_postgres::PostgresConfig::from_env()
+            .map(|c| i64::from(c.max_connections))
+            .unwrap_or_else(|e| panic!("invalid server pool settings: {e:#}"))
+    })
+}
 
 pub const PG_SAMPLE_EVERY: Duration = Duration::from_millis(20);
 const RESOURCE_SAMPLE_EVERY: Duration = Duration::from_millis(500);
@@ -49,7 +57,7 @@ pub struct PgActivity {
     /// Connections executing or inside a transaction (checked out of the pool).
     pub busy_mean: f64,
     pub busy_max: i64,
-    /// % of samples with all `SERVER_POOL_MAX` pool connections busy.
+    /// % of samples with all `server_pool_max()` pool connections busy.
     pub pool_all_busy_pct: f64,
     /// Connections idle inside an open transaction (server round trips).
     pub idle_in_tx_mean: f64,
@@ -89,7 +97,7 @@ impl ActivityAcc {
         self.conns_max = self.conns_max.max(conns);
         self.busy_sum += busy;
         self.busy_max = self.busy_max.max(busy);
-        if busy >= SERVER_POOL_MAX {
+        if busy >= server_pool_max() {
             self.all_busy += 1;
         }
         self.idle_tx_sum += idle_tx;
@@ -391,13 +399,13 @@ mod tests {
     #[test]
     fn activity_saturation_counts_full_pool() {
         let mut a = ActivityAcc::default();
-        a.add((6, SERVER_POOL_MAX, 0, 2, 0, 1, 2));
+        a.add((6, server_pool_max(), 0, 2, 0, 1, 2));
         a.add((6, 1, 0, 0, 0, 0, 0));
         let r = a.finish();
         assert_eq!(r.samples, 2);
         assert_eq!(r.pool_all_busy_pct, 50.0);
         assert_eq!(r.advisory_wait_any_pct, 50.0);
         assert_eq!(r.advisory_wait_max, 2);
-        assert_eq!(r.busy_max, SERVER_POOL_MAX);
+        assert_eq!(r.busy_max, server_pool_max());
     }
 }

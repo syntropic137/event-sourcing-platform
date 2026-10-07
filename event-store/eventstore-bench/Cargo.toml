@@ -17,6 +17,7 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process"] }
 tonic = { version = "0.14", features = ["transport"] }
 eventstore-proto = { path = "../eventstore-proto" }
+eventstore-backend-postgres = { path = "../eventstore-backend-postgres" }
 
 [lib]
 name = "eventstore_bench"

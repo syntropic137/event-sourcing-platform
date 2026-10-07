@@ -87,7 +87,7 @@ qa-full: fmt clippy check test-full coverage-text
 # drill creates and removes its own Docker containers (label
 # esp-recovery-drill=<run id>). Slow (minutes), so not part of qa/qa-full.
 # Extra test-harness args: make recovery-drill DRILL_ARGS="--nocapture"
-DRILL_TESTS := --test drill_restart --test drill_connectivity --test drill_backup
+DRILL_TESTS := --test drill_restart --test drill_connectivity --test drill_blackhole --test drill_backup
 .PHONY: recovery-drill recovery-drill-clean
 recovery-drill:
 	@command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 || { echo "Docker is required for recovery drills"; exit 2; }
