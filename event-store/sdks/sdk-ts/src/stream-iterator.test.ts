@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 
 import { streamToAsyncIterator } from "./stream-iterator.js";
 
@@ -93,6 +94,55 @@ test("return() cancels the call and ignores the resulting CANCELLED error", asyn
   assert.deepEqual(await pending, { value: undefined, done: true });
   call.emit("error", Object.assign(new Error("1 CANCELLED"), { code: 1 }));
   assert.deepEqual(await within(it.next()), { value: undefined, done: true });
+});
+
+/** A real Readable that ends the way grpc-js does: push(null), then emit("error"). */
+class GrpcLikeStream extends PassThrough {
+  cancelled = false;
+  constructor() {
+    super({ objectMode: true });
+  }
+  cancel() {
+    this.cancelled = true;
+  }
+  failWith(error: Error) {
+    this.push(null);
+    this.emit("error", error);
+  }
+}
+
+for (const count of [3, 272, 1000]) {
+  test(`error after ${count} messages on a real paused Readable loses none of them`, async () => {
+    const call = new GrpcLikeStream();
+    const it = streamToAsyncIterator<number>(call);
+    for (let i = 0; i < count; i++) call.push(i);
+    // Let the adapter fill its buffer and pause the stream (backpressure).
+    await new Promise((r) => setImmediate(r));
+    call.failWith(unavailable);
+
+    const seen: number[] = [];
+    await assert.rejects(
+      within(
+        (async () => {
+          for await (const v of it) seen.push(v);
+        })(),
+        5000,
+      ),
+      (e: any) => e.code === 14,
+    );
+    assert.equal(seen.length, count);
+    assert.deepEqual(seen, Array.from({ length: count }, (_, i) => i));
+  });
+}
+
+test("end after many messages on a real Readable delivers all, then completes", async () => {
+  const call = new GrpcLikeStream();
+  const it = streamToAsyncIterator<number>(call);
+  for (let i = 0; i < 600; i++) call.push(i);
+  call.push(null);
+  const seen: number[] = [];
+  for await (const v of it) seen.push(v);
+  assert.equal(seen.length, 600);
 });
 
 test("a slow consumer pauses the call and resumes it after draining", async () => {
