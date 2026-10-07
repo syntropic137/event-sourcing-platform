@@ -232,18 +232,30 @@ async fn all_invalid_batch_cannot_be_checkpointed_past() {
 }
 
 #[tokio::test]
-async fn read_all_reports_undecodable_row_instead_of_panicking() {
+async fn reads_report_undecodable_row_instead_of_panicking() {
     let tenant = unique_tenant("read-all");
     let store = connect().await;
     let bad = insert_row(&store, &tenant, "Order-1", 1, false).await;
     let err = store
         .read_all(proto::ReadAllRequest {
-            tenant_id: tenant,
+            tenant_id: tenant.clone(),
             from_global_nonce: 0,
             max_count: 10,
             forward: true,
         })
         .await
         .expect_err("undecodable row must fail the read");
+    assert_data_integrity_error(&err, bad);
+
+    let err = store
+        .read_stream(proto::ReadStreamRequest {
+            tenant_id: tenant,
+            aggregate_id: "Order-1".into(),
+            from_aggregate_nonce: 1,
+            max_count: 10,
+            forward: true,
+        })
+        .await
+        .expect_err("undecodable row must fail read_stream");
     assert_data_integrity_error(&err, bad);
 }
