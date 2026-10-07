@@ -389,6 +389,57 @@ async fn uncertain_save_then_more_events_reconciles_committed_prefix() {
     assert_eq!(loaded.aggregate.balance, 15);
 }
 
+/// #362/#363 regression. Reconciliation used to mask two store bugs: an
+/// identical retry with 2+ headers looked like a different payload, and the
+/// memory backend checked the expected revision before the idempotency key.
+/// Now the store itself answers the retry with the original ack, even with
+/// many headers and after another writer advanced the stream, so the
+/// repository needs no reconciliation read.
+#[tokio::test]
+async fn lost_ack_retry_with_headers_is_acked_by_store_after_stream_advanced() {
+    let server = spawn_server().await;
+    let client = connect(&server.addr).await;
+    let faulty = Arc::new(FaultyPort::new(client.clone()));
+    faulty.lose_acks.store(1, Ordering::SeqCst);
+    let tenant = unique_tenant();
+    let repo = EventStoreRepository::<Account>::new(faulty.clone(), &tenant)
+        .with_retry_policy(RetryPolicy::none());
+
+    let mut acct = opened_with_deposit("acct-hdr").await;
+    for envelope in acct.uncommitted_events.iter_mut() {
+        for i in 0..8 {
+            envelope
+                .metadata
+                .metadata
+                .insert(format!("x-header-{i}"), format!("value-{i}"));
+        }
+    }
+    repo.save(&mut acct).await.expect_err("ack lost");
+    assert_eq!(stream_len(&client, &tenant, "acct-hdr").await, 2);
+
+    // Another writer advances the stream before the retry.
+    let other_repo = EventStoreRepository::<Account>::new(Arc::new(client.clone()), &tenant);
+    let mut other = other_repo.load("acct-hdr").await.unwrap().unwrap();
+    other
+        .execute(AccountCommand::Deposit { amount: 5 })
+        .await
+        .unwrap();
+    other_repo.save(&mut other).await.unwrap();
+
+    let reads_before = faulty.reads_sent.load(Ordering::SeqCst);
+    repo.save(&mut acct)
+        .await
+        .expect("store returns the original ack");
+    assert_eq!(
+        faulty.reads_sent.load(Ordering::SeqCst),
+        reads_before,
+        "answered by the store, not by reconciliation"
+    );
+    assert!(!acct.has_uncommitted_events());
+    assert_eq!(acct.committed_version(), 2);
+    assert_eq!(stream_len(&client, &tenant, "acct-hdr").await, 3);
+}
+
 #[tokio::test]
 async fn uncertain_save_retried_automatically_commits_exactly_once() {
     let server = spawn_server().await;

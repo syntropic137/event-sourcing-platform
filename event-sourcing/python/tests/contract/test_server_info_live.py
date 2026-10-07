@@ -42,6 +42,7 @@ async def test_live_server_reports_info_and_commit_order_guarantee(
             Capabilities.COMMIT_ORDERED_GLOBAL_NONCE,
             Capabilities.SUBSCRIPTION_ERRORS_SURFACED,
             Capabilities.UNDECODABLE_EVENTS_SURFACED,
+            Capabilities.LITERAL_SUBSCRIPTION_PREFIX,
         ]
     )
     assert not info.is_legacy

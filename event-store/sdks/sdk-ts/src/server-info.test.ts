@@ -181,6 +181,7 @@ test("live server advertises commit_ordered_global_nonce", { skip: !process.env.
       Capabilities.COMMIT_ORDERED_GLOBAL_NONCE,
       Capabilities.SUBSCRIPTION_ERRORS_SURFACED,
       Capabilities.UNDECODABLE_EVENTS_SURFACED,
+      Capabilities.LITERAL_SUBSCRIPTION_PREFIX,
     ]);
     assert.equal(info.legacy, false);
     assert.equal(info.apiVersion, "eventstore.v1");

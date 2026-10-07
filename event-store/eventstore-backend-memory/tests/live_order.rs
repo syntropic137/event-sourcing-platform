@@ -266,3 +266,77 @@ async fn lagging_subscriber_gets_an_error_then_resubscribes_from_checkpoint() {
     let seen = collect(subscribe(&store, TENANT, ""), 10).await.unwrap();
     assert_exact_order("resubscribed", &seen, &(1..=10).collect::<Vec<_>>());
 }
+
+/// `\`, `%` and `_` in a prefix are ordinary characters (#361), in replay
+/// and in live delivery.
+#[tokio::test]
+async fn prefix_wildcard_characters_match_literally() {
+    let store = InMemoryStore::new();
+    assert!(store
+        .capabilities()
+        .contains(&capabilities::LITERAL_SUBSCRIPTION_PREFIX));
+    let tenant = "tenant-literal";
+    let ids = [
+        "acct_1",
+        "acctX1",
+        "acct%1",
+        "acct-long-1",
+        r"acct\1",
+        r"acct\\1",
+        "acct1",
+    ];
+    let mut all = Vec::new();
+    for id in ids {
+        all.push((
+            id.to_string(),
+            append_batch(&store, tenant, id, 0, 1).await[0],
+        ));
+    }
+
+    for (i, prefix) in ["acct_", "acct%", r"acct\", r"acct\\", "acct_1"]
+        .into_iter()
+        .enumerate()
+    {
+        let expected: Vec<u64> = all
+            .iter()
+            .filter(|(id, _)| id.starts_with(prefix))
+            .map(|(_, g)| *g)
+            .collect();
+        assert!(!expected.is_empty(), "{prefix}");
+        let replay = collect(subscribe(&store, tenant, prefix), expected.len()).await;
+        assert_exact_order(prefix, &replay.expect("join"), &expected);
+
+        // Live: one foreign id an unescaped LIKE would match, then a match.
+        let mut stream = subscribe(&store, tenant, prefix);
+        let mut seen = 0;
+        while seen < expected.len() {
+            let item = tokio::time::timeout(Duration::from_secs(10), stream.next())
+                .await
+                .expect("replay")
+                .expect("open");
+            if item.expect("ok").event.is_some() {
+                seen += 1;
+            }
+        }
+        let foreign = format!("{}{i}-live", prefix.replace(['_', '%', '\\'], "Q"));
+        let foreign_nonce = append_batch(&store, tenant, &foreign, 0, 1).await[0];
+        all.push((foreign, foreign_nonce));
+        let own = format!("{prefix}{i}-live");
+        let wanted = append_batch(&store, tenant, &own, 0, 1).await[0];
+        let got = loop {
+            let item = tokio::time::timeout(Duration::from_secs(10), stream.next())
+                .await
+                .expect("live")
+                .expect("open");
+            if let Some(ev) = item.expect("ok").event {
+                break ev.meta.unwrap();
+            }
+        };
+        assert_eq!(
+            (got.aggregate_id.as_str(), got.global_nonce),
+            (own.as_str(), wanted),
+            "{prefix}"
+        );
+        all.push((own, wanted));
+    }
+}

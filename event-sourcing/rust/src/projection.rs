@@ -23,8 +23,12 @@
 //!   capability, see #366). A live event below the last applied position
 //!   that is not provably a duplicate stops the runner with
 //!   [`Error::OutOfOrderDelivery`] rather than being skipped and lost.
-//! * **Feed prefixes** may not contain `\`, `%` or `_` until the backend
-//!   escapes subscription prefixes (#361); `run` rejects them.
+//! * **Feed prefixes** are matched literally, including `\`, `%` and `_`.
+//!   Live delivery relies on the server doing the same (the
+//!   `literal_subscription_prefix` capability, #361); servers before v0.17.0
+//!   used the prefix as an unescaped SQL `LIKE` pattern on Postgres, where a
+//!   prefix containing `\` can miss events. Check the capability with
+//!   `GetServerInfo` before using such a prefix against an unknown server.
 //! * **Atomicity**: for each event the runner calls
 //!   [`ProjectionStore::begin`], [`CheckpointedProjection::handle`], then
 //!   [`ProjectionStore::commit`] with the event's position. A transactional
@@ -676,17 +680,6 @@ where
     /// occurs. Errors are returned, never swallowed; the checkpoint stays at
     /// the last event that committed.
     pub async fn run(&mut self, cancel: CancellationToken) -> Result<RunExit> {
-        // The Postgres backend matches `aggregate_id_prefix` with an unescaped
-        // SQL LIKE, so these characters change what the live subscription
-        // delivers (events can be missed, not just over-delivered). Reject
-        // them until the backend escapes the pattern (#361).
-        if self.key.feed.contains(['\\', '%', '_']) {
-            return Err(Error::invalid_state(format!(
-                "feed prefix '{}' contains '\\', '%' or '_', which the event store \
-                 subscription treats as LIKE wildcards (see #361); not supported yet",
-                self.key.feed
-            )));
-        }
         let Some(boundary) = self.catch_up_until(&cancel).await? else {
             return Ok(RunExit::Cancelled {
                 position: self.position,
@@ -729,9 +722,10 @@ where
                 Ok(event) => event,
                 Err(err) => break Err(err),
             };
-            // Backends may match the feed prefix loosely (Postgres uses SQL
-            // LIKE); enforce exact prefix semantics so foreign events never
-            // reach the projection or advance its checkpoint.
+            // Servers before `literal_subscription_prefix` (#361) may match
+            // the feed prefix loosely (unescaped SQL LIKE); enforce exact
+            // prefix semantics so foreign events never reach the projection
+            // or advance its checkpoint.
             if !event.aggregate_id.starts_with(&self.key.feed) {
                 continue;
             }
