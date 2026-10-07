@@ -101,9 +101,11 @@
 //! - [`aggregate`] - Core aggregate traits and base implementations
 //! - [`command`] - Command handling patterns and abstractions
 //! - [`event`] - Event definitions and metadata handling
-//! - [`repository`] - Repository pattern for loading/saving aggregates
+//! - [`repository`] - Event store repository: load/replay, save with optimistic
+//!   concurrency, idempotent retry of unknown-outcome saves
 //! - [`projection`] - Projection building and read model management
-//! - [`client`] - Low-level event store client integration
+//! - [`client`] - gRPC event store client (layered on `eventstore-sdk-rs`) and
+//!   the [`client::EventStorePort`] trait used for testing and decoration
 
 pub mod aggregate;
 pub mod client;
@@ -115,11 +117,14 @@ pub mod repository;
 
 /// Re-exports of commonly used types and traits
 pub mod prelude {
-    pub use crate::aggregate::{Aggregate, AggregateLoader, AggregateRoot};
+    pub use crate::aggregate::{Aggregate, AggregateInstance, AggregateLoader, AggregateRoot};
+    pub use crate::client::{EventStoreClient, EventStorePort};
     pub use crate::command::{Command, CommandHandler};
     pub use crate::error::{Error, Result};
     pub use crate::event::{DomainEvent, EventEnvelope, EventMetadata};
-    pub use crate::repository::{AggregateRepository, Repository};
+    pub use crate::repository::{
+        AggregateRepository, EventStoreRepository, Repository, RetryPolicy,
+    };
 
     // Re-export common external types
     pub use async_trait::async_trait;

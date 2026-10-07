@@ -36,8 +36,11 @@ clippy:
 	cargo clippy --all-targets --all-features -- -D warnings
 
 
+# --tests includes the live-server integration tests; they run the real gRPC
+# event store in-process on the memory backend (sub-second, no Docker).
+# Set TEST_DATABASE_URL to run them against the Postgres backend.
 qa-fast: fmt clippy check
-	cargo test --lib
+	cargo test --tests
 	cargo test --doc
 	@echo "✅ Fast QA passed for Rust SDK"
 
