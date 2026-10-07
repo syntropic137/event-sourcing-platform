@@ -113,6 +113,12 @@ them subscribes to every type), so an event no projection on the track handles
 is skipped and checkpointed past like any other skipped type, and cannot halt
 the track. An event a projection handles still raises, and halts (ADR-026).
 
+Rust's `ProjectionRunner` does the same: it asks `handles()` with the type
+after upcasting (`Upcasters::target`, which runs no step), skips and
+checkpoints past an event the projection does not handle without upcasting
+or parsing it, and upcasts only a handled event (or a rename cycle, which
+has no target), where a failure stops the runner (#396).
+
 ### Golden fixtures
 
 `event-sourcing/rust/tests/fixtures/xlang/` holds protobuf `AppendRequest`

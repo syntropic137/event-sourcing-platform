@@ -297,6 +297,74 @@ async fn failing_upcaster_stops_the_runner_without_advancing() {
 }
 
 #[tokio::test]
+async fn unhandled_type_is_skipped_before_upcasting() {
+    // #396: an upcaster on a type the projection ignores never runs, so its
+    // failure cannot stop the runner; the event is checkpointed past.
+    let f = fixture().await;
+    append(&f.client, &f.tenant, "a", 1, "Deposited", 10).await;
+    let g2 = append(&f.client, &f.tenant, "a", 2, "Withdrawn", 3).await;
+    // Renamed to a type the projection does not handle either.
+    let g3 = append(&f.client, &f.tenant, "a", 3, "Debited", 4).await;
+    // Stored type the projection ignores, renamed to one it handles.
+    let g4 = append(&f.client, &f.tenant, "a", 4, "Credited", 5).await;
+
+    let upcasters = Upcasters::new()
+        .register("Withdrawn", 1, 2, |_| Err(Error::domain("cannot migrate")))
+        .rename("Debited", 1, "Withdrawn", 1, |_| {
+            Err(Error::domain("cannot migrate"))
+        })
+        .rename("Credited", 1, "Deposited", 1, Ok);
+    let probe = Probe::default();
+    let store = Arc::new(MemStore::new());
+    let mut runner = ProjectionRunner::new(
+        f.port.clone(),
+        store.clone(),
+        BalanceProjection::new(&probe),
+        &f.tenant,
+    )
+    .with_upcasters(upcasters);
+    assert_eq!(runner.catch_up().await.unwrap(), g4);
+    assert_eq!(store.load_checkpoint(runner.key()).await.unwrap(), Some(g4));
+    assert_eq!(store.state(runner.key()).by_account["a"], 15);
+    let seen: Vec<u64> = probe
+        .contexts
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| c.global_nonce)
+        .collect();
+    assert!(!seen.contains(&g2) && !seen.contains(&g3), "{seen:?}");
+}
+
+#[tokio::test]
+async fn upcast_cycle_on_an_unhandled_type_still_stops_the_runner() {
+    // A cycle has no target, so the chain runs and fails (parity with
+    // Python `Upcasters.target()` returning None).
+    let f = fixture().await;
+    let g1 = append(&f.client, &f.tenant, "a", 1, "Deposited", 10).await;
+    let g2 = append(&f.client, &f.tenant, "a", 2, "Ping", 1).await;
+
+    let upcasters = Upcasters::new()
+        .rename("Ping", 1, "Pong", 1, Ok)
+        .rename("Pong", 1, "Ping", 1, Ok);
+    let store = Arc::new(MemStore::new());
+    let mut runner = ProjectionRunner::new(
+        f.port.clone(),
+        store.clone(),
+        BalanceProjection::new(&Probe::default()),
+        &f.tenant,
+    )
+    .with_upcasters(upcasters);
+    let err = runner.catch_up().await.expect_err("cycle");
+    assert!(
+        matches!(&err, Error::ProjectionFailed { global_nonce, source, .. }
+            if *global_nonce == g2 && matches!(**source, Error::Upcast { .. })),
+        "{err:?}"
+    );
+    assert_eq!(store.load_checkpoint(runner.key()).await.unwrap(), Some(g1));
+}
+
+#[tokio::test]
 async fn decode_rejects_unknown_versions() {
     let f = fixture().await;
     append(&f.client, &f.tenant, "a", 1, "Deposited", 1).await;
