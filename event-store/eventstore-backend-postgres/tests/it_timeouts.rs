@@ -79,15 +79,86 @@ async fn pool_size_and_session_settings_are_applied() {
 #[tokio::test]
 async fn migrations_are_not_subject_to_statement_timeout() {
     let url = common::get_test_database_url().await;
-    // Migration statements run on a connection without the session
-    // timeouts, so even an absurdly low statement_timeout cannot break startup.
     let cfg = PostgresConfig {
         statement_timeout: Some(Duration::from_millis(1)),
         ..Default::default()
     };
-    PostgresStore::connect_with_config(&url, &cfg)
+
+    // Control: on a fresh database, migrations run under these session
+    // settings fail (sqlx runs each migration file as one statement).
+    let control = fresh_database(&url).await;
+    let opts = cfg.apply(control.parse().unwrap());
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .unwrap();
+    let res = sqlx::migrate!("./migrations").run(&pool).await;
+    assert!(
+        res.is_err(),
+        "control: a 1 ms statement_timeout must break the migrations"
+    );
+    pool.close().await;
+
+    // The store migrates a fresh database on a connection without the
+    // session timeouts, then serves with them.
+    let fresh = fresh_database(&url).await;
+    let store = PostgresStore::connect_with_config(&fresh, &cfg)
         .await
         .expect("connect must not run migrations under statement_timeout");
+    let tables: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.tables WHERE table_name IN ('events', 'aggregates', 'idempotency')",
+    )
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(tables, 3);
+    assert_eq!(show(&store, "statement_timeout").await, "1ms");
+}
+
+/// A new, empty database on the test server; returns its URL.
+async fn fresh_database(url: &str) -> String {
+    let name = unique("esp_mig").replace('-', "_");
+    let mut admin = sqlx::PgConnection::connect(url).await.unwrap();
+    sqlx::query(&format!("CREATE DATABASE {name}"))
+        .execute(&mut admin)
+        .await
+        .unwrap();
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    let (base, _db) = path.rsplit_once('/').unwrap();
+    let query = if query.is_empty() {
+        String::new()
+    } else {
+        format!("?{query}")
+    };
+    format!("{base}/{name}{query}")
+}
+
+/// Completed operations hand their connection back: with one connection,
+/// many sequential appends reuse it.
+#[tokio::test]
+async fn completed_operations_return_their_connection_to_the_pool() {
+    let url = common::get_test_database_url().await;
+    let cfg = PostgresConfig {
+        max_connections: 1,
+        ..Default::default()
+    };
+    let store = PostgresStore::connect_with_config(&url, &cfg)
+        .await
+        .unwrap();
+    let tenant = unique("t-reuse");
+    for i in 0..5 {
+        store
+            .append(append_req(&tenant, &format!("a{i}")))
+            .await
+            .unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while store.pool().num_idle() != 1 {
+        assert!(Instant::now() < deadline, "connection was not returned");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(store.pool().size(), 1);
 }
 
 /// Holds the tenant's append-order lock from outside the store, so an append

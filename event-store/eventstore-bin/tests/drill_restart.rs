@@ -226,8 +226,12 @@ async fn kill_after_insert_before_commit_rolls_back_and_retry_commits_once() {
     let req = cmd.req.clone();
     let inflight = tokio::spawn(async move { connect(&endpoint).await.append(req).await });
     // The events and the aggregate head are already written in the append's
-    // transaction when it reaches the idempotency insert.
-    let backend = waiting_backend(&pool, "transactionid", "INSERT INTO idempotency").await;
+    // transaction when it reaches the idempotency insert. Since #370 all of
+    // that is one statement (`WITH ins AS (INSERT INTO events ...)`; the
+    // idempotency insert lies beyond pg_stat_activity's 1 KiB query text), so
+    // match the statement by its start: the only transactionid wait it can
+    // hit here is the side transaction's idempotency row.
+    let backend = waiting_backend(&pool, "transactionid", "INSERT INTO events").await;
 
     es.kill();
     let res = tokio::time::timeout(STEP, inflight).await.unwrap().unwrap();

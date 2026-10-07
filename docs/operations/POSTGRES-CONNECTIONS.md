@@ -128,3 +128,15 @@ the consumer retries from the same checkpoint, hitting it again. Raise
   instance + other clients below the server's `max_connections` (Postgres
   default 100), leaving headroom for maintenance sessions.
 - `PG_POOL_MIN_CONNECTIONS` only avoids connect latency after idle periods.
+
+## Known limits
+
+- **Migrations at startup** are not bounded once connected (connecting is,
+  by `PG_ACQUIRE_TIMEOUT_MS`): a legitimate migration may take long, so no
+  timeout fits. A path that stalls mid-migration hangs startup; the process
+  never becomes ready, which readiness probes see.
+- **Unpaged replay** (#369): see [Subscriptions](#subscriptions).
+- **LISTEN reconnects**: sqlx cleans up a dropped listener connection in a
+  background task without a timeout. On a dead path each such task (at most
+  one per reconnect, 40 s or more apart) lives until the OS abandons the
+  socket. It never holds a slot of the main pool.

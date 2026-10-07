@@ -719,10 +719,30 @@ impl std::ops::DerefMut for Checkout {
     }
 }
 
+/// Bound on handing a completed connection back to the pool (sqlx pings it
+/// first). Past it the connection is dropped and its slot freed.
+const RETURN_TO_POOL_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl Drop for Checkout {
     fn drop(&mut self) {
         if !self.completed {
             self.conn.close_on_drop();
+            return;
+        }
+        // sqlx's own return path pings without a timeout: a path that
+        // stalls right after the result arrived would hold the slot. Drive
+        // the same return ourselves under a bound; dropping the unfinished
+        // return closes the socket and releases the slot.
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let ret = self.conn.return_to_pool();
+            rt.spawn(async move {
+                if tokio::time::timeout(RETURN_TO_POOL_TIMEOUT, ret)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("returning a connection to the pool stalled; dropped it");
+                }
+            });
         }
     }
 }
