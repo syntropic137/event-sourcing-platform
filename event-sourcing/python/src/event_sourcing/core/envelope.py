@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 
 from pydantic import ValidationError
 
@@ -41,6 +41,12 @@ CONTENT_TYPE_JSON = "application/json"
 ENVELOPE_ECHO_KEYS: tuple[str, ...] = ("eventType", "schemaVersion", "event_type")
 
 InvalidPayloadPolicy = Literal["raise", "generic"]
+
+
+class EventTypeFilter(Protocol):
+    """The event types a reader handles: any ``set``/``frozenset`` of ``str``."""
+
+    def __contains__(self, event_type: str, /) -> bool: ...
 
 
 def is_json_content_type(content_type: str) -> bool:
@@ -210,6 +216,34 @@ def decode_event(
             global_nonce,
             e,
         ) from e
+
+
+def skip_unless_wanted(
+    event_type: str,
+    event_version: int,
+    wanted: EventTypeFilter,
+    *,
+    upcasters: Upcasters | None = None,
+) -> DecodedEvent | None:
+    """Filter before decoding (ADR-027 reading step 5).
+
+    ``None`` when the event decodes to a type in ``wanted`` (the caller
+    decodes it, and its errors are raised). Otherwise the event undecoded:
+    a ``GenericDomainEvent`` with no payload fields, carrying the type and
+    version it would decode as, so a consumer can skip it and move on. The
+    type is the one after upcasting, which needs no payload: steps are keyed
+    by type and version. A looping chain is decoded, so it raises.
+    """
+    stored_version = normalize_version(event_version)
+    target = (
+        upcasters.target(event_type, stored_version)
+        if upcasters is not None
+        else (event_type, stored_version)
+    )
+    if target is None or target[0] in wanted:
+        return None
+    ty, version = target
+    return DecodedEvent(_generic(ty, version, {}), ty, version, event_type, stored_version)
 
 
 def _generic(event_type: str, event_version: int, body: dict[str, Any]) -> GenericDomainEvent:

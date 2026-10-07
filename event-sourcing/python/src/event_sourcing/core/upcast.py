@@ -114,6 +114,20 @@ class Upcasters:
         """True if a step starts at ``(event_type, event_version)``."""
         return (event_type, normalize_version(event_version)) in self._steps
 
+    def target(self, event_type: str, event_version: int) -> tuple[str, int] | None:
+        """The type and version the chain ends at, without running any step.
+
+        Steps are keyed by type and version only, so the target does not
+        depend on the payload. ``None`` for a chain that loops.
+        """
+        ty, version = event_type, normalize_version(event_version)
+        for _ in range(MAX_STEPS + 1):
+            step = self._steps.get((ty, version))
+            if step is None:
+                return ty, version
+            ty, version = step.to_type, step.to_version
+        return None
+
     def upcast(
         self, event_type: str, event_version: int, payload: JsonBody
     ) -> tuple[str, int, JsonBody]:

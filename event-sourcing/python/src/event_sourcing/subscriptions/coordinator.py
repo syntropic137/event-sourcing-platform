@@ -15,6 +15,7 @@ See ADR-014 for architectural rationale.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import math
 import sys
@@ -38,8 +39,9 @@ from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.subscriptions.drain import ProcessManagerDrain
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
+    from event_sourcing.core.envelope import EventTypeFilter
     from event_sourcing.core.event import DomainEvent, EventEnvelope
 
 
@@ -159,7 +161,8 @@ class _SubscriptionTrack:
         generations: Each projection's rebuild generation when this track was
             planned. A track whose generation for a projection is stale was
             planned before a ``rebuild_projection`` of it, and no longer
-            touches it: no dispatch, no checkpoint, no drain unlock.
+            touches it: no dispatch, no checkpoint, no drain unlock, no
+            decoding for it (see ``_is_member``).
     """
 
     name: str
@@ -188,6 +191,30 @@ def _held_retry_delay(attempts: int) -> float:
     """Seconds before retrying a projection held for ``attempts`` consecutive failures."""
     exponent = min(max(attempts - 1, 0), _HELD_RETRY_MAX_EXPONENT)
     return min(HELD_RETRY_INITIAL_DELAY * 2**exponent, HELD_RETRY_MAX_DELAY)
+
+
+class _TrackEventTypes:
+    """The types the projections on a track handle, read live.
+
+    Live, not a snapshot: a projection held off the track (``_hold``) or
+    rebuilt since it was planned must stop widening its filter, or its types
+    would still be decoded, and could halt, for the members left on it.
+    """
+
+    def __init__(
+        self,
+        track: _SubscriptionTrack,
+        members: Callable[[_SubscriptionTrack], list[CheckpointedProjection]],
+    ) -> None:
+        self._track = track
+        self._members = members
+
+    def __contains__(self, event_type: str, /) -> bool:
+        for projection in self._members(self._track):
+            subscribed = projection.get_subscribed_event_types()
+            if subscribed is None or event_type in subscribed:
+                return True
+        return False
 
 
 class _BehindProjection(NamedTuple):
@@ -232,6 +259,31 @@ class EventStoreSubscriber(Protocol):
             Tuple of (events, is_end, next_from_global_nonce)
         """
         ...
+
+
+class TypeFilteringSubscriber(Protocol):
+    """A subscriber that can leave events of unwanted types undecoded.
+
+    ``GrpcEventStoreClient`` is one. Events whose type (after upcasting) is
+    not in ``event_types`` are yielded without decoding, so one the track's
+    projections would skip cannot fail decoding and halt them (ADR-027).
+    The coordinator passes ``event_types`` only to a ``subscribe`` that
+    declares it.
+    """
+
+    def subscribe(
+        self, from_global_nonce: int, event_types: EventTypeFilter | None = None
+    ) -> AsyncIterator[EventEnvelope[DomainEvent]]: ...
+
+
+def _accepts_event_types(subscriber: EventStoreSubscriber) -> bool:
+    subscribe = getattr(subscriber, "subscribe", None)
+    if subscribe is None:
+        return False
+    try:
+        return "event_types" in inspect.signature(subscribe).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 class SubscriptionCoordinator:
@@ -328,6 +380,7 @@ class SubscriptionCoordinator:
             )
 
         self._event_store = event_store
+        self._filters_types = _accepts_event_types(event_store)
         self._checkpoint_store = checkpoint_store
         self._replay_concurrency = replay_concurrency
         self._near_head_window = near_head_window
@@ -357,6 +410,12 @@ class SubscriptionCoordinator:
         # Projections held below an event they failed to apply, by name. Set
         # on the failure, cleared once the projection has taken that event.
         self._held: dict[str, _HeldProjection] = {}
+        # Projections that failed an event live and have not been live since.
+        # A re-plan (reconnect, retry) puts them back on a catching-up track,
+        # which goes live once it delivers the head rather than past it: the
+        # event past it may never come, and their drains would stay asleep.
+        # Kept across re-plans and later failures until they are live again.
+        self._resume_live: set[str] = set()
         # The running plan's task group, so a held projection's retry track
         # runs in it and is cancelled with the plan. None between plans.
         self._task_group: asyncio.TaskGroup | None = None
@@ -650,7 +709,7 @@ class SubscriptionCoordinator:
 
     async def _run_track(self, track: _SubscriptionTrack) -> None:
         """Feed one track from its own subscription until stopped."""
-        async for envelope in self._event_store.subscribe(from_global_nonce=track.from_position):
+        async for envelope in self._subscribe(track):
             if not self._running:
                 break
             self._last_error = None
@@ -670,6 +729,21 @@ class SubscriptionCoordinator:
                 # on would feed nobody. The live track stays, so the
                 # coordinator always holds a subscription on the live tail.
                 return
+
+    def _subscribe(self, track: _SubscriptionTrack) -> AsyncIterator[EventEnvelope[DomainEvent]]:
+        """Subscribe for ``track``, decoding only the types its projections handle.
+
+        Filter before decode (ADR-027): an event no projection on the track
+        handles is skipped, so it must not be decoded either. An evolved type
+        with no upcaster would otherwise raise an ``UndecodableEventError``
+        and halt every track for projections that never asked for it.
+        """
+        if not self._filters_types:
+            return self._event_store.subscribe(from_global_nonce=track.from_position)
+        store = cast("TypeFilteringSubscriber", self._event_store)
+        return store.subscribe(
+            from_global_nonce=track.from_position, event_types=_TrackEventTypes(track, self._current_members)
+        )
 
     def _hold(self, track: _SubscriptionTrack, failure: ProjectionHandlerFailedError) -> None:
         """Take the projection that failed off ``track`` and retry it alone.
@@ -826,8 +900,8 @@ class SubscriptionCoordinator:
         for track in tracks:
             if track.is_catching_up:
                 continue
-            for name in track.projections:
-                if self._is_current(track, name):
+            for name in list(track.projections):
+                if self._is_member(track, name):
                     self._wake(name)
 
     def _wake(self, name: str) -> None:
@@ -863,15 +937,20 @@ class SubscriptionCoordinator:
         if name in self._held:
             return False
         return any(
-            name in track.projections
-            and self._is_current(track, name)
-            and not track.is_catching_up
-            for track in self._tracks
+            self._is_member(track, name) and not track.is_catching_up for track in self._tracks
         )
 
-    def _is_current(self, track: _SubscriptionTrack, name: str) -> bool:
-        """False once ``name`` was rebuilt after ``track`` was planned."""
-        return track.generations.get(name, 0) == self._generations.get(name, 0)
+    def _is_member(self, track: _SubscriptionTrack, name: str) -> bool:
+        """True while ``track`` feeds ``name``: on it, and not rebuilt since it was planned.
+
+        The one test for dispatch, type filtering and drain eligibility.
+        """
+        return name in track.projections and (
+            track.generations.get(name, 0) == self._generations.get(name, 0)
+        )
+
+    def _current_members(self, track: _SubscriptionTrack) -> list[CheckpointedProjection]:
+        return [p for name, p in track.projections.items() if self._is_member(track, name)]
 
     @staticmethod
     async def _close_drains(drains: dict[str, ProcessManagerDrain]) -> None:
@@ -1079,19 +1158,9 @@ class SubscriptionCoordinator:
         # nonce. Uses > (strictly greater): events at the boundary were
         # already in the store when we subscribed, so they are historical.
         if track.is_catching_up and global_nonce > self._live_boundary_nonce:
-            track.is_catching_up = False
-            logger.info(
-                "Subscription track transitioned to live mode",
-                extra={
-                    "track": track.name,
-                    "global_nonce": global_nonce,
-                    "live_boundary_nonce": self._live_boundary_nonce,
-                },
-            )
-            # Whatever the replay left on these to-do lists is now actionable.
-            self._wake_live_drains([track])
+            self._go_live(track, global_nonce)
 
-        for name, projection in track.projections.items():
+        for name, projection in list(track.projections.items()):
             held = self._held.get(name)
             if held is not None and global_nonce > held.failure.global_nonce:
                 # It must take the event it is held below first. Handing it
@@ -1101,13 +1170,15 @@ class SubscriptionCoordinator:
             # the checkpoint underneath it and the handler's own save cannot
             # land after the delete.
             async with self._checkpoint_lock(name):
-                if not self._is_current(track, name):
+                if not self._is_member(track, name):
                     continue  # rebuilt since this track was planned
                 try:
                     await self._dispatch_under_lock(track, name, projection, envelope)
                 except ProjectionHandlerFailedError as failure:
                     failures.append(failure)
                     self._record_failure(failure)
+                    if not track.is_catching_up:
+                        self._resume_live.add(name)
                     failed = True
                 else:
                     failed = False
@@ -1131,6 +1202,7 @@ class SubscriptionCoordinator:
                 )
                 # Recovered: a live ProcessManager's to-do list is complete again.
                 if not track.is_catching_up:
+                    self._resume_live.discard(name)
                     self._wake(name)
 
         # Save the held-back skips periodically, and all of them once the
@@ -1142,7 +1214,40 @@ class SubscriptionCoordinator:
         ):
             await self._save_skips(track, global_nonce)
 
+        # A projection that failed live event N and was re-planned with a head
+        # H >= N (a reconnect) catches up on a track that would only go live
+        # past H, at an event that may never come: its drain would never run
+        # again. Once the track has delivered H with it on board and not held,
+        # the track is at head, so it goes live then (see ``_resume_live``).
+        # Every member has taken H; nothing is replayed.
+        if (
+            track.is_catching_up
+            and global_nonce >= self._live_boundary_nonce
+            and any(
+                name in self._resume_live and name not in self._held
+                for name in track.projections
+                if self._is_member(track, name)
+            )
+        ):
+            self._go_live(track, global_nonce)
+
         return failures
+
+    def _go_live(self, track: _SubscriptionTrack, global_nonce: int) -> None:
+        track.is_catching_up = False
+        self._resume_live.difference_update(
+            name for name in track.projections if name not in self._held
+        )
+        logger.info(
+            "Subscription track transitioned to live mode",
+            extra={
+                "track": track.name,
+                "global_nonce": global_nonce,
+                "live_boundary_nonce": self._live_boundary_nonce,
+            },
+        )
+        # Whatever the replay left on these to-do lists is now actionable.
+        self._wake_live_drains([track])
 
     def _record_failure(self, failure: ProjectionHandlerFailedError) -> None:
         """Note ``failure`` against its projection, counting repeats of one event."""
@@ -1192,7 +1297,7 @@ class SubscriptionCoordinator:
     async def _save_skip(self, track: _SubscriptionTrack, name: str) -> None:
         async with self._checkpoint_lock(name):
             position = track.unsaved_skips.pop(name, None)
-            if position is not None and self._is_current(track, name):
+            if position is not None and self._is_member(track, name):
                 await self._advance_checkpoint_if_behind(name, position)
 
     async def _save_skips(self, track: _SubscriptionTrack, global_nonce: int) -> None:
@@ -1369,6 +1474,7 @@ class SubscriptionCoordinator:
             # after the delete below. Taking the lock first lets a dispatch or
             # skip save already in flight finish before the delete.
             self._generations[projection_name] = self._generations.get(projection_name, 0) + 1
+            self._resume_live.discard(projection_name)  # replays from 0
             for track in self._tracks:
                 track.unsaved_skips.pop(projection_name, None)
 
