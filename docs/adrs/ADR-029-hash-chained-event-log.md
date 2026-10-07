@@ -104,10 +104,11 @@ two links.
 
 ### 2. What the hash covers and how it is encoded
 
-The hash covers **every field of the stored event**, after normalization,
-exactly as a reader receives it, plus both links. Nothing the server
-rewrites is covered in its pre-rewrite form (normalization happens before
-hashing, and nothing is rewritten afterwards).
+The hash covers **every field of the event as a reader decodes it**, plus
+both links. It is computed after normalization and after the server assigns
+`global_nonce` and `recorded_time_unix_ms`; nothing changes after hashing.
+It authenticates these logical values, not their physical storage form
+(`NULL` vs empty, `JSONB` layout).
 
 | Field | Assigned by |
 |---|---|
@@ -159,7 +160,9 @@ event_hash = SHA-256(
   widened to `u64`); `event_version` is hashed as stored, `0` stays `0`
   (ADR-027's "0 means 1" is a reader rule, applied after verification).
 - The payload enters as its digest so a future redaction can drop the
-  payload bytes and keep the chain verifiable (section 5).
+  payload bytes and keep the chain verifiable (section 5). That digest is
+  computed by the server; the client-supplied `payload_sha256` is just
+  another covered metadata field and is never trusted as a substitute.
 - Genesis (no predecessor) is 32 zero bytes (section 5).
 - Precondition: the Postgres database encoding is `UTF8` (checked at
   startup), so text round-trips byte for byte.
@@ -195,20 +198,27 @@ Postgres append, changed:
    per-byte work), so payload size does not lengthen the locked window.
 2. Unchanged: stream row lock, tenant lock, #363 re-checks. Lock order
    (stream row, then tenant) is preserved.
-3. The re-check round trip also reads the hash of the stream's last event
+3. The stream-head re-check query (today one of the one or two plain
+   reads after the lock; the key re-check stays separate) also reads the
+   hash of the stream's last event
    (primary key `(tenant_id, aggregate_id, last_nonce)`), the tenant's last
    event (`global_nonce`, `event_hash`) via a new index
    `(tenant_id, global_nonce)`, and draws the batch's nonces (`SELECT
-   nextval(...) FROM generate_series(1, n)`, sorted). Still one round trip;
-   nonces are still drawn after the lock is taken, so #337 commit ordering
-   is unchanged. Heads are read from the event rows themselves, not from a
-   cache table, so there is no head that can go missing or stale.
-4. **Fail closed.** If the tenant's last event is above the chain epoch
-   (section 5) and has no link, or its link has an unknown format, the
-   append is refused (`FAILED_PRECONDITION`, logged with the position).
-   The same applies to the stream's last event. The server never chains
-   onto a predecessor it cannot vouch for and never starts a second genesis
-   inside a chained range.
+   nextval(...) FROM generate_series(1, n)`, sorted), in the same statement:
+   no added round trip, which matters because the locked window is round
+   trip bound (`POSTGRES-BASELINE.md`, finding 2). Nonces are still drawn
+   after the lock is taken, so #337 commit ordering is unchanged. Heads are
+   read from the event rows themselves, not from a cache table that could
+   drift from them.
+4. **Fail closed, narrowly.** If the tenant's or stream's last event is at
+   or above the chain epoch (section 5) and has no link, or a link of an
+   unknown format, the append is refused (`FAILED_PRECONDITION`, logged
+   with the position). This is a structural check, not verification: the
+   server does not re-verify history on append. If rows were deleted, the
+   server chains onto the surviving predecessor, and if a tenant's chained
+   events were all deleted, it starts a new genesis. Both are forks that
+   only an anchor detects (section 7), and the restore procedure (section
+   5) verifies against anchors before writes resume.
 5. Rust computes each event's hash in batch order, chaining within the
    batch, with the one `recorded_ms` it already uses.
 6. The single write statement (#370) inserts the events with explicit
@@ -228,9 +238,16 @@ same statement as the events, so the replay path returns it like
 `last_global_nonce`. Rows written before the migration have none: if their
 `last_global_nonce` is below the epoch the batch was never chained and the
 hash is empty; otherwise (impossible unless the row was tampered with) the
-replay fails with `DATA_LOSS` instead of returning an empty hash. A retried
-ack describes a historical head; an SDK must never replace a newer anchor
-with it.
+replay fails with `DATA_LOSS` instead of returning an empty hash.
+
+A retry receipt comes from the `idempotency` table, which is outside the
+chain and returned before any head check, so it is a claim, not evidence.
+It describes a historical head; an SDK never replaces a newer anchor with
+it, and verifies it (read the event at that position, check it connects
+to a trusted head) before using it as an anchor. After restoring an older
+backup, lost idempotency rows still let earlier commands run again (an
+existing runbook limit); the chain exposes the divergence, it does not
+restore exactly-once execution.
 
 The link lives in `EventData`, not `EventMetadata` (section 4), so the
 ADR-028 fingerprint is unchanged: identical retries still match, and
@@ -299,8 +316,9 @@ corruption is a client-side CLI built on the SDK.
 
 **Capability `hash_chained_log`:** every event at or above the chain epoch
 carries a v1 link, links are present on all read paths, keyed retries
-return the original hash, and the server refuses (never skips or restarts)
-an append it cannot chain. Advertised by a backend only when all of this
+return the original hash, and the server refuses an append whose stream or
+tenant predecessor (at or above the epoch) has no recognized link. It does
+not promise that the server checked history before appending. Advertised by a backend only when all of this
 holds; a client that requires it calls `require_capabilities`.
 
 **SDKs (Rust first):**
@@ -317,19 +335,39 @@ holds; a client that requires it calls `require_capabilities`.
   `RecordedEvent`; `RecordedEvent` then carries the verified `chain` link.
   Re-verifying from a `RecordedEvent` is not supported (it is not the
   stored form).
+- Two result levels, never conflated:
+  - **consistent**: every event recomputes to its hash and links to the
+    previous one, from a lower bound to the last event read;
+  - **authenticated**: consistent, and the walk reaches a trusted head at
+    or after the last event of interest.
+- Completeness of a range comes from the links, not the nonces (a tenant's
+  nonces have gaps). A range is complete only if the walk's lower end
+  reaches either the genesis (zero predecessor) or a hash the caller
+  already trusts (a previously authenticated head) at or before the
+  requested start. A suffix that merely ends at the trusted head, with
+  earlier events withheld, is reported as incomplete.
 - API: `verify_stream(aggregate_id, trusted_stream_head)` and
-  `verify_tenant_range(from, trusted_tenant_head)`, each returning the
-  verified head or the first failing position and reason (bad hash, broken
-  link, non-monotonic position, unexpected genesis, unknown format,
-  unchained event inside the chained range, range not connected to the
-  trusted head).
+  `verify_tenant_range(from, trusted_lower, trusted_head)`, each returning
+  the level reached, the verified head, or the first failing position and
+  reason (bad hash, broken link, non-monotonic position, unexpected
+  genesis, unknown format, unchained event inside the chained range, not
+  connected to the trusted head, lower bound not proven).
+- Live consumers: a subscriber can only reach **consistent** until a later
+  anchor covers what it consumed; authentication of live events is
+  deferred to the next anchor (the SDK records the last consistent head and
+  re-checks when an anchor arrives). Tenant continuity needs every tenant
+  event, so it is checked only on an unfiltered subscription;
+  `aggregate_id_prefix` subscriptions (the Rust projection runner's
+  default) skip tenant predecessors and need a separate unfiltered
+  verification feed or periodic `verify_tenant_range`.
 - Consumers and restores: the runbook's **applied high-water mark** rule
   (BACKUP-RESTORE.md) stays the decision rule. The chain makes it
   checkable: a consumer stores the `event_hash` of its applied high-water
   event atomically with its state. On resume it re-reads that position; if
   the event is absent or its hash differs, the log under it changed (for
-  example an older backup was restored) and it rebuilds. A checkpoint hash
-  alone is not enough: state can be ahead of the checkpoint.
+  example an older backup was restored) and it rebuilds. This is a
+  rollback check only: a matching stored hash says nothing about edits to
+  earlier events, which need `verify_tenant_range` against the saved head.
 - Anchoring: the SDK exposes a head as `(tenant_id, global_nonce,
   event_hash)`. Storing it outside the store's trust domain (another
   database, object storage with retention lock, a transparency log, a
@@ -358,11 +396,28 @@ holds; a client that requires it calls `require_capabilities`.
   the rows) for the operator to anchor. Later edits to legacy history then
   become detectable without rewriting it. Not needed for v1.
 
-**Rolling upgrade.** The `NOT VALID` check makes appends by older binaries
-fail after the migration. Upgrade with a brief write drain (stop old
-binaries, migrate, start new), as ADR-028 already asks to finish a rollout
-before relying on cross-version behavior. Silent gaps are worse than a
-visible pause.
+**Upgrade contract.** Migrations run automatically when a server starts
+(`connect_with_config`), so the first new instance migrates while old ones
+may still be writing; the `NOT VALID` check then fails their appends.
+Procedure:
+
+1. Build the `(tenant_id, global_nonce)` index first (its own migration,
+   `CONCURRENTLY`, writes continue). A failed concurrent build leaves an
+   `INVALID` index that `IF NOT EXISTS` would skip; the migration checks
+   `pg_index.indisvalid` and drops and rebuilds it.
+2. Drain writes: stop every old instance.
+3. Start the new version; it applies the chain migration and records the
+   epoch. The operator records the epoch and each tenant's first head out
+   of band (that is the epoch's only authentication).
+4. Resume writes.
+
+Silent gaps are worse than a short pause; ADR-028 already asks to finish a
+rollout before relying on cross-version behavior.
+
+**Legacy coverage.** Streams with pre-epoch events are only partly covered;
+replaying such an aggregate uses unverified history, and the verifier says
+so ("chained from position k"). Applications that need full coverage seal
+legacy history (above) or rebuild into new streams.
 
 **Memory backend parity.** Same links, same encoding, same conformance
 cases; memory starts empty, so its epoch is 1 and it has no legacy events.
@@ -374,12 +429,18 @@ requirement) carries the link columns, `idempotency.last_event_hash` and
 `chain_epoch`. Heads are the event rows, so a restore cannot leave a stale
 head behind; a restore that lost link columns makes the server refuse
 appends (fail closed) rather than chain onto them. Runbook and drill
-additions: verify each tenant's chain after restore and compare its head
-with the last anchored head. Restoring an **older** backup rewinds the log:
-the restored chain verifies on its own, an anchored head newer than the
-restore point is no longer reachable (reported as rollback), and new
-appends fork from the restored head. That is correct evidence, and it gives
-consumers the applied-high-water check described in section 4.
+additions, before writes resume: verify each tenant's chain to its restored
+head, and check every anchor the operator holds for **reachability** (is
+the anchored hash an ancestor of, or equal to, the restored head?), not
+equality with the head. Restoring an **older** backup rewinds the log: the
+restored chain verifies on its own; an anchor taken after the backup point
+is unreachable, which is the rollback signal; new appends then fork from
+the restored head. An anchor taken before the backup point stays reachable
+on both branches, so a fork is only visible if some anchor was taken on the
+discarded branch after the divergence. Restoring a pre-upgrade backup with
+a new binary re-runs the chain migration and sets a new epoch at the
+restored point; post-upgrade anchors are then unreachable, as above.
+Consumers apply the applied-high-water check described in section 4.
 
 **Legitimate deletion and compaction.** None exists today. Defined answers
 so a future feature does not have to break the chain:
@@ -417,11 +478,12 @@ The chain and idempotency want opposite things and stay separate:
 ### 7. Threat model and performance
 
 Verification always means: the range read is **connected by links to a
-trusted head** (anchored at or after the range's end). A trusted start
+trusted head** (anchored at or after the range's end) and its lower end is
+proven (genesis or an already trusted hash; section 4). A trusted start
 alone proves nothing: an attacker can keep it and recompute everything
 after it.
 
-**Detected**, for a range connected to a trusted head:
+**Detected**, for such a range:
 
 - modification of any covered field or payload byte of a chained event;
 - reorder, insertion or excision of chained events, within a stream or
@@ -447,9 +509,13 @@ after it.
   against a shared anchor or transparency log) notice.
 - **Withholding / staleness.** A server can serve a consistent stale
   prefix. Only a reader holding a newer anchor notices.
-- **Restore forks** are detected against older anchors (rollback) but both
-  branches verify on their own; deciding which is legitimate is an
-  operational question.
+- **Restore forks** are detected only by an anchor taken on the discarded
+  branch after the divergence (it becomes unreachable). Anchors from before
+  the divergence are reachable on both branches. Both branches verify on
+  their own; which is legitimate is an operational question.
+- **Deleted tails or a deleted tenant followed by new appends.** The server
+  chains onto what is left (or starts a new genesis); only an anchor newer
+  than the deletion point detects it.
 - **A compromised server at append time** chains whatever it chooses.
   Writers can read back and compare their own events. Server-signed heads
   would add protection against a database-only attacker (not against a
@@ -463,26 +529,32 @@ after it.
   the log anyway. (The separate hazard in #308, identifiers derived from
   short user text, is unrelated to integrity hashing.)
 
-**Performance budget** (against `docs/performance/POSTGRES-BASELINE.md`,
-measured with `make bench-pg-full` before and after, including batch 100
-and the deadline drills):
+**Performance budget.** The idle-host tables in
+`docs/performance/POSTGRES-BASELINE.md` predate #370; the post-#370
+re-baseline was taken on a loaded host and is ratio-only. So the budget is
+relative: run `make bench-pg` (and the full profile on a quiet host)
+interleaved, main / branch / main / branch, and compare neighbouring runs,
+as the baseline document prescribes. Include batch 1 and batch 100, many
+tenants, replay, and keyed appends (the idempotency re-check path).
 
-| Path | Baseline | Budget |
+| Path (post-#370 quick reference) | Reference | Budget vs main |
 |---|---|---|
-| Append, 1 tenant, batch 1, closed-loop ceiling | ~900 ev/s | at most 5% lower |
-| Append, 1 tenant, batch 1, p99 (1 writer) | 4 ms | at most +1 ms |
-| Append, batch 100 | ~3,400 ev/s | at most 5% lower |
-| Append, many tenants | ~1,290 ev/s | at most 5% lower |
-| `ReadAll` replay | 70k to 145k ev/s | at most 10% lower |
+| Append, 1 tenant, batch 1, same-tenant ceiling | ~970 ev/s | at most 5% lower |
+| Append, 1 tenant, batch 1, 1 writer, p99 | ~8 ms | at most +1 ms |
+| Append, 1 tenant, batch 100 | ~19k ev/s | at most 10% lower |
+| Append, 8 tenants, batch 1 | ~1,800 ev/s | at most 5% lower |
+| `ReadAll` replay | 70k to 145k ev/s (pre-#370) | at most 10% lower |
 
-Why it should fit: payload digests are computed before the lock; inside it,
-metadata hashing is about a microsecond per event, far below the commit
-cost that bounds the single-tenant ceiling. No round trip is added (head
-reads and the nonce draw join the existing re-check). The added writes are
-the link columns, one index entry per event and their WAL. If the budget is
-missed, the tenant-only option (one link) is the first fallback. Client-side
-verification runs at hundreds of thousands of events per second per core,
-faster than replay delivers them.
+Why it should fit: the locked window is round-trip bound (baseline finding
+2), and the design adds no round trip. Payload digests are computed before
+the lock. Inside it, hashing is per event over metadata whose size the
+client controls (headers are unbounded today), so the cost is linear in
+metadata bytes: about a microsecond for typical events, more for large
+header maps; batch 100 shows it first. The added writes are the link
+columns, one index entry per event and their WAL. If the budget is missed,
+the first fallbacks are tenant-only links and a cap on header bytes.
+Client-side verification is per event, local and cheap relative to
+receiving the event.
 
 ## Alternatives considered
 
@@ -493,11 +565,14 @@ faster than replay delivers them.
   is the fallback, stream-only cannot detect a whole stream deleted or
   added and gives no single head to anchor.
 - **Offline anchored checkpoint manifests** (a job periodically hashes each
-  tenant's log range and anchors the digest; no append-path change). Enough
-  for audit-only needs, but detection lags to the next manifest, a reader
-  cannot check a single stream or a live subscription, and positions
-  between manifests are unprotected. Viable as a stopgap; not the
-  primitive.
+  tenant's log range and anchors the digest; no append-path change). Same
+  anchoring delay as periodically anchored chain heads, and a stream can be
+  authenticated by scanning the covered tenant range. Differences: no
+  per-event evidence on the wire (a reader cannot check a live
+  subscription or localize a failure without rescanning), positions after
+  the last manifest are unprotected, and every consumer that wants to check
+  must reimplement the range hash. A reasonable stopgap if hashing on the
+  append path proves too costly; not the recommended primitive.
 - **Merkle tree / transparency log (RFC 6962 style).** Logarithmic
   inclusion and consistency proofs (would let a stream be proven against a
   tenant anchor without a tenant walk), much more machinery. Merkle
