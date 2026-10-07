@@ -35,13 +35,13 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
-use serde::{de::DeserializeOwned, Serialize};
-
-use crate::aggregate::{Aggregate, AggregateInstance};
+use crate::aggregate::{self, Aggregate, AggregateInstance};
 use crate::client::{proto, EventStorePort};
 use crate::error::{Error, Result};
 use crate::event::{DomainEvent, EventEnvelope};
+use crate::upcast::Upcasters;
+use crate::wire;
+use async_trait::async_trait;
 
 /// Repository trait for loading and saving aggregates
 #[async_trait]
@@ -96,16 +96,25 @@ impl Default for RetryPolicy {
 }
 
 const DEFAULT_PAGE_SIZE: u32 = 500;
-const CONTENT_TYPE_JSON: &str = "application/json";
 
 /// Repository backed by the event store through an [`EventStorePort`].
 ///
 /// Streams are addressed by `(tenant_id, aggregate_id)`; aggregate IDs must be
-/// unique within a tenant across aggregate types. Events are stored as JSON.
+/// unique within a tenant across aggregate types.
+///
+/// Events are written and read in the cross-language envelope of ADR-027
+/// ([`crate::wire`]): the JSON payload holds only the event's fields, and
+/// `event_type`, `event_version` and the aggregate's
+/// [`AGGREGATE_TYPE`](Aggregate::AGGREGATE_TYPE) are metadata. Streams are
+/// therefore interchangeable with the TypeScript and Python SDKs. On load,
+/// each event runs through the configured [`Upcasters`] and is decoded by
+/// dispatching on its type and version; an event that cannot be decoded
+/// fails the load with a typed error.
 pub struct EventStoreRepository<A> {
     store: Arc<dyn EventStorePort>,
     tenant_id: String,
-    aggregate_type: String,
+    aggregate_type: &'static str,
+    upcasters: Upcasters,
     retry: RetryPolicy,
     page_size: u32,
     _phantom: PhantomData<fn() -> A>,
@@ -115,22 +124,23 @@ impl<A> EventStoreRepository<A>
 where
     A: Aggregate,
 {
-    /// Create a repository for `tenant_id`. The aggregate type recorded on
-    /// events defaults to [`Aggregate::aggregate_type`].
+    /// Create a repository for `tenant_id`. Events carry
+    /// [`Aggregate::AGGREGATE_TYPE`].
     pub fn new(store: Arc<dyn EventStorePort>, tenant_id: impl Into<String>) -> Self {
         Self {
             store,
             tenant_id: tenant_id.into(),
-            aggregate_type: A::default().aggregate_type().to_string(),
+            aggregate_type: aggregate::aggregate_type::<A>(),
+            upcasters: Upcasters::new(),
             retry: RetryPolicy::default(),
             page_size: DEFAULT_PAGE_SIZE,
             _phantom: PhantomData,
         }
     }
 
-    /// Override the aggregate type recorded on events.
-    pub fn with_aggregate_type(mut self, aggregate_type: impl Into<String>) -> Self {
-        self.aggregate_type = aggregate_type.into();
+    /// Upcast stored events before decoding them on load.
+    pub fn with_upcasters(mut self, upcasters: Upcasters) -> Self {
+        self.upcasters = upcasters;
         self
     }
 
@@ -147,8 +157,8 @@ where
     }
 
     /// Aggregate type recorded on events.
-    pub fn aggregate_type(&self) -> &str {
-        &self.aggregate_type
+    pub fn aggregate_type(&self) -> &'static str {
+        self.aggregate_type
     }
 
     /// Tenant scope of this repository.
@@ -219,7 +229,6 @@ where
 impl<A> EventStoreRepository<A>
 where
     A: Aggregate,
-    A::Event: Serialize,
 {
     fn to_event_data(
         &self,
@@ -227,15 +236,19 @@ where
         envelope: &EventEnvelope<A::Event>,
     ) -> Result<proto::EventData> {
         let m = &envelope.metadata;
+        let event_type = envelope.event.event_type();
+        let event_version = envelope.event.event_version();
+        let payload = envelope.event.to_payload()?;
+        wire::check_outgoing(event_type, event_version, &payload)?;
         Ok(proto::EventData {
             meta: Some(proto::EventMetadata {
                 event_id: m.event_id.to_string(),
                 aggregate_id: aggregate_id.to_string(),
-                aggregate_type: self.aggregate_type.clone(),
+                aggregate_type: self.aggregate_type.to_string(),
                 aggregate_nonce: m.aggregate_nonce,
-                event_type: envelope.event.event_type().to_string(),
-                event_version: envelope.event.event_version(),
-                content_type: CONTENT_TYPE_JSON.to_string(),
+                event_type: event_type.to_string(),
+                event_version,
+                content_type: wire::CONTENT_TYPE_JSON.to_string(),
                 content_schema: String::new(),
                 correlation_id: m.correlation_id.clone().unwrap_or_default(),
                 causation_id: m.causation_id.clone().unwrap_or_default(),
@@ -247,7 +260,7 @@ where
                 headers: m.metadata.clone(),
                 global_nonce: 0,
             }),
-            payload: serde_json::to_vec(&envelope.event)?,
+            payload,
         })
     }
 
@@ -269,7 +282,7 @@ where
         Ok(proto::AppendRequest {
             tenant_id: self.tenant_id.clone(),
             aggregate_id: aggregate_id.to_string(),
-            aggregate_type: self.aggregate_type.clone(),
+            aggregate_type: self.aggregate_type.to_string(),
             expected_aggregate_nonce: expected,
             // Same key on every attempt for this batch; a batch that changed
             // (more events recorded) gets a different key.
@@ -283,7 +296,7 @@ where
 impl<A> Repository<A> for EventStoreRepository<A>
 where
     A: Aggregate + 'static,
-    A::Event: Serialize + DeserializeOwned + 'static,
+    A::Event: 'static,
 {
     async fn load(&self, aggregate_id: &str) -> Result<Option<AggregateInstance<A>>> {
         let mut aggregate = A::default();
@@ -304,7 +317,12 @@ where
                         meta.aggregate_nonce
                     )));
                 }
-                let event: A::Event = serde_json::from_slice(&data.payload)?;
+                let stored = wire::Incoming::from_proto(&meta, &data.payload)?;
+                let event: A::Event = self.upcasters.decode(
+                    stored.event_type,
+                    stored.event_version,
+                    stored.payload,
+                )?;
                 aggregate.apply_event(&event)?;
                 version = meta.aggregate_nonce;
             }
@@ -319,7 +337,7 @@ where
         }
         let mut instance =
             AggregateInstance::from_history(aggregate_id.to_string(), aggregate, version);
-        instance.metadata.aggregate_type = self.aggregate_type.clone();
+        instance.metadata.aggregate_type = self.aggregate_type.to_string();
         Ok(Some(instance))
     }
 
@@ -345,7 +363,7 @@ where
                 self.check_type(&aggregate_id, meta)?;
             }
         }
-        instance.metadata.aggregate_type = self.aggregate_type.clone();
+        instance.metadata.aggregate_type = self.aggregate_type.to_string();
 
         let max_attempts = self.retry.max_attempts.max(1);
         let mut backoff = self.retry.initial_backoff;

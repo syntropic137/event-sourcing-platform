@@ -23,8 +23,12 @@
 //!   capability, see #366). A live event below the last applied position
 //!   that is not provably a duplicate stops the runner with
 //!   [`Error::OutOfOrderDelivery`] rather than being skipped and lost.
-//! * **Feed prefixes** may not contain `\`, `%` or `_` until the backend
-//!   escapes subscription prefixes (#361); `run` rejects them.
+//! * **Feed prefixes** are matched literally, including `\`, `%` and `_`.
+//!   Live delivery relies on the server doing the same (the
+//!   `literal_subscription_prefix` capability, #361); servers before v0.17.0
+//!   used the prefix as an unescaped SQL `LIKE` pattern on Postgres, where a
+//!   prefix containing `\` can miss events. Check the capability with
+//!   `GetServerInfo` before using such a prefix against an unknown server.
 //! * **Atomicity**: for each event the runner calls
 //!   [`ProjectionStore::begin`], [`CheckpointedProjection::handle`], then
 //!   [`ProjectionStore::commit`] with the event's position. A transactional
@@ -66,6 +70,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::client::{proto, EventStorePort};
 use crate::error::{Error, Result};
+use crate::event::{DomainEvent, SerializedEvent};
+use crate::upcast::Upcasters;
+use crate::wire;
 
 #[cfg(feature = "postgres")]
 mod postgres;
@@ -118,10 +125,17 @@ impl fmt::Display for CheckpointKey {
 }
 
 /// An event as recorded in the store, with an untyped payload.
+///
+/// Decode it with [`decode`](Self::decode), which dispatches on
+/// `event_type` and `event_version` (ADR-027). Inside a
+/// [`ProjectionRunner`] configured with
+/// [`with_upcasters`](ProjectionRunner::with_upcasters), the event has already
+/// been upcast: type, version and payload are the chain's result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordedEvent {
     pub event_id: String,
     pub event_type: String,
+    /// Schema version (`0` on the wire, meaning unset, is reported as 1).
     pub event_version: u32,
     pub tenant_id: String,
     pub aggregate_id: String,
@@ -143,9 +157,33 @@ fn non_empty(s: String) -> Option<String> {
 }
 
 impl RecordedEvent {
-    /// Deserialize the JSON payload.
-    pub fn decode<T: DeserializeOwned>(&self) -> Result<T> {
-        Ok(serde_json::from_slice(&self.payload)?)
+    /// Decode as `E` by dispatching on `event_type` and `event_version`.
+    ///
+    /// An event `E` does not know is [`Error::UnknownEventType`] or
+    /// [`Error::UnknownEventVersion`]; a non-JSON payload is
+    /// [`Error::UnsupportedContentType`]. `E` is an
+    /// [`event_enum!`](crate::event_enum) or a single
+    /// [`EventSchema`](crate::event::EventSchema) struct.
+    pub fn decode<E: DomainEvent>(&self) -> Result<E> {
+        wire::check_content_type(&self.event_type, &self.content_type)?;
+        E::from_payload(&SerializedEvent::new(
+            &self.event_type,
+            self.event_version,
+            &self.payload,
+        ))
+    }
+
+    /// Upcast with `upcasters`, then [`decode`](Self::decode). For events
+    /// obtained outside a runner configured with upcasters.
+    pub fn decode_with<E: DomainEvent>(&self, upcasters: &Upcasters) -> Result<E> {
+        upcasters.upcast_recorded(self)?.decode()
+    }
+
+    /// Deserialize the raw JSON payload as `T`, without checking type or
+    /// version and without upcasting. Prefer [`decode`](Self::decode).
+    pub fn payload_json<T: DeserializeOwned>(&self) -> Result<T> {
+        wire::check_content_type(&self.event_type, &self.content_type)?;
+        SerializedEvent::new(&self.event_type, self.event_version, &self.payload).deserialize()
     }
 
     /// Convert a wire event. Fails if metadata is missing.
@@ -156,7 +194,7 @@ impl RecordedEvent {
         Ok(Self {
             event_id: m.event_id,
             event_type: m.event_type,
-            event_version: m.event_version,
+            event_version: wire::normalize_version(m.event_version),
             tenant_id: m.tenant_id,
             aggregate_id: m.aggregate_id,
             aggregate_type: m.aggregate_type,
@@ -507,6 +545,7 @@ pub struct ProjectionRunner<P, S: ProjectionStore> {
     processor: Option<Arc<dyn LiveProcessor>>,
     drain_on_live_start: bool,
     processor_retry: Duration,
+    upcasters: Upcasters,
     position: u64,
     progress: watch::Sender<RunnerProgress>,
 }
@@ -534,6 +573,7 @@ where
             processor: None,
             drain_on_live_start: true,
             processor_retry: Duration::from_secs(1),
+            upcasters: Upcasters::new(),
             position: 0,
             progress,
         }
@@ -576,6 +616,16 @@ where
     /// capped at 30 s). Default 1 s.
     pub fn with_processor_retry_delay(mut self, delay: Duration) -> Self {
         self.processor_retry = delay;
+        self
+    }
+
+    /// Upcast every event before the projection sees it (and before
+    /// [`CheckpointedProjection::handles`] is asked, so a renamed type is
+    /// routed by its new name). An upcaster failure stops the runner with
+    /// [`Error::ProjectionFailed`] at that event; the checkpoint does not
+    /// advance past it.
+    pub fn with_upcasters(mut self, upcasters: Upcasters) -> Self {
+        self.upcasters = upcasters;
         self
     }
 
@@ -630,17 +680,6 @@ where
     /// occurs. Errors are returned, never swallowed; the checkpoint stays at
     /// the last event that committed.
     pub async fn run(&mut self, cancel: CancellationToken) -> Result<RunExit> {
-        // The Postgres backend matches `aggregate_id_prefix` with an unescaped
-        // SQL LIKE, so these characters change what the live subscription
-        // delivers (events can be missed, not just over-delivered). Reject
-        // them until the backend escapes the pattern (#361).
-        if self.key.feed.contains(['\\', '%', '_']) {
-            return Err(Error::invalid_state(format!(
-                "feed prefix '{}' contains '\\', '%' or '_', which the event store \
-                 subscription treats as LIKE wildcards (see #361); not supported yet",
-                self.key.feed
-            )));
-        }
         let Some(boundary) = self.catch_up_until(&cancel).await? else {
             return Ok(RunExit::Cancelled {
                 position: self.position,
@@ -683,9 +722,10 @@ where
                 Ok(event) => event,
                 Err(err) => break Err(err),
             };
-            // Backends may match the feed prefix loosely (Postgres uses SQL
-            // LIKE); enforce exact prefix semantics so foreign events never
-            // reach the projection or advance its checkpoint.
+            // Servers before `literal_subscription_prefix` (#361) may match
+            // the feed prefix loosely (unescaped SQL LIKE); enforce exact
+            // prefix semantics so foreign events never reach the projection
+            // or advance its checkpoint.
             if !event.aggregate_id.starts_with(&self.key.feed) {
                 continue;
             }
@@ -797,6 +837,13 @@ where
         if event.global_nonce <= self.position {
             return Ok(false);
         }
+        let failed = |source: Error| Error::ProjectionFailed {
+            projection: self.key.to_string(),
+            global_nonce: event.global_nonce,
+            source: Box::new(source),
+        };
+        let upcast = self.upcasters.upcast_recorded(event).map_err(failed)?;
+        let event = upcast.as_ref();
         let mut tx = self.store.begin(&self.key).await?;
         if self.projection.handles(&event.event_type) {
             self.projection

@@ -48,9 +48,13 @@ struct SqlBalances {
     fail_at: Option<u64>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct Deposited {
     amount: i64,
+}
+
+impl event_sourcing_rust::event::EventSchema for Deposited {
+    const EVENT_TYPE: &'static str = "Deposited";
 }
 
 #[async_trait]

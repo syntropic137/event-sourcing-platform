@@ -30,6 +30,11 @@ export const Capabilities = {
    * at its position; it is never skipped (#351, v0.17.0).
    */
   UNDECODABLE_EVENTS_SURFACED: "undecodable_events_surfaced",
+  /**
+   * The subscription aggregate id prefix is matched literally: `\`, `%` and
+   * `_` are not wildcards (#361, v0.17.0).
+   */
+  LITERAL_SUBSCRIPTION_PREFIX: "literal_subscription_prefix",
 } as const;
 
 export interface ServerInfo {

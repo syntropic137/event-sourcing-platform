@@ -11,11 +11,13 @@ use async_trait::async_trait;
 use common::{connect, spawn_server, unique_tenant};
 use event_sourcing_rust::client::{proto, EventDataStream, EventStoreClient, EventStorePort};
 use event_sourcing_rust::error::{Error, Result};
+use event_sourcing_rust::event::EventSchema;
 use event_sourcing_rust::projection::{
     CheckpointKey, CheckpointStore, CheckpointedProjection, DispatchContext, ExternalCheckpoints,
     InMemoryCheckpointStore, InMemoryProjectionStore, InMemoryTx, LiveProcessor, ProjectionRunner,
     ProjectionStore, RecordedEvent, RunExit, RunnerProgress,
 };
+use event_sourcing_rust::upcast::Upcasters;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -23,9 +25,13 @@ use tokio_util::sync::CancellationToken;
 // Fixtures
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Deposited {
     amount: i64,
+}
+
+impl EventSchema for Deposited {
+    const EVENT_TYPE: &'static str = "Deposited";
 }
 
 /// Append one event; returns its global nonce.
@@ -222,6 +228,105 @@ async fn catch_up_then_live_then_cancel() {
         .collect();
     assert_eq!(flags, vec![(g1, true), (g3, true), (g4, false)]);
     assert!(contexts.iter().all(|c| c.live_boundary_nonce == g3));
+}
+
+#[tokio::test]
+async fn upcasters_run_before_routing_and_decoding() {
+    let f = fixture().await;
+    append(&f.client, &f.tenant, "a", 1, "Deposited", 10).await;
+    // Old name for the same fact; routed only after the rename.
+    let g2 = append(&f.client, &f.tenant, "a", 2, "Credited", 5).await;
+
+    let upcasters = Upcasters::new().rename("Credited", 1, "Deposited", 1, Ok);
+    let store = Arc::new(MemStore::new());
+    let mut runner = ProjectionRunner::new(
+        f.port.clone(),
+        store.clone(),
+        BalanceProjection::new(&Probe::default()),
+        &f.tenant,
+    )
+    .with_upcasters(upcasters);
+    assert_eq!(runner.catch_up().await.unwrap(), g2);
+    assert_eq!(store.state(runner.key()).by_account["a"], 15);
+
+    // Without the upcaster the old name is not routed (handles() is false):
+    // filtered, never decoded.
+    let store = Arc::new(MemStore::new());
+    let mut plain = ProjectionRunner::new(
+        f.port.clone(),
+        store.clone(),
+        BalanceProjection::new(&Probe::default()),
+        &f.tenant,
+    );
+    plain.catch_up().await.unwrap();
+    assert_eq!(store.state(plain.key()).by_account["a"], 10);
+}
+
+#[tokio::test]
+async fn failing_upcaster_stops_the_runner_without_advancing() {
+    let f = fixture().await;
+    let g1 = append(&f.client, &f.tenant, "a", 1, "Deposited", 10).await;
+    let g2 = append(&f.client, &f.tenant, "a", 2, "Credited", 5).await;
+
+    let upcasters = Upcasters::new().rename("Credited", 1, "Deposited", 1, |_| {
+        Err(Error::domain("cannot migrate"))
+    });
+    let store = Arc::new(MemStore::new());
+    let mut runner = ProjectionRunner::new(
+        f.port.clone(),
+        store.clone(),
+        BalanceProjection::new(&Probe::default()),
+        &f.tenant,
+    )
+    .with_upcasters(upcasters);
+    let err = runner.catch_up().await.expect_err("upcaster fails");
+    match err {
+        Error::ProjectionFailed {
+            global_nonce,
+            source,
+            ..
+        } => {
+            assert_eq!(global_nonce, g2);
+            assert!(matches!(*source, Error::Upcast { .. }), "{source:?}");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    assert_eq!(store.load_checkpoint(runner.key()).await.unwrap(), Some(g1));
+}
+
+#[tokio::test]
+async fn decode_rejects_unknown_versions() {
+    let f = fixture().await;
+    append(&f.client, &f.tenant, "a", 1, "Deposited", 1).await;
+    let data = f
+        .client
+        .read_all(proto::ReadAllRequest {
+            tenant_id: f.tenant.clone(),
+            from_global_nonce: 1,
+            max_count: 1,
+            forward: true,
+        })
+        .await
+        .unwrap()
+        .events
+        .remove(0);
+    let mut event = RecordedEvent::from_proto(data).unwrap();
+    assert_eq!(event.decode::<Deposited>().unwrap().amount, 1);
+    event.event_version = 2;
+    assert!(matches!(
+        event.decode::<Deposited>(),
+        Err(Error::UnknownEventVersion { .. })
+    ));
+    event.event_type = "Other".into();
+    assert!(matches!(
+        event.decode::<Deposited>(),
+        Err(Error::UnknownEventType { .. })
+    ));
+    event.content_type = "application/x-protobuf".into();
+    assert!(matches!(
+        event.decode::<Deposited>(),
+        Err(Error::UnsupportedContentType { .. })
+    ));
 }
 
 #[tokio::test]
@@ -1114,22 +1219,52 @@ async fn dropping_run_stops_the_live_processor() {
     );
 }
 
+/// `\`, `%` and `_` in a feed prefix are ordinary characters (#361): the
+/// runner accepts them, and catch-up and live both deliver exactly the
+/// feed's aggregates. `foreign` would match an unescaped SQL LIKE pattern;
+/// for `acct\` an unescaped LIKE would instead miss the feed's own events.
 #[tokio::test]
-async fn like_wildcards_in_feed_prefix_are_rejected() {
-    let f = fixture().await;
-    for prefix in ["acct\\", "acct%", "acct_"] {
+async fn like_wildcard_characters_in_feed_prefix_match_literally() {
+    for (prefix, foreign) in [
+        (r"acct\", "acct%x"),
+        ("acct%", "acct-x"),
+        ("acct_", "acctXx"),
+    ] {
+        let f = fixture().await;
+        let own = format!("{prefix}1");
+        append(&f.client, &f.tenant, &own, 1, "Deposited", 1).await;
+        append(&f.client, &f.tenant, foreign, 1, "Deposited", 100).await;
+
+        let store = Arc::new(MemStore::new());
         let mut runner = ProjectionRunner::new(
             f.port.clone(),
-            Arc::new(MemStore::new()),
+            store.clone(),
             BalanceProjection::new(&Probe::default()),
             &f.tenant,
         )
         .with_feed_prefix(prefix);
-        let err = runner
-            .run(CancellationToken::new())
-            .await
-            .expect_err("wildcard prefix rejected");
-        assert!(err.to_string().contains("#361"), "{err}");
+        let key = runner.key().clone();
+        let mut progress = runner.progress();
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn({
+            let cancel = cancel.clone();
+            async move { runner.run(cancel).await }
+        });
+        wait_for(&mut progress, |p| p.is_live).await;
+
+        append(&f.client, &f.tenant, foreign, 2, "Deposited", 100).await;
+        let last = append(&f.client, &f.tenant, &own, 2, "Deposited", 2).await;
+        wait_for(&mut progress, |p| p.position == last).await;
+        cancel.cancel();
+        task.await.unwrap().expect("runner accepts the prefix");
+
+        let state = store.state(&key);
+        assert_eq!(
+            state.by_account,
+            BTreeMap::from([(own.clone(), 3)]),
+            "prefix '{prefix}'"
+        );
+        assert_eq!(state.applied, 2, "prefix '{prefix}'");
     }
 }
 
