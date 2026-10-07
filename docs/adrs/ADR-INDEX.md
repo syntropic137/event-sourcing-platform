@@ -83,6 +83,7 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 | [ADR-024](./ADR-024-nginx-gateway-two-port-grpc-auth.md) | nginx Gateway Two-Port gRPC Auth | ✅ Accepted | eventstore-bin has no authn; nginx gateway enforces Basic auth on the public gRPC port, eventstore-bin stays on the internal network |
 | [ADR-026](./ADR-026-subscription-failure-semantics.md) | Subscription Failure Semantics | ✅ Accepted | Subscribe surfaces DB failures as `UNAVAILABLE` and undecodable events as `DATA_LOSS`, then ends; at-least-once reconnect; operator recovery path |
 | [ADR-027](./ADR-027-cross-language-event-envelope.md) | **Cross-Language Event Envelope** | ✅ Accepted | **Canonical wire encoding of events shared by the TS, Python and Rust SDKs: flat JSON body, type/version in metadata, upcast then dispatch** |
+| [ADR-028](./ADR-028-append-idempotency-semantics.md) | Append Idempotency Semantics | ✅ Accepted | Idempotency key checked before the concurrency precondition; canonical batch fingerprint shared by all backends; backend conformance suite |
 
 ---
 

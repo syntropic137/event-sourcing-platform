@@ -1,3 +1,5 @@
+#[cfg(feature = "conformance")]
+pub mod conformance;
 pub mod errors;
 pub mod fingerprint;
 pub mod trait_event_store;

@@ -6,12 +6,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use parking_lot::RwLock;
-use prost::Message;
-use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::{self as ts, StreamExt};
 
+use eventstore_core::fingerprint::batch_fingerprint;
 use eventstore_core::{proto, EventStore, StoreError, StoreStream};
 use proto::{
     AppendRequest, AppendResponse, ConcurrencyErrorDetail, EventData, ReadAllRequest,
@@ -92,25 +91,6 @@ fn now_unix_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
-}
-
-fn batch_fingerprint(events: &[EventData]) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    for ev in events {
-        if let Some(meta) = &ev.meta {
-            let mut clone = EventData {
-                meta: Some(meta.clone()),
-                payload: ev.payload.clone(),
-            };
-            // recorded_time/global_nonce are server-assigned; ignore to keep client fingerprint stable
-            if let Some(m) = clone.meta.as_mut() {
-                m.recorded_time_unix_ms = 0;
-                m.global_nonce = 0;
-            }
-            hasher.update(clone.encode_to_vec());
-        }
-    }
-    hasher.finalize().to_vec()
 }
 
 fn normalize_event(
@@ -237,7 +217,28 @@ impl EventStore for InMemoryStore {
         let idempotency_key = (!req.idempotency_key.is_empty())
             .then(|| IdempotencyKey::new(&tenant_id, &aggregate_id, &req.idempotency_key));
 
+        // Lock order: streams -> idempotency -> all -> next_global. Holding
+        // the streams write lock for the whole append serializes appends, so
+        // an in-flight identical retry sees the original's key once it gets
+        // the lock.
         let mut streams = self.streams.write();
+
+        // Idempotency key first, then the concurrency precondition (ADR-028):
+        // a retry after a lost ack returns the original result even if other
+        // writers have advanced the stream since.
+        let mut idempotency_guard = idempotency_key.as_ref().map(|_| self.idempotency.write());
+        if let (Some(key), Some(guard)) = (&idempotency_key, idempotency_guard.as_ref()) {
+            if let Some(existing) = guard.get(key) {
+                if existing.fingerprint == fingerprint {
+                    return Ok(existing.response);
+                }
+                return Err(StoreError::AlreadyExists(format!(
+                    "idempotency key '{}' already used with different payload",
+                    key.key
+                )));
+            }
+        }
+
         let stream = streams.entry(stream_key).or_default();
         let current_last_nonce = stream
             .last()
@@ -281,19 +282,6 @@ impl EventStore for InMemoryStore {
             }
         }
 
-        let mut idempotency_guard = idempotency_key.as_ref().map(|_| self.idempotency.write());
-        if let (Some(key), Some(guard)) = (&idempotency_key, idempotency_guard.as_mut()) {
-            if let Some(existing) = guard.get(key) {
-                if existing.fingerprint == fingerprint {
-                    return Ok(existing.response);
-                }
-                return Err(StoreError::AlreadyExists(format!(
-                    "idempotency key '{}' already used with different payload",
-                    key.key
-                )));
-            }
-        }
-
         let mut assigned_events: Vec<EventData> = Vec::with_capacity(events.len());
         let mut all = self.all.write();
         let mut next_global = self.next_global.write();
@@ -328,7 +316,6 @@ impl EventStore for InMemoryStore {
         }
         drop(next_global);
         drop(all);
-        drop(streams);
 
         let last_committed = assigned_events
             .last()
@@ -340,6 +327,8 @@ impl EventStore for InMemoryStore {
             last_aggregate_nonce: last_committed,
         };
 
+        // Record the key before releasing the streams lock, so the events and
+        // their key become visible to the next append together.
         if let (Some(key), Some(guard)) = (&idempotency_key, idempotency_guard.as_mut()) {
             guard.insert(
                 key.clone(),
@@ -351,6 +340,7 @@ impl EventStore for InMemoryStore {
         }
 
         drop(idempotency_guard);
+        drop(streams);
 
         Ok(response)
     }
