@@ -90,15 +90,17 @@ class MemoryCheckpointStore:
         """
         self._checkpoints[checkpoint.projection_name] = checkpoint
 
-    async def save_checkpoints(self, checkpoints: Sequence[ProjectionCheckpoint]) -> None:
+    async def advance_checkpoints(self, checkpoints: Sequence[ProjectionCheckpoint]) -> None:
         """
-        Save several checkpoints, through ``save_checkpoint`` one by one.
+        Advance several checkpoints, never backwards, through ``save_checkpoint``.
 
         Args:
             checkpoints: Checkpoints to save
         """
         for checkpoint in checkpoints:
-            await self.save_checkpoint(checkpoint)
+            stored = self._checkpoints.get(checkpoint.projection_name)
+            if stored is None or stored.global_position < checkpoint.global_position:
+                await self.save_checkpoint(checkpoint)
 
     async def delete_checkpoint(self, projection_name: str) -> None:
         """

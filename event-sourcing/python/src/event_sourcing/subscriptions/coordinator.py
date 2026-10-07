@@ -1006,7 +1006,7 @@ class SubscriptionCoordinator:
                 )
             track.unsaved_skips.clear()
             if isinstance(self._checkpoint_store, BatchCheckpointStore):
-                await self._checkpoint_store.save_checkpoints(checkpoints)
+                await self._checkpoint_store.advance_checkpoints(checkpoints)
             else:
                 for checkpoint in checkpoints:
                     await self._checkpoint_store.save_checkpoint(checkpoint)

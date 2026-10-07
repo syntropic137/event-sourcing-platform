@@ -2,10 +2,10 @@
 
 from event_sourcing.core.aggregate import AggregateRoot, BaseAggregate
 from event_sourcing.core.checkpoint import (
+    BatchCheckpointStore,
     CheckpointedProjection,
     DispatchContext,
     ProjectionCheckpoint,
-    BatchCheckpointStore,
     ProjectionCheckpointStore,
     ProjectionResult,
 )

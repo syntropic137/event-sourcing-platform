@@ -108,14 +108,16 @@ class PostgresCheckpointStore:
             version = EXCLUDED.version;
     """
 
-    # One statement, so one implicit transaction: every row or none.
-    SAVE_CHECKPOINTS_SQL = """
+    # One statement, so one implicit transaction: every row or none. A row
+    # already at or past the new position is left alone.
+    ADVANCE_CHECKPOINTS_SQL = """
         INSERT INTO projection_checkpoints (projection_name, global_position, updated_at, version)
         SELECT * FROM UNNEST($1::text[], $2::bigint[], $3::timestamptz[], $4::integer[])
         ON CONFLICT (projection_name) DO UPDATE SET
             global_position = EXCLUDED.global_position,
             updated_at = EXCLUDED.updated_at,
-            version = EXCLUDED.version;
+            version = EXCLUDED.version
+        WHERE projection_checkpoints.global_position < EXCLUDED.global_position;
     """
 
     DELETE_CHECKPOINT_SQL = """
@@ -236,9 +238,10 @@ class PostgresCheckpointStore:
             },
         )
 
-    async def save_checkpoints(self, checkpoints: Sequence[ProjectionCheckpoint]) -> None:
+    async def advance_checkpoints(self, checkpoints: Sequence[ProjectionCheckpoint]) -> None:
         """
-        Save several checkpoints in one atomic upsert: one round trip, one commit.
+        Advance several checkpoints, never backwards, in one atomic upsert:
+        one round trip, one commit.
 
         Args:
             checkpoints: Checkpoints to save, unique by projection name
@@ -249,7 +252,7 @@ class PostgresCheckpointStore:
 
         async with self._pool.acquire() as conn:
             await conn.execute(
-                self.SAVE_CHECKPOINTS_SQL,
+                self.ADVANCE_CHECKPOINTS_SQL,
                 [checkpoint.projection_name for checkpoint in checkpoints],
                 [checkpoint.global_position for checkpoint in checkpoints],
                 [checkpoint.updated_at for checkpoint in checkpoints],
@@ -257,7 +260,7 @@ class PostgresCheckpointStore:
             )
 
         logger.debug(
-            "Saved checkpoints",
+            "Advanced checkpoints",
             extra={"projection_names": [checkpoint.projection_name for checkpoint in checkpoints]},
         )
 

@@ -211,19 +211,21 @@ class ProjectionCheckpointStore(Protocol):
 
 @runtime_checkable
 class BatchCheckpointStore(ProjectionCheckpointStore, Protocol):
-    """A checkpoint store that can save several checkpoints in one write.
+    """A checkpoint store that can advance several checkpoints in one write.
 
     Optional. The SubscriptionCoordinator uses it, when the store provides
-    it, to save the checkpoints of every projection that skipped an event in
-    one round trip and one commit instead of one per projection. Without it
-    the coordinator saves them one by one.
+    it, to checkpoint every projection that skipped an event in one round
+    trip and one commit instead of one per projection. Without it the
+    coordinator saves them one by one with ``save_checkpoint``.
     """
 
-    async def save_checkpoints(self, checkpoints: "Sequence[ProjectionCheckpoint]") -> None:
+    async def advance_checkpoints(self, checkpoints: "Sequence[ProjectionCheckpoint]") -> None:
         """
-        Save every checkpoint in ``checkpoints`` atomically: all or none.
+        Advance every checkpoint in ``checkpoints`` atomically: all or none.
 
-        Upsert semantics, as ``save_checkpoint``. Projection names are unique
+        Upsert, as ``save_checkpoint``, except that a stored checkpoint
+        already at or past the given position is left as it is: advancing
+        never moves a projection backwards. Projection names are unique
         within one call.
 
         Args:
