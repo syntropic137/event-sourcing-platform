@@ -26,6 +26,7 @@ from event_sourcing.core.aggregate import AggregateRoot
 from event_sourcing.core.event import DomainEvent
 from event_sourcing.core.repository import EventStoreRepository
 from event_sourcing.decorators.events import event
+from event_sourcing.proto.eventstore.v1 import eventstore_pb2
 
 
 # Fixture domain (mirrors tests/xlang_golden.rs). All v1: the Python client
@@ -118,12 +119,25 @@ async def read(addr: str, tenant: str, aggregate_id: str) -> None:
     client = GrpcEventStoreClient(address=addr, tenant_id=tenant)
     await client.connect()
     envelopes = await client.read_events(f"Account-{aggregate_id}")
+    # EventMetadata has no event_version (ADR-027 known deviation): read the
+    # wire metadata directly as well.
+    raw = await client._stub.ReadStream(  # type: ignore[union-attr]
+        eventstore_pb2.ReadStreamRequest(
+            tenant_id=tenant,
+            aggregate_id=aggregate_id,
+            from_aggregate_nonce=1,
+            max_count=1000,
+            forward=True,
+        )
+    )
     await client.disconnect()
     out = []
-    for env in envelopes:
+    for env, data in zip(envelopes, raw.events, strict=True):
         out.append(
             {
                 "event_type": env.metadata.event_type,
+                "wire_event_type": data.meta.event_type,
+                "wire_event_version": data.meta.event_version,
                 "class": type(env.event).__name__,
                 "aggregate_type": env.metadata.aggregate_type,
                 "aggregate_nonce": env.metadata.aggregate_nonce,

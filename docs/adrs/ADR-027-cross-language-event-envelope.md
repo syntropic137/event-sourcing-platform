@@ -89,6 +89,12 @@ Recorded so they can be fixed without changing the canonical envelope:
   `\u` escapes), which is valid and only differs in formatting.
 - **TypeScript writes `event_version = 0`** for an event without
   `schemaVersion`; readers read it as 1.
+- **TS and Python readers do not dispatch on `event_version`.** The TS
+  adapter reports the registered class's `schemaVersion` and Python's
+  `EventMetadata` has no version field, so a stored v1 event is handed to v2
+  code without upcasting (and vice versa). Rust does dispatch and upcast.
+  The live cross-language tests therefore assert the stored metadata
+  version, not what those readers report.
 - **Neither TS nor Python checks `aggregate_type` on load.** Rust does: a
   stream whose first event has another aggregate type is an error.
 

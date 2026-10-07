@@ -153,13 +153,15 @@ impl<T: EventSchema> DomainEvent for T {
 /// Serialize an event body as compact JSON, rejecting anything that is not a
 /// JSON object (unit structs, tuple structs, externally tagged enums, ...).
 pub fn encode_body<T: Serialize + ?Sized>(body: &T) -> Result<Vec<u8>> {
-    let bytes = serde_json::to_vec(body)?;
-    if bytes.first() != Some(&b'{') {
+    if !crate::wire::serializes_as_object(body) {
         return Err(Error::invalid_event(
-            "event payload must serialize to a JSON object (use a struct with named fields, \
-             `struct E {}` for an event without data)",
+            "event payload must serialize to a plain JSON object: use a struct with named \
+             fields (`struct E {}` for an event without data), not an externally tagged enum, \
+             unit, tuple or scalar",
         ));
     }
+    let bytes = serde_json::to_vec(body)?;
+    debug_assert!(crate::wire::is_json_object(&bytes));
     Ok(bytes)
 }
 
@@ -186,7 +188,20 @@ impl<'a> SerializedEvent<'a> {
     }
 
     /// Deserialize the payload as `T` without checking type or version.
+    ///
+    /// The payload must be a JSON object (ADR-027); anything else is
+    /// [`Error::EventDecode`], even if `T` could deserialize it (serde reads
+    /// a struct from an array too).
     pub fn deserialize<T: DeserializeOwned>(&self) -> Result<T> {
+        if !crate::wire::is_json_object(self.payload) {
+            return Err(Error::EventDecode {
+                event_type: self.event_type.to_string(),
+                event_version: self.event_version,
+                source: <serde_json::Error as serde::de::Error>::custom(
+                    "payload is not a JSON object",
+                ),
+            });
+        }
         serde_json::from_slice(self.payload).map_err(|source| Error::EventDecode {
             event_type: self.event_type.to_string(),
             event_version: self.event_version,
@@ -690,6 +705,12 @@ mod tests {
                 ..
             })
         ));
+        // serde would read a struct from an array; the envelope forbids it.
+        let array = SerializedEvent::new("Renamed", 2, b"[3]");
+        assert!(matches!(
+            Both::from_payload(&array),
+            Err(Error::EventDecode { .. })
+        ));
         let bad = SerializedEvent::new("Renamed", 2, br#"{"amount":"x"}"#);
         assert!(matches!(
             Both::from_payload(&bad),
@@ -723,6 +744,43 @@ mod tests {
             Err(Error::InvalidEvent { .. })
         ));
         assert!(encode_body(&5).is_err());
+        assert!(encode_body(&(1, 2)).is_err());
+        assert!(encode_body(&vec![1]).is_err());
+
+        // A serde enum as the body: externally tagged is a type tag inside
+        // the payload (`{"Deposited":{..}}`), rejected even though it is an
+        // object. Untagged and internally tagged enums are flat objects.
+        #[derive(Serialize)]
+        enum Tagged {
+            Deposited { amount: i64 },
+        }
+        assert!(matches!(
+            encode_body(&Tagged::Deposited { amount: 1 }),
+            Err(Error::InvalidEvent { .. })
+        ));
+        #[derive(Serialize)]
+        #[serde(untagged)]
+        enum Untagged {
+            Deposited { amount: i64 },
+        }
+        assert_eq!(
+            encode_body(&Untagged::Deposited { amount: 1 }).unwrap(),
+            br#"{"amount":1}"#
+        );
+        #[derive(Serialize)]
+        #[serde(tag = "kind")]
+        enum Internal {
+            Deposited { amount: i64 },
+        }
+        assert!(encode_body(&Internal::Deposited { amount: 1 }).is_ok());
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("amount", 1);
+        assert_eq!(encode_body(&map).unwrap(), br#"{"amount":1}"#);
+        assert!(encode_body(&Some(TestEvent {
+            message: "m".into()
+        }))
+        .is_ok());
+        assert!(encode_body(&None::<TestEvent>).is_err());
         assert_eq!(encode_body(&serde_json::json!({})).unwrap(), b"{}");
     }
 

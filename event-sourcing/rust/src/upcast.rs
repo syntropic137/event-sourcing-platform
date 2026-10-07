@@ -199,6 +199,15 @@ impl Upcasters {
         let mut ty = event_type.to_string();
         let mut version = wire::normalize_version(event_version);
         let mut body = payload;
+        // Steps may index the body as an object; never hand them anything
+        // else (ADR-027: payloads are JSON objects).
+        if self.step(&ty, version).is_some() && !body.is_object() {
+            return Err(upcast_error(
+                &ty,
+                version,
+                "stored payload is not a JSON object",
+            ));
+        }
         let mut steps = 0;
         while let Some(step) = self.step(&ty, version) {
             steps += 1;
@@ -384,6 +393,24 @@ mod tests {
             not_json.decode::<Deposited>("E", 1, b"not json"),
             Err(Error::EventDecode { .. })
         ));
+    }
+
+    #[test]
+    fn non_object_input_never_reaches_a_step() {
+        // The step indexes the body like an object; an array would panic.
+        let err = chain()
+            .decode::<Deposited>("Deposited", 2, b"[125]")
+            .unwrap_err();
+        assert!(matches!(err, Error::Upcast { .. }), "{err:?}");
+        assert!(matches!(
+            chain().upcast("Deposited", 2, json!("x")),
+            Err(Error::Upcast { .. })
+        ));
+        // No step: the decoder rejects it (serde alone would accept [..]).
+        let err = chain()
+            .decode::<Deposited>("Deposited", 3, br#"[1,"USD"]"#)
+            .unwrap_err();
+        assert!(matches!(err, Error::EventDecode { .. }), "{err:?}");
     }
 
     #[test]

@@ -112,9 +112,154 @@ pub fn check_outgoing(event_type: &str, event_version: u32, payload: &[u8]) -> R
 }
 
 /// Cheap check that serialized JSON is an object.
-fn is_json_object(payload: &[u8]) -> bool {
+pub(crate) fn is_json_object(payload: &[u8]) -> bool {
     let trimmed = payload.trim_ascii();
     trimmed.first() == Some(&b'{') && trimmed.last() == Some(&b'}')
+}
+
+/// True if `body` serializes as a plain JSON object: a struct with named
+/// fields or a map (including untagged and internally tagged enums, and
+/// `#[serde(flatten)]`). False for externally tagged enum variants
+/// (`{"Variant":{..}}`, a type tag inside the payload), unit and tuple
+/// structs, sequences and scalars. Only the top level is inspected; field
+/// values are not serialized.
+pub(crate) fn serializes_as_object<T: serde::Serialize + ?Sized>(body: &T) -> bool {
+    body.serialize(shape::Probe).is_ok()
+}
+
+mod shape {
+    use serde::ser::{self, Impossible, Serialize};
+    use std::fmt;
+
+    #[derive(Debug)]
+    pub struct NotObject;
+    impl fmt::Display for NotObject {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("not a JSON object")
+        }
+    }
+    impl std::error::Error for NotObject {}
+    impl ser::Error for NotObject {
+        fn custom<T: fmt::Display>(_: T) -> Self {
+            NotObject
+        }
+    }
+
+    /// Accepts fields without serializing them.
+    pub struct Fields;
+    impl ser::SerializeStruct for Fields {
+        type Ok = ();
+        type Error = NotObject;
+        fn serialize_field<T: ?Sized + Serialize>(
+            &mut self,
+            _: &'static str,
+            _: &T,
+        ) -> Result<(), NotObject> {
+            Ok(())
+        }
+        fn end(self) -> Result<(), NotObject> {
+            Ok(())
+        }
+    }
+    impl ser::SerializeMap for Fields {
+        type Ok = ();
+        type Error = NotObject;
+        fn serialize_key<T: ?Sized + Serialize>(&mut self, _: &T) -> Result<(), NotObject> {
+            Ok(())
+        }
+        fn serialize_value<T: ?Sized + Serialize>(&mut self, _: &T) -> Result<(), NotObject> {
+            Ok(())
+        }
+        fn end(self) -> Result<(), NotObject> {
+            Ok(())
+        }
+    }
+
+    pub struct Probe;
+
+    macro_rules! reject {
+        ($($name:ident($($arg:ty),*);)*) => {
+            $(fn $name(self, $(_: $arg),*) -> Result<(), NotObject> { Err(NotObject) })*
+        };
+    }
+
+    impl ser::Serializer for Probe {
+        type Ok = ();
+        type Error = NotObject;
+        type SerializeSeq = Impossible<(), NotObject>;
+        type SerializeTuple = Impossible<(), NotObject>;
+        type SerializeTupleStruct = Impossible<(), NotObject>;
+        type SerializeTupleVariant = Impossible<(), NotObject>;
+        type SerializeMap = Fields;
+        type SerializeStruct = Fields;
+        type SerializeStructVariant = Impossible<(), NotObject>;
+
+        reject! {
+            serialize_bool(bool); serialize_i8(i8); serialize_i16(i16); serialize_i32(i32);
+            serialize_i64(i64); serialize_u8(u8); serialize_u16(u16); serialize_u32(u32);
+            serialize_u64(u64); serialize_f32(f32); serialize_f64(f64); serialize_char(char);
+            serialize_str(&str); serialize_bytes(&[u8]); serialize_none(); serialize_unit();
+            serialize_unit_struct(&'static str);
+            serialize_unit_variant(&'static str, u32, &'static str);
+        }
+
+        fn serialize_some<T: ?Sized + Serialize>(self, value: &T) -> Result<(), NotObject> {
+            value.serialize(self)
+        }
+        fn serialize_newtype_struct<T: ?Sized + Serialize>(
+            self,
+            _: &'static str,
+            value: &T,
+        ) -> Result<(), NotObject> {
+            value.serialize(self)
+        }
+        fn serialize_newtype_variant<T: ?Sized + Serialize>(
+            self,
+            _: &'static str,
+            _: u32,
+            _: &'static str,
+            _: &T,
+        ) -> Result<(), NotObject> {
+            Err(NotObject)
+        }
+        fn serialize_seq(self, _: Option<usize>) -> Result<Self::SerializeSeq, NotObject> {
+            Err(NotObject)
+        }
+        fn serialize_tuple(self, _: usize) -> Result<Self::SerializeTuple, NotObject> {
+            Err(NotObject)
+        }
+        fn serialize_tuple_struct(
+            self,
+            _: &'static str,
+            _: usize,
+        ) -> Result<Self::SerializeTupleStruct, NotObject> {
+            Err(NotObject)
+        }
+        fn serialize_tuple_variant(
+            self,
+            _: &'static str,
+            _: u32,
+            _: &'static str,
+            _: usize,
+        ) -> Result<Self::SerializeTupleVariant, NotObject> {
+            Err(NotObject)
+        }
+        fn serialize_map(self, _: Option<usize>) -> Result<Fields, NotObject> {
+            Ok(Fields)
+        }
+        fn serialize_struct(self, _: &'static str, _: usize) -> Result<Fields, NotObject> {
+            Ok(Fields)
+        }
+        fn serialize_struct_variant(
+            self,
+            _: &'static str,
+            _: u32,
+            _: &'static str,
+            _: usize,
+        ) -> Result<Self::SerializeStructVariant, NotObject> {
+            Err(NotObject)
+        }
+    }
 }
 
 /// Metadata-derived view of a stored event used by decoders.

@@ -112,7 +112,10 @@ async fn rust_writes_typescript_reads() {
     assert_eq!(read.len(), expected.len());
     for (got, want) in read.iter().zip(&expected) {
         assert_eq!(got["event_type"], want.event_type());
-        assert_eq!(got["event_version"], want.event_version());
+        // Stored metadata, not the TS class constant (which TS reports
+        // regardless of the stored version, ADR-027).
+        assert_eq!(got["wire_event_type"], want.event_type());
+        assert_eq!(got["wire_event_version"], want.event_version());
         assert_eq!(got["aggregate_type"], "Account");
         assert_eq!(got["content_type"], "application/json");
         let mut data = got["data"].clone();
@@ -138,6 +141,8 @@ async fn rust_writes_python_reads() {
     assert_eq!(read.len(), expected.len());
     for (i, (got, want)) in read.iter().zip(&expected).enumerate() {
         assert_eq!(got["event_type"], want.event_type());
+        assert_eq!(got["wire_event_type"], want.event_type());
+        assert_eq!(got["wire_event_version"], want.event_version());
         assert_eq!(got["aggregate_type"], "Account");
         assert_eq!(got["aggregate_nonce"], json!(i + 1));
         let mut data = got["data"].clone();
