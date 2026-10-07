@@ -81,6 +81,13 @@ test("versionAtLeast follows SemVer 2.0 pre-release precedence", () => {
   assert.ok(versionAtLeast(reported("1.0.0-rc.9007199254740993"), "1.0.0-rc.9007199254740992"));
   assert.ok(!versionAtLeast(reported("0.17.0-rc..1"), "0.0.0"));
   assert.ok(!versionAtLeast(reported("0.17.0-"), "0.0.0"));
+  // Numeric identifiers beyond 64 bits still compare numerically.
+  assert.ok(versionAtLeast(reported("1.0.0"), "1.0.0-rc.18446744073709551616"));
+  assert.ok(versionAtLeast(reported("1.0.0-rc.18446744073709551617"), "1.0.0-rc.18446744073709551616"));
+  assert.ok(!versionAtLeast(reported("1.0.0-rc.18446744073709551616"), "1.0.0-rc.18446744073709551617"));
+  assert.ok(versionAtLeast(reported("1.0.0-rc.99999999999999999999"), "1.0.0-rc.9"));
+  assert.ok(versionAtLeast(reported("18446744073709551616.0.0"), "18446744073709551615.9.9"));
+  assert.ok(!versionAtLeast(reported("1.0.0-rc.99999999999999999999"), "1.0.0-rc.a"));
 });
 
 test("missingCapabilities reports only absent flags", () => {

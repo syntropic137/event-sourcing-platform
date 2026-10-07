@@ -176,12 +176,34 @@ impl EventStore {
     }
 }
 
+/// An arbitrary-size non-negative integer kept as digits. SemVer puts no
+/// bound on numeric identifiers, so a fixed-width parse would reject valid
+/// versions. Derived `Ord` (digit count, then digits) is numeric order once
+/// leading zeros are stripped.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Numeric {
+    len: usize,
+    digits: String,
+}
+
+fn numeric(s: &str) -> Option<Numeric> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let trimmed = s.trim_start_matches('0');
+    let digits = if trimmed.is_empty() { "0" } else { trimmed };
+    Some(Numeric {
+        len: digits.len(),
+        digits: digits.to_string(),
+    })
+}
+
 /// One dot-separated pre-release identifier. Derived `Ord` matches SemVer
 /// 2.0: numeric identifiers sort below alphanumeric ones, numerics compare
 /// numerically, alphanumerics compare in ASCII order.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum PreId {
-    Num(u64),
+    Num(Numeric),
     Alpha(String),
 }
 
@@ -189,7 +211,7 @@ enum PreId {
 /// allowed, missing minor/patch read as 0, build metadata ignored).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Semver {
-    core: (u64, u64, u64),
+    core: (Numeric, Numeric, Numeric),
     pre: Vec<PreId>,
 }
 
@@ -224,9 +246,9 @@ fn parse_semver(v: &str) -> Option<Semver> {
         None => (v, None),
     };
     let mut parts = core.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next().unwrap_or("0").parse().ok()?;
-    let patch = parts.next().unwrap_or("0").parse().ok()?;
+    let major = numeric(parts.next()?)?;
+    let minor = numeric(parts.next().unwrap_or("0"))?;
+    let patch = numeric(parts.next().unwrap_or("0"))?;
     if parts.next().is_some() {
         return None;
     }
@@ -238,7 +260,7 @@ fn parse_semver(v: &str) -> Option<Semver> {
                 if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
                     None
                 } else if id.chars().all(|c| c.is_ascii_digit()) {
-                    id.parse().ok().map(PreId::Num)
+                    numeric(id).map(PreId::Num)
                 } else {
                     Some(PreId::Alpha(id.to_string()))
                 }
@@ -337,6 +359,17 @@ mod tests {
         assert!(reported("0.17.0-rc.2+build.5", &[]).version_at_least("0.17.0-rc.2"));
         assert!(!reported("0.17.0-rc..1", &[]).version_at_least("0.0.0"));
         assert!(!reported("0.17.0-", &[]).version_at_least("0.0.0"));
+        // Numeric identifiers beyond u64 still compare numerically.
+        assert!(reported("1.0.0", &[]).version_at_least("1.0.0-rc.18446744073709551616"));
+        assert!(reported("1.0.0-rc.18446744073709551617", &[])
+            .version_at_least("1.0.0-rc.18446744073709551616"));
+        assert!(!reported("1.0.0-rc.18446744073709551616", &[])
+            .version_at_least("1.0.0-rc.18446744073709551617"));
+        assert!(reported("1.0.0-rc.99999999999999999999", &[]).version_at_least("1.0.0-rc.9"));
+        assert!(
+            reported("18446744073709551616.0.0", &[]).version_at_least("18446744073709551615.9.9")
+        );
+        assert!(!reported("1.0.0-rc.99999999999999999999", &[]).version_at_least("1.0.0-rc.a"));
     }
 
     #[test]

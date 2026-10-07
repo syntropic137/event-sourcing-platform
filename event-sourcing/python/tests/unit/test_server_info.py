@@ -70,6 +70,17 @@ class TestServerInfoHelpers:
         assert _reported("0.17.0-rc.2+build.5").version_at_least("0.17.0-rc.2")
         assert not _reported("0.17.0-rc..1").version_at_least("0.0.0")
         assert not _reported("0.17.0-").version_at_least("0.0.0")
+        # Numeric identifiers beyond 64 bits still compare numerically.
+        assert _reported("1.0.0").version_at_least("1.0.0-rc.18446744073709551616")
+        assert _reported("1.0.0-rc.18446744073709551617").version_at_least(
+            "1.0.0-rc.18446744073709551616"
+        )
+        assert not _reported("1.0.0-rc.18446744073709551616").version_at_least(
+            "1.0.0-rc.18446744073709551617"
+        )
+        assert _reported("1.0.0-rc.99999999999999999999").version_at_least("1.0.0-rc.9")
+        assert _reported("18446744073709551616.0.0").version_at_least("18446744073709551615.9.9")
+        assert not _reported("1.0.0-rc.99999999999999999999").version_at_least("1.0.0-rc.a")
 
     def test_missing_capabilities(self) -> None:
         info = _reported("0.17.0", COMMIT_ORDERED)
