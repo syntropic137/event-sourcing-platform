@@ -324,41 +324,29 @@ class OrderPlaced extends BaseDomainEvent {
 
 ### Event Versioning
 
-Plan for schema evolution:
+Events use the cross-language envelope ([ADR-027](https://github.com/syntropic137/event-sourcing-platform/blob/main/docs/adrs/ADR-027-cross-language-event-envelope.md)): the payload holds only the event's fields, and `eventType`/`schemaVersion` are written as `event_type`/`event_version` metadata. Readers decode by `(eventType, schemaVersion)`, so a stored v1 event is never handed to a v2 class. Register an upcaster to migrate it:
 
 ```typescript
-// Version 1
-class OrderPlacedV1 extends BaseDomainEvent {
-  constructor(
-    public readonly orderId: string,
-    public readonly customerId: string
-  ) {
-    super();
-  }
+@Event('OrderPlaced', 'v2')
+class OrderPlaced extends BaseDomainEvent {
+  readonly eventType = 'OrderPlaced' as const;
+  readonly schemaVersion = 2 as const; // what is written and decoded
+  orderId = '';
+  items: LineItem[] = [];
 }
 
-// Version 2 - Added items
-class OrderPlacedV2 extends BaseDomainEvent {
-  constructor(
-    public readonly orderId: string,
-    public readonly customerId: string,
-    public readonly items: LineItem[]
-  ) {
-    super();
-  }
-}
+const upcasters = new Upcasters()
+  .register('OrderPlaced', 1, 2, (body) => ({ ...body, items: [] }))
+  .rename('OrderCreated', 1, 'OrderPlaced', 1, (body) => body);
 
-// Upcaster to migrate old events
-class OrderPlacedUpcaster {
-  upcast(v1: OrderPlacedV1): OrderPlacedV2 {
-    return new OrderPlacedV2(
-      v1.orderId,
-      v1.customerId,
-      [] // Default empty items for old events
-    );
-  }
-}
+const client = EventStoreClientFactory.createGrpcClient({ serverAddress, tenantId, upcasters });
 ```
+
+- Steps chain until none matches; `rename` maps to another type.
+- A registered type at a version with no class (after upcasting) throws `UnknownEventVersionError`; a payload that is not a JSON object throws `EventPayloadError`; a non-JSON content type throws `UnsupportedContentTypeError`; a failing step throws `UpcastError`. All extend `EventDecodeError` and are never skipped.
+- A type with no registered class is returned as a generic event carrying the type, version and data (ADR-023), so projections can filter it.
+- `envelope.metadata.storedEventType`/`storedEventVersion` are as stored; `event.eventType`/`schemaVersion` are what it was decoded as.
+- Payloads written by SDK 0.17 and earlier contain `eventType`/`schemaVersion` keys; readers drop them, so those streams need no migration.
 
 ## 🗄️ Repository Usage
 

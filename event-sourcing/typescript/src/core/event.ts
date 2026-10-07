@@ -3,6 +3,15 @@
  */
 
 import { UUID, Timestamp, JsonObject, JsonValue, EventType, Version } from '../types/common';
+import {
+  EventDecodeError,
+  EventPayloadError,
+  UnknownEventTypeError,
+  UnknownEventVersionError,
+  UnsupportedContentTypeError,
+  UpcastError,
+} from './errors';
+import { isJsonObject, normalizeEventVersion, type Upcasters } from './upcast';
 
 /** Metadata headers map */
 export type MetadataHeaders = Record<string, string>;
@@ -68,6 +77,18 @@ export interface EventMetadata {
 
   /** Additional metadata */
   readonly customMetadata: CustomMetadata;
+
+  /**
+   * Event type as stored (set on read, ADR-027). Equals `event.eventType`
+   * unless an upcaster renamed the event.
+   */
+  readonly storedEventType?: string;
+
+  /**
+   * Event version as stored (set on read; 0 read as 1, ADR-027). Equals
+   * `event.schemaVersion` unless an upcaster ran.
+   */
+  readonly storedEventVersion?: number;
 }
 
 /** Event envelope that wraps a domain event with metadata */
@@ -84,11 +105,15 @@ export abstract class BaseDomainEvent implements DomainEvent {
   abstract readonly eventType: EventType;
   abstract readonly schemaVersion: number;
 
-  /** Convert the event to a JSON object */
+  /**
+   * Convert the event to a JSON object: the event's own fields only.
+   *
+   * `eventType` and `schemaVersion` travel in the envelope metadata
+   * (ADR-027), so they are not part of the body. Subclasses can override for
+   * custom serialization.
+   */
   toJson(): JsonObject {
-    // Default implementation uses JSON serialization
-    // Subclasses can override for custom serialization
-    return JSON.parse(JSON.stringify(this));
+    return stripEnvelopeKeys(JSON.parse(JSON.stringify(this)) as JsonObject);
   }
 
   /** Create event metadata */
@@ -139,16 +164,247 @@ export class EventFactory {
   }
 }
 
+/**
+ * Keys the TypeScript SDK <= 0.17 wrote into every payload (its event class
+ * fields `eventType`/`schemaVersion`), and older Python producers'
+ * `event_type`. They duplicate envelope metadata (ADR-027): writers no longer
+ * emit them and readers drop them before upcasting and decoding, so payloads
+ * already stored by those writers still decode.
+ */
+export const ENVELOPE_ECHO_KEYS: readonly string[] = ['eventType', 'schemaVersion', 'event_type'];
+
+/** `eventType`/`schemaVersion` are `DomainEvent` members, never event data. */
+const TS_RESERVED_KEYS: readonly string[] = ['eventType', 'schemaVersion'];
+
+/** The event body without the keys that duplicate envelope metadata. */
+export function stripEnvelopeKeys(
+  body: JsonObject,
+  keys: readonly string[] = TS_RESERVED_KEYS
+): JsonObject {
+  if (!keys.some((k) => k in body)) return body;
+  const out: JsonObject = {};
+  for (const [k, v] of Object.entries(body)) {
+    if (!keys.includes(k)) out[k] = v;
+  }
+  return out;
+}
+
+/** `application/json` or empty (unset); parameters and case are ignored. */
+export function isJsonContentType(contentType: string | undefined | null): boolean {
+  const essence = (contentType ?? '').split(';')[0].trim().toLowerCase();
+  return essence === '' || essence === 'application/json';
+}
+
+/**
+ * The `event_version` to write for `event`: its `schemaVersion`, with a
+ * missing or 0 version written as 1 (ADR-027: versions start at 1).
+ */
+export function eventVersionOf(event: DomainEvent): number {
+  const v = (event as { schemaVersion?: unknown }).schemaVersion;
+  if (v === undefined || v === null || v === 0) return 1;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) {
+    throw new Error(
+      `${event.eventType}: schemaVersion must be an integer >= 1 (ADR-027), got ${String(v)}`
+    );
+  }
+  return v;
+}
+
+/** The payload to write for `event`: its own fields only (ADR-027). */
+export function encodeEventPayload(event: DomainEvent): JsonObject {
+  const body: unknown = event.toJson();
+  if (!isJsonObject(body)) {
+    throw new Error(`${event.eventType}: toJson() must return a JSON object (ADR-027)`);
+  }
+  return stripEnvelopeKeys(body);
+}
+
+/** A stored event to decode. */
+export interface StoredEvent {
+  eventType: string;
+  /** As stored; 0 (proto3 unset) is read as 1. */
+  eventVersion?: number;
+  /** Parsed JSON payload. */
+  payload: unknown;
+  contentType?: string;
+}
+
+/** Options for decoding. */
+export interface DecodeOptions {
+  /** Steps that migrate stored events to registered versions first. */
+  upcasters?: Upcasters;
+  /** Store position, reported on errors. */
+  globalNonce?: number;
+  /**
+   * Throw `UnknownEventTypeError` for a type with no registered class,
+   * instead of returning a generic event (ADR-023).
+   */
+  requireRegistered?: boolean;
+}
+
+/** Result of `decodeEvent`. */
+export interface DecodedEvent {
+  event: DomainEvent;
+  /** What `event` was decoded as, after upcasting. */
+  eventType: string;
+  eventVersion: number;
+  /** As stored. */
+  storedEventType: string;
+  storedEventVersion: number;
+}
+
+/**
+ * Decode a stored event (ADR-027 reading steps).
+ *
+ * 1. Content type must be empty or `application/json`.
+ * 2. Version 0 is read as 1.
+ * 3. The payload must be a JSON object; `ENVELOPE_ECHO_KEYS` are dropped.
+ * 4. The upcaster chain runs on `(eventType, eventVersion, payload)`.
+ * 5. The class registered for the final `(eventType, eventVersion)` is
+ *    instantiated and the payload assigned to it.
+ *
+ * Errors are typed (`EventDecodeError` subclasses), never skipped. A type
+ * registered at other versions only is `UnknownEventVersionError`. A type
+ * with no registered class returns a generic event carrying the type,
+ * version and every payload field (ADR-023), unless `requireRegistered`.
+ */
+export function decodeEvent(stored: StoredEvent, options: DecodeOptions = {}): DecodedEvent {
+  const storedType = stored.eventType ?? '';
+  const storedVersion = normalizeEventVersion(stored.eventVersion);
+  const globalNonce = options.globalNonce ?? 0;
+  if (!isJsonContentType(stored.contentType)) {
+    throw new UnsupportedContentTypeError(
+      storedType,
+      storedVersion,
+      `content type '${stored.contentType}' is not JSON`,
+      globalNonce
+    );
+  }
+  if (!isJsonObject(stored.payload)) {
+    throw new EventPayloadError(
+      storedType,
+      storedVersion,
+      'payload is not a JSON object',
+      globalNonce
+    );
+  }
+  let body = stripEnvelopeKeys(stored.payload, ENVELOPE_ECHO_KEYS);
+  let ty = storedType;
+  let version = storedVersion;
+  if (options.upcasters?.handles(ty, version)) {
+    try {
+      ({
+        eventType: ty,
+        eventVersion: version,
+        payload: body,
+      } = options.upcasters.upcast(ty, version, body));
+    } catch (err) {
+      if (err instanceof UpcastError) {
+        throw new UpcastError(err.eventType, err.eventVersion, err.reason, globalNonce, err.cause);
+      }
+      throw err;
+    }
+    body = stripEnvelopeKeys(body, ENVELOPE_ECHO_KEYS);
+  }
+  const decoded = (event: DomainEvent): DecodedEvent => ({
+    event,
+    eventType: ty,
+    eventVersion: version,
+    storedEventType: storedType,
+    storedEventVersion: storedVersion,
+  });
+
+  const EventClass = ty ? EventSerializer.resolveEventClass(ty, version) : undefined;
+  if (!EventClass) {
+    const known = ty ? EventSerializer.registeredVersions(ty) : [];
+    if (known.length > 0) {
+      throw new UnknownEventVersionError(
+        ty,
+        version,
+        `registered versions are [${known.join(', ')}]; register a class for v${version} ` +
+          `or an upcaster from v${version}`,
+        globalNonce
+      );
+    }
+    if (options.requireRegistered) {
+      throw new UnknownEventTypeError(ty, version, 'no event class registered', globalNonce);
+    }
+    const payloadObject = body;
+    const generic: DomainEvent = {
+      ...(payloadObject as object),
+      eventType: ty,
+      schemaVersion: version,
+      toJson: () => payloadObject,
+    };
+    return decoded(generic);
+  }
+
+  let event: DomainEvent;
+  try {
+    event = new EventClass();
+  } catch (err) {
+    throw new EventDecodeError(
+      ty,
+      version,
+      `cannot construct ${EventClass.name} without arguments: ${(err as Error).message}`,
+      globalNonce,
+      err as Error
+    );
+  }
+  Object.assign(event, body);
+  return decoded(event);
+}
+
+interface RegisteredEvent {
+  ctor: new () => DomainEvent;
+  /** Explicit, or resolved on first lookup. */
+  version?: number;
+}
+
 /** Event serializer for converting events to/from JSON */
 export class EventSerializer {
-  private static readonly eventRegistry = new Map<EventType, new () => DomainEvent>();
+  /** event type -> registrations, in registration order (later wins). */
+  private static readonly eventRegistry = new Map<EventType, RegisteredEvent[]>();
 
-  /** Register an event class for deserialization */
+  /**
+   * Register an event class for deserialization, keyed by
+   * `(eventType, version)` (ADR-027).
+   *
+   * `version` defaults to the class's `schemaVersion`, read from an instance
+   * on first lookup (decoding already requires a no-argument constructor);
+   * if that fails, the major number of its `@Event` version string; else 1.
+   * A later registration of the same pair overwrites the earlier one.
+   */
   static registerEvent<TEvent extends DomainEvent>(
     eventType: EventType,
-    eventClass: new () => TEvent
+    eventClass: new () => TEvent,
+    version?: number
   ): void {
-    this.eventRegistry.set(eventType, eventClass);
+    if (version !== undefined && (!Number.isInteger(version) || version < 1)) {
+      throw new Error(`event version for '${eventType}' must be an integer >= 1`);
+    }
+    const entries = this.eventRegistry.get(eventType) ?? [];
+    entries.push({ ctor: eventClass, version });
+    this.eventRegistry.set(eventType, entries);
+  }
+
+  /** The class registered for `(eventType, version)`, if any. */
+  static resolveEventClass(
+    eventType: EventType,
+    version: number
+  ): (new () => DomainEvent) | undefined {
+    const entries = this.eventRegistry.get(eventType);
+    if (!entries) return undefined;
+    for (let i = entries.length - 1; i >= 0; i -= 1) {
+      if (registeredVersion(entries[i]) === version) return entries[i].ctor;
+    }
+    return undefined;
+  }
+
+  /** The versions registered for `eventType`, ascending. */
+  static registeredVersions(eventType: EventType): number[] {
+    const entries = this.eventRegistry.get(eventType) ?? [];
+    return [...new Set(entries.map(registeredVersion))].sort((a, b) => a - b);
   }
 
   /** Serialize an event envelope to JSON */
@@ -156,49 +412,58 @@ export class EventSerializer {
     return {
       event: {
         eventType: envelope.event.eventType,
-        schemaVersion: envelope.event.schemaVersion,
-        data: envelope.event.toJson(),
+        schemaVersion: eventVersionOf(envelope.event),
+        data: encodeEventPayload(envelope.event),
       },
       metadata: metadataToJson(envelope.metadata),
     };
   }
 
-  /** Deserialize an event envelope from JSON */
-  static deserialize(json: JsonObject): EventEnvelope {
+  /**
+   * Deserialize an event envelope from JSON, decoding by
+   * `(eventType, schemaVersion)` (see `decodeEvent`).
+   */
+  static deserialize(json: JsonObject, options: DecodeOptions = {}): EventEnvelope {
     const eventData = json.event as JsonObject;
     const metadata = metadataFromJson(json.metadata as JsonObject);
-
-    const eventType = eventData.eventType as EventType;
-    const EventClass = this.eventRegistry.get(eventType);
-
-    if (!EventClass) {
-      // ADR-023: Graceful fallback for unknown event types.
-      // Return a generic event object with eventType preserved so
-      // aggregate rehydration can still dispatch by type string.
-      const payloadData = eventData.data;
-      const payloadObject: JsonObject =
-        payloadData !== null && typeof payloadData === 'object' && !Array.isArray(payloadData)
-          ? (payloadData as JsonObject)
-          : {};
-
-      const genericEvent: DomainEvent = {
-        ...(payloadObject as object),
-        eventType,
-        schemaVersion: Number(eventData.schemaVersion ?? 1),
-        toJson: () => payloadObject,
-      };
-      return { event: genericEvent, metadata };
-    }
-
-    // Create event instance and populate from data
-    const event = new EventClass();
-    Object.assign(event, eventData.data);
-
+    const decoded = decodeEvent(
+      {
+        eventType: String(eventData.eventType ?? ''),
+        eventVersion: Number(eventData.schemaVersion ?? 0),
+        payload: eventData.data,
+        contentType: metadata.contentType,
+      },
+      { globalNonce: metadata.globalNonce ?? undefined, ...options }
+    );
     return {
-      event: event as DomainEvent,
-      metadata,
+      event: decoded.event,
+      metadata: {
+        ...metadata,
+        storedEventType: decoded.storedEventType,
+        storedEventVersion: decoded.storedEventVersion,
+      },
     };
   }
+}
+
+function registeredVersion(entry: RegisteredEvent): number {
+  if (entry.version === undefined) {
+    entry.version = probeVersion(entry.ctor);
+  }
+  return entry.version;
+}
+
+function probeVersion(ctor: new () => DomainEvent): number {
+  try {
+    const v = (new ctor() as { schemaVersion?: unknown }).schemaVersion;
+    if (v === undefined || v === null || v === 0) return 1;
+    if (typeof v === 'number' && Number.isInteger(v) && v >= 1) return v;
+  } catch {
+    // Constructor needs arguments: fall back to the decorator.
+  }
+  const declared = (ctor as EventAwareConstructor)[EVENT_METADATA]?.version;
+  const major = declared ? Number(/^v?(\d+)/.exec(declared)?.[1]) : NaN;
+  return Number.isInteger(major) && major >= 1 ? major : 1;
 }
 
 /** Parameters required to construct metadata for an event */
@@ -342,6 +607,10 @@ function isValidEventVersion(version: string): boolean {
  * @param version - The event version. Must be either:
  *                  - Simple format: "v1", "v2", "v3", etc. (recommended)
  *                  - Semantic format: "1.0.0", "2.1.3", etc. (advanced)
+ *                  The class's `schemaVersion` is what is written as `event_version`
+ *                  and what the class is registered (and decoded) under (ADR-027);
+ *                  keep the two in step. The string is only used when an
+ *                  instance cannot be constructed without arguments.
  *
  * @throws {Error} If version format is invalid
  *
