@@ -245,6 +245,24 @@ impl<'a> SerializedEvent<'a> {
 /// `(type, version)` pairs, invalid type names and version 0 are compile
 /// errors.
 ///
+/// Variants accept doc comments only. `#[cfg]` on a variant is rejected
+/// (the generated dispatch could not follow it): gate the whole enum, or
+/// implement [`DomainEvent`] by hand.
+///
+/// ```compile_fail
+/// # use event_sourcing_rust::prelude::*;
+/// # #[derive(Debug, Clone, Serialize, Deserialize)]
+/// # pub struct Opened {}
+/// # impl EventSchema for Opened { const EVENT_TYPE: &'static str = "AccountOpened"; }
+/// event_sourcing_rust::event_enum! {
+///     #[derive(Debug, Clone)]
+///     pub enum AccountEvent {
+///         #[cfg(feature = "never")]
+///         Opened(Opened),
+///     }
+/// }
+/// ```
+///
 /// ```
 /// use event_sourcing_rust::prelude::*;
 ///
@@ -260,6 +278,7 @@ impl<'a> SerializedEvent<'a> {
 ///     /// Events of the Account aggregate.
 ///     #[derive(Debug, Clone)]
 ///     pub enum AccountEvent {
+///         /// The account was opened.
 ///         Opened(Opened),
 ///         Closed(Closed),
 ///     }
@@ -279,12 +298,12 @@ macro_rules! event_enum {
     (
         $(#[$meta:meta])*
         $vis:vis enum $name:ident {
-            $( $(#[$vmeta:meta])* $variant:ident($ty:ty) ),+ $(,)?
+            $( $(#[doc = $vdoc:expr])* $variant:ident($ty:ty) ),+ $(,)?
         }
     ) => {
         $(#[$meta])*
         $vis enum $name {
-            $( $(#[$vmeta])* $variant($ty), )+
+            $( $(#[doc = $vdoc])* $variant($ty), )+
         }
 
         const _: () = $crate::event::__private::check_schemas(&[
