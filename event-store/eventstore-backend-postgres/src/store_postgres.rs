@@ -760,6 +760,20 @@ impl EventStoreTrait for PostgresStore {
         })
     }
 
+    /// Catch-up then live subscription over the tenant's global order.
+    ///
+    /// Delivery is at-least-once, in `global_nonce` order, starting at
+    /// `from_global_nonce` (inclusive). A response with `event: None` marks
+    /// "caught up" (end of replay) or is a live keep-alive.
+    ///
+    /// Failures are never hidden. If a replay or live query fails, the stream
+    /// yields one [`StoreError::Unavailable`] (gRPC `UNAVAILABLE`) and ends;
+    /// no caught-up marker is sent for a replay that failed, and the internal
+    /// cursor is not advanced past the last delivered event. The consumer
+    /// reconnects with `from_global_nonce = last processed global_nonce + 1`
+    /// (its own checkpoint). Reconnecting from an earlier position, e.g. when a
+    /// checkpoint was not saved yet, re-delivers events; consumers must be
+    /// idempotent. See ADR-026.
     fn subscribe(&self, req: proto::SubscribeRequest) -> StoreStream<proto::SubscribeResponse> {
         let pool = self.pool.clone();
         let tenant_id = req.tenant_id.clone();
@@ -778,6 +792,8 @@ impl EventStoreTrait for PostgresStore {
                 cursor: i64,
                 interval: Interval,
             },
+            /// A query failed and the error was yielded; the stream ends.
+            Failed,
         }
 
         // State includes the broadcast receiver for LISTEN/NOTIFY wake-ups.
@@ -804,35 +820,23 @@ impl EventStoreTrait for PostgresStore {
             |(pool, tenant, prefix, cursor, phase, mut notify_rx): State| async move {
                 let mut phase = phase;
                 if phase.is_none() {
-                    let rows = if prefix.is_empty() {
-                        sqlx::query(
-                            r#"
-                            SELECT * FROM events
-                            WHERE tenant_id = $1 AND global_nonce >= $2
-                            ORDER BY global_nonce ASC
-                            "#,
-                        )
-                        .bind(&tenant)
-                        .bind(cursor)
-                        .fetch_all(&pool)
-                        .await
-                        .unwrap_or_default()
-                    } else {
-                        let like = format!("{prefix}%");
-                        sqlx::query(
-                            r#"
-                            SELECT * FROM events
-                            WHERE tenant_id = $1 AND global_nonce >= $2 AND aggregate_id LIKE $3
-                            ORDER BY global_nonce ASC
-                            "#,
-                        )
-                        .bind(&tenant)
-                        .bind(cursor)
-                        .bind(like)
-                        .fetch_all(&pool)
-                        .await
-                        .unwrap_or_default()
-                    };
+                    // Replay is inclusive of from_global_nonce (`cursor` here).
+                    let rows =
+                        match fetch_events_after(&pool, &tenant, &prefix, cursor.saturating_sub(1))
+                            .await
+                        {
+                            Ok(rows) => rows,
+                            Err(e) => {
+                                // Never report catch-up while replay is failing:
+                                // surface the error and end the stream.
+                                let err =
+                                    subscription_unavailable("replay", &tenant, &prefix, cursor, e);
+                                return Some((
+                                    Err(err),
+                                    (pool, tenant, prefix, cursor, Some(Phase::Failed), notify_rx),
+                                ));
+                            }
+                        };
 
                     // FIX (ADR-013): Don't advance cursor during collection.
                     // The cursor will be updated as events are yielded during replay iteration.
@@ -952,34 +956,23 @@ impl EventStoreTrait for PostgresStore {
                             }
                         }
 
-                        let rows = if prefix.is_empty() {
-                            sqlx::query(
-                                r#"
-                                SELECT * FROM events
-                                WHERE tenant_id = $1 AND global_nonce > $2
-                                ORDER BY global_nonce ASC
-                                "#,
-                            )
-                            .bind(&tenant)
-                            .bind(cursor)
-                            .fetch_all(&pool)
-                            .await
-                            .unwrap_or_default()
-                        } else {
-                            let like = format!("{prefix}%");
-                            sqlx::query(
-                                r#"
-                                SELECT * FROM events
-                                WHERE tenant_id = $1 AND global_nonce > $2 AND aggregate_id LIKE $3
-                                ORDER BY global_nonce ASC
-                                "#,
-                            )
-                            .bind(&tenant)
-                            .bind(cursor)
-                            .bind(like)
-                            .fetch_all(&pool)
-                            .await
-                            .unwrap_or_default()
+                        let rows = match fetch_events_after(&pool, &tenant, &prefix, cursor).await {
+                            Ok(rows) => rows,
+                            Err(e) => {
+                                // `cursor` is the last delivered position; it is
+                                // reported, never advanced, on failure.
+                                let err = subscription_unavailable(
+                                    "live",
+                                    &tenant,
+                                    &prefix,
+                                    cursor.saturating_add(1),
+                                    e,
+                                );
+                                return Some((
+                                    Err(err),
+                                    (pool, tenant, prefix, cursor, Some(Phase::Failed), notify_rx),
+                                ));
+                            }
                         };
 
                         if !rows.is_empty() {
@@ -1071,11 +1064,74 @@ impl EventStoreTrait for PostgresStore {
                             Some((Ok(proto::SubscribeResponse { event: None }), next_state))
                         }
                     }
-                    None => None,
+                    // The error was already yielded; end the stream.
+                    Some(Phase::Failed) | None => None,
                 }
             },
         ))
     }
+}
+
+/// Events of `tenant` (optionally restricted to `prefix`) with
+/// `global_nonce > after`, in global order.
+async fn fetch_events_after(
+    pool: &PgPool,
+    tenant: &str,
+    prefix: &str,
+    after: i64,
+) -> Result<Vec<sqlx::postgres::PgRow>, sqlx::Error> {
+    if prefix.is_empty() {
+        sqlx::query(
+            r#"
+            SELECT * FROM events
+            WHERE tenant_id = $1 AND global_nonce > $2
+            ORDER BY global_nonce ASC
+            "#,
+        )
+        .bind(tenant)
+        .bind(after)
+        .fetch_all(pool)
+        .await
+    } else {
+        sqlx::query(
+            r#"
+            SELECT * FROM events
+            WHERE tenant_id = $1 AND global_nonce > $2 AND aggregate_id LIKE $3
+            ORDER BY global_nonce ASC
+            "#,
+        )
+        .bind(tenant)
+        .bind(after)
+        .bind(format!("{prefix}%"))
+        .fetch_all(pool)
+        .await
+    }
+}
+
+/// The error a subscription yields, as its last item, when a query fails.
+///
+/// `resume_from` is the first position the stream has not delivered. The
+/// consumer should resume from its own checkpoint (the last event it
+/// processed, plus one), which is at or before `resume_from`.
+fn subscription_unavailable(
+    phase: &str,
+    tenant: &str,
+    prefix: &str,
+    resume_from: i64,
+    error: sqlx::Error,
+) -> StoreError {
+    let resume_from = resume_from.max(0);
+    tracing::warn!(
+        tenant_id = tenant,
+        aggregate_id_prefix = prefix,
+        resume_from,
+        error = %error,
+        "subscription {phase} query failed; ending stream"
+    );
+    StoreError::Unavailable(format!(
+        "subscription {phase} query failed, stream closed; \
+         resume from global_nonce {resume_from} (or your last checkpoint + 1): {error}"
+    ))
 }
 
 fn row_to_event(row: &sqlx::postgres::PgRow) -> Result<proto::EventData, StoreError> {
@@ -1146,6 +1202,54 @@ mod tests {
             from_global_nonce: 0,
         });
         // Test passes if we can create the stream without panicking
+    }
+
+    /// A store whose pool can never connect: every query fails fast.
+    fn unreachable_store() -> PostgresStore {
+        let (notify_tx, _) = broadcast::channel(NOTIFY_BROADCAST_CAPACITY);
+        PostgresStore {
+            pool: PgPoolOptions::new()
+                .acquire_timeout(Duration::from_secs(2))
+                .connect_lazy("postgres://test:test@127.0.0.1:1/test")
+                .expect("lazy connect should not attempt network"),
+            notify_tx,
+            listener_handle: tokio::spawn(async {}),
+        }
+    }
+
+    async fn assert_replay_failure_surfaces(prefix: &str) {
+        use futures::StreamExt;
+        let store = unreachable_store();
+        let mut stream = store.subscribe(proto::SubscribeRequest {
+            tenant_id: "tenant".into(),
+            aggregate_id_prefix: prefix.into(),
+            from_global_nonce: 7,
+        });
+        let first = tokio::time::timeout(Duration::from_secs(10), stream.next())
+            .await
+            .expect("stream must not hang");
+        match first {
+            Some(Err(e @ StoreError::Unavailable(_))) => {
+                let msg = e.to_string();
+                assert!(msg.contains("replay"), "{msg}");
+                assert!(msg.contains("resume from global_nonce 7"), "{msg}");
+            }
+            other => panic!("replay DB failure must surface Unavailable, got {other:?}"),
+        }
+        assert!(
+            stream.next().await.is_none(),
+            "stream must end after the error"
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_surfaces_replay_query_failure_without_prefix() {
+        assert_replay_failure_surfaces("").await;
+    }
+
+    #[tokio::test]
+    async fn subscribe_surfaces_replay_query_failure_with_prefix() {
+        assert_replay_failure_surfaces("Order-").await;
     }
 
     #[test]

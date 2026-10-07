@@ -188,6 +188,9 @@ jobs:
       - name: TypeScript SDK tests
         run: pnpm --filter "@syntropic137/event-sourcing-typescript" run test
 
+      - name: Event store TS client tests
+        run: pnpm --filter "@eventstore/sdk-ts" run test
+
   python_sdk_fast:
     name: SDK (Python) • qa-fast
     runs-on: ubuntu-latest
