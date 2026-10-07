@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -7,6 +9,7 @@ use parking_lot::RwLock;
 use prost::Message;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::{self as ts, StreamExt};
 
 use eventstore_core::{proto, EventStore, StoreError, StoreStream};
@@ -16,6 +19,7 @@ use proto::{
 };
 
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
+const DEFAULT_BROADCAST_CAPACITY: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct StreamKey {
@@ -65,7 +69,14 @@ pub struct InMemoryStore {
 
 impl InMemoryStore {
     pub fn new() -> Arc<Self> {
-        let (tx, _rx) = broadcast::channel(1024);
+        Self::with_broadcast_capacity(DEFAULT_BROADCAST_CAPACITY)
+    }
+
+    /// Like [`Self::new`] with a custom live-subscriber buffer. A subscriber
+    /// that falls more than `capacity` events behind gets an error and must
+    /// resubscribe from its checkpoint.
+    pub fn with_broadcast_capacity(capacity: usize) -> Arc<Self> {
+        let (tx, _rx) = broadcast::channel(capacity);
         Arc::new(Self {
             streams: RwLock::new(HashMap::new()),
             all: RwLock::new(Vec::new()),
@@ -295,6 +306,12 @@ impl EventStore for InMemoryStore {
                 payload: ev.payload,
             });
         }
+        // Publish while still holding the `all` write lock: appends are
+        // serialized by it, so live subscribers receive events in global
+        // nonce order (commit_ordered_global_nonce). Sending never blocks.
+        for ev in &assigned_events {
+            let _ = self.tx.send(ev.clone());
+        }
         drop(next_global);
         drop(all);
         drop(streams);
@@ -320,10 +337,6 @@ impl EventStore for InMemoryStore {
         }
 
         drop(idempotency_guard);
-
-        for ev in assigned_events {
-            let _ = self.tx.send(ev);
-        }
 
         Ok(response)
     }
@@ -498,48 +511,88 @@ impl EventStore for InMemoryStore {
         let prefix = req.aggregate_id_prefix.clone();
         let from_global = req.from_global_nonce;
 
-        let replay_items: Vec<Result<SubscribeResponse, StoreError>> = self
-            .all
-            .read()
-            .iter()
-            .filter(|ev| {
-                ev.meta.as_ref().is_some_and(|m| {
-                    m.tenant_id == tenant_id
-                        && m.global_nonce >= from_global
-                        && (prefix.is_empty() || m.aggregate_id.starts_with(&prefix))
+        // Snapshot the log and attach to the live channel under one read
+        // lock. Appends publish under the write lock, so every event is in
+        // exactly one of the two: no gap and no duplicate at the boundary.
+        let (replay_items, rx, mut last_seen) = {
+            let all = self.all.read();
+            let items: Vec<Result<SubscribeResponse, StoreError>> = all
+                .iter()
+                .filter(|ev| {
+                    ev.meta.as_ref().is_some_and(|m| {
+                        m.tenant_id == tenant_id
+                            && m.global_nonce >= from_global
+                            && (prefix.is_empty() || m.aggregate_id.starts_with(&prefix))
+                    })
                 })
-            })
-            .cloned()
-            .map(|event| Ok(SubscribeResponse { event: Some(event) }))
-            .collect();
+                .cloned()
+                .map(|event| Ok(SubscribeResponse { event: Some(event) }))
+                .collect();
+            let last_seen = all
+                .last()
+                .and_then(|ev| ev.meta.as_ref().map(|m| m.global_nonce))
+                .unwrap_or(0);
+            (items, self.tx.subscribe(), last_seen)
+        };
 
         let replay = ts::iter(replay_items);
 
-        let rx = self.tx.subscribe();
         let live_tenant = tenant_id.clone();
         let live_prefix = prefix.clone();
-        let live = ts::wrappers::BroadcastStream::new(rx).filter_map(move |res| {
-            let tenant = live_tenant.clone();
-            let prefix = live_prefix.clone();
-            match res {
+        let live = ts::wrappers::BroadcastStream::new(rx)
+            .filter_map(move |res| match res {
                 Ok(event) => {
-                    let keep = event.meta.as_ref().is_some_and(|m| {
-                        m.tenant_id == tenant
-                            && m.global_nonce >= from_global
-                            && (prefix.is_empty() || m.aggregate_id.starts_with(&prefix))
-                    });
-
-                    if keep {
-                        Some(Ok(SubscribeResponse { event: Some(event) }))
-                    } else {
-                        None
+                    if let Some(m) = event.meta.as_ref() {
+                        last_seen = last_seen.max(m.global_nonce);
                     }
+                    let keep = event.meta.as_ref().is_some_and(|m| {
+                        m.tenant_id == live_tenant
+                            && m.global_nonce >= from_global
+                            && (live_prefix.is_empty() || m.aggregate_id.starts_with(&live_prefix))
+                    });
+                    keep.then_some(Ok(SubscribeResponse { event: Some(event) }))
                 }
-                Err(_) => None,
-            }
-        });
+                // A lagged receiver lost events. Never skip silently: end
+                // the stream with an error so the consumer resumes from its
+                // checkpoint.
+                Err(BroadcastStreamRecvError::Lagged(n)) => {
+                    Some(Err(StoreError::ResourceExhausted(format!(
+                        "subscriber lagged and missed {n} events after global_nonce {last_seen}; resubscribe from your checkpoint"
+                    ))))
+                }
+            })
+            ;
+        let live = EndAfterError {
+            inner: Box::pin(live),
+            done: false,
+        };
 
         Box::pin(replay.chain(live))
+    }
+}
+
+/// Yields items from `inner` until (and including) the first error, then
+/// ends without polling `inner` again.
+struct EndAfterError<S> {
+    inner: Pin<Box<S>>,
+    done: bool,
+}
+
+impl<T, S> ts::Stream for EndAfterError<S>
+where
+    S: ts::Stream<Item = Result<T, StoreError>>,
+{
+    type Item = Result<T, StoreError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.done {
+            return Poll::Ready(None);
+        }
+        let item = self.inner.as_mut().poll_next(cx);
+        if let Poll::Ready(Some(Err(_))) = &item {
+            self.done = true;
+        }
+        item
     }
 }
 

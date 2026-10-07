@@ -49,6 +49,11 @@ Notes:
 - Both built-in backends (memory, postgres) advertise
   `commit_ordered_global_nonce`. A custom backend advertises nothing unless it
   overrides `EventStore::capabilities()`.
+- Memory backend: live events are published under the append lock, so
+  subscribers see them in global nonce order, and the replay/live handoff has
+  no gap or duplicate. A live subscriber that falls more than the broadcast
+  buffer behind gets `RESOURCE_EXHAUSTED` and the stream ends (resubscribe from
+  your checkpoint) instead of silently skipping events.
 
 ### Planned flags (not yet advertised)
 
