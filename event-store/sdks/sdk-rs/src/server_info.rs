@@ -176,14 +176,52 @@ impl EventStore {
     }
 }
 
-/// Parse "MAJOR.MINOR.PATCH[-pre][+build]" into a sortable key. A pre-release
-/// sorts below the matching release (0 vs 1 in the last slot).
-fn parse_semver(v: &str) -> Option<(u64, u64, u64, u8)> {
-    let v = v.trim().trim_start_matches('v');
+/// One dot-separated pre-release identifier. Derived `Ord` matches SemVer
+/// 2.0: numeric identifiers sort below alphanumeric ones, numerics compare
+/// numerically, alphanumerics compare in ASCII order.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum PreId {
+    Num(u64),
+    Alpha(String),
+}
+
+/// A parsed "MAJOR[.MINOR[.PATCH]][-PRE][+BUILD]" version (leading "v"
+/// allowed, missing minor/patch read as 0, build metadata ignored).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Semver {
+    core: (u64, u64, u64),
+    pre: Vec<PreId>,
+}
+
+impl Ord for Semver {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        self.core.cmp(&other.core).then_with(|| {
+            match (self.pre.is_empty(), other.pre.is_empty()) {
+                // A release outranks any of its pre-releases.
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                // Identifier-wise; a shorter prefix sorts first.
+                (false, false) => self.pre.cmp(&other.pre),
+            }
+        })
+    }
+}
+
+impl PartialOrd for Semver {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn parse_semver(v: &str) -> Option<Semver> {
+    let v = v.trim();
+    let v = v.strip_prefix('v').unwrap_or(v);
     let v = v.split('+').next()?;
-    let (core, is_release) = match v.split_once('-') {
-        Some((core, _pre)) => (core, 0),
-        None => (v, 1),
+    let (core, pre) = match v.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (v, None),
     };
     let mut parts = core.split('.');
     let major = parts.next()?.parse().ok()?;
@@ -192,7 +230,25 @@ fn parse_semver(v: &str) -> Option<(u64, u64, u64, u8)> {
     if parts.next().is_some() {
         return None;
     }
-    Some((major, minor, patch, is_release))
+    let pre = match pre {
+        None => Vec::new(),
+        Some(pre) => pre
+            .split('.')
+            .map(|id| {
+                if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                    None
+                } else if id.chars().all(|c| c.is_ascii_digit()) {
+                    id.parse().ok().map(PreId::Num)
+                } else {
+                    Some(PreId::Alpha(id.to_string()))
+                }
+            })
+            .collect::<Option<Vec<_>>>()?,
+    };
+    Some(Semver {
+        core: (major, minor, patch),
+        pre,
+    })
 }
 
 #[cfg(test)]
@@ -247,6 +303,40 @@ mod tests {
         assert!(!reported("0.17.0-rc.1", &[]).version_at_least("0.17.0"));
         assert!(reported("0.18.0+abc", &[]).version_at_least("0.17.0"));
         assert!(!reported("", &[]).version_at_least("0.0.0"));
+    }
+
+    #[test]
+    fn prerelease_precedence_follows_semver() {
+        // SemVer 2.0 section 11 example, ascending.
+        let ordered = [
+            "1.0.0-alpha",
+            "1.0.0-alpha.1",
+            "1.0.0-alpha.beta",
+            "1.0.0-beta",
+            "1.0.0-beta.2",
+            "1.0.0-beta.11",
+            "1.0.0-rc.1",
+            "1.0.0",
+        ];
+        for (i, have) in ordered.iter().enumerate() {
+            let info = reported(have, &[]);
+            for (j, want) in ordered.iter().enumerate() {
+                assert_eq!(
+                    info.version_at_least(want),
+                    i >= j,
+                    "{have} >= {want} should be {}",
+                    i >= j
+                );
+            }
+        }
+        // Distinct pre-releases no longer collapse to one rank.
+        assert!(!reported("0.17.0-alpha.1", &[]).version_at_least("0.17.0-rc.2"));
+        assert!(reported("0.17.0-rc.2", &[]).version_at_least("0.17.0-rc.1"));
+        assert!(!reported("0.17.0-rc.1", &[]).version_at_least("0.17.0-rc.2"));
+        assert!(reported("0.17.0-rc.10", &[]).version_at_least("0.17.0-rc.9"));
+        assert!(reported("0.17.0-rc.2+build.5", &[]).version_at_least("0.17.0-rc.2"));
+        assert!(!reported("0.17.0-rc..1", &[]).version_at_least("0.0.0"));
+        assert!(!reported("0.17.0-", &[]).version_at_least("0.0.0"));
     }
 
     #[test]

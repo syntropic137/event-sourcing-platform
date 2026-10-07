@@ -56,6 +56,33 @@ test("versionAtLeast compares numerically and fails closed", () => {
   assert.ok(!versionAtLeast(LEGACY_SERVER_INFO, "0.0.1"));
 });
 
+test("versionAtLeast follows SemVer 2.0 pre-release precedence", () => {
+  // SemVer 2.0 section 11 example, ascending.
+  const ordered = [
+    "1.0.0-alpha",
+    "1.0.0-alpha.1",
+    "1.0.0-alpha.beta",
+    "1.0.0-beta",
+    "1.0.0-beta.2",
+    "1.0.0-beta.11",
+    "1.0.0-rc.1",
+    "1.0.0",
+  ];
+  ordered.forEach((have, i) => {
+    ordered.forEach((want, j) => {
+      assert.equal(versionAtLeast(reported(have), want), i >= j, `${have} >= ${want}`);
+    });
+  });
+  assert.ok(!versionAtLeast(reported("0.17.0-alpha.1"), "0.17.0-rc.2"));
+  assert.ok(versionAtLeast(reported("0.17.0-rc.2"), "0.17.0-rc.1"));
+  assert.ok(!versionAtLeast(reported("0.17.0-rc.1"), "0.17.0-rc.2"));
+  assert.ok(versionAtLeast(reported("0.17.0-rc.10"), "0.17.0-rc.9"));
+  assert.ok(versionAtLeast(reported("0.17.0-rc.2+build.5"), "0.17.0-rc.2"));
+  assert.ok(versionAtLeast(reported("1.0.0-rc.9007199254740993"), "1.0.0-rc.9007199254740992"));
+  assert.ok(!versionAtLeast(reported("0.17.0-rc..1"), "0.0.0"));
+  assert.ok(!versionAtLeast(reported("0.17.0-"), "0.0.0"));
+});
+
 test("missingCapabilities reports only absent flags", () => {
   const info = reported("0.17.0", [Capabilities.COMMIT_ORDERED_GLOBAL_NONCE]);
   assert.deepEqual(missingCapabilities(info, [Capabilities.COMMIT_ORDERED_GLOBAL_NONCE]), []);

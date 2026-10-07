@@ -63,8 +63,9 @@ class ServerInfo:
     def version_at_least(self, minimum: str) -> bool:
         """True when the version is known and ``>= minimum``.
 
-        Numeric major.minor.patch; a pre-release sorts below its release.
-        Always False for legacy servers, whose version is unknown.
+        SemVer 2.0 precedence: pre-releases sort below their release and are
+        compared identifier by identifier; build metadata is ignored. Always
+        False for legacy servers, whose version is unknown.
         """
         if self.server_version is None:
             return False
@@ -128,12 +129,26 @@ def assert_min_version(info: ServerInfo, minimum: str) -> None:
         )
 
 
-_SEMVER = re.compile(r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(-[^+]*)?(?:\+.*)?$")
+_SEMVER = re.compile(
+    r"v?([0-9]+)(?:\.([0-9]+))?(?:\.([0-9]+))?"
+    r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+.*)?"
+)
+
+# (is_alphanumeric, numeric value, text): numeric identifiers sort below
+# alphanumeric ones, numerics compare numerically, alphanumerics in ASCII order.
+_PreId = tuple[int, int, str]
+_SemverKey = tuple[int, int, int, int, tuple[_PreId, ...]]
 
 
-def _parse_semver(v: str) -> tuple[int, int, int, int] | None:
-    m = _SEMVER.match(v.strip())
+def _parse_semver(v: str) -> _SemverKey | None:
+    """Parse into a key whose tuple order is SemVer 2.0 precedence."""
+    m = _SEMVER.fullmatch(v.strip())
     if m is None:
         return None
     major, minor, patch, pre = m.groups()
-    return (int(major), int(minor or 0), int(patch or 0), 0 if pre else 1)
+    ids: tuple[_PreId, ...] = ()
+    if pre:
+        ids = tuple((0, int(i), "") if i.isdigit() else (1, 0, i) for i in pre.split("."))
+    # A release (flag 1) outranks any of its pre-releases (flag 0); among
+    # pre-releases a shorter identifier prefix sorts first (tuple order).
+    return (int(major), int(minor or 0), int(patch or 0), 0 if pre else 1, ids)

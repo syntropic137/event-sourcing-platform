@@ -48,6 +48,29 @@ class TestServerInfoHelpers:
         assert not _reported("0.17.0-rc.1").version_at_least("0.17.0")
         assert not LEGACY_SERVER_INFO.version_at_least("0.0.1")
 
+    def test_prerelease_precedence_follows_semver(self) -> None:
+        # SemVer 2.0 section 11 example, ascending.
+        ordered = [
+            "1.0.0-alpha",
+            "1.0.0-alpha.1",
+            "1.0.0-alpha.beta",
+            "1.0.0-beta",
+            "1.0.0-beta.2",
+            "1.0.0-beta.11",
+            "1.0.0-rc.1",
+            "1.0.0",
+        ]
+        for i, have in enumerate(ordered):
+            for j, want in enumerate(ordered):
+                assert _reported(have).version_at_least(want) == (i >= j), f"{have} >= {want}"
+        assert not _reported("0.17.0-alpha.1").version_at_least("0.17.0-rc.2")
+        assert _reported("0.17.0-rc.2").version_at_least("0.17.0-rc.1")
+        assert not _reported("0.17.0-rc.1").version_at_least("0.17.0-rc.2")
+        assert _reported("0.17.0-rc.10").version_at_least("0.17.0-rc.9")
+        assert _reported("0.17.0-rc.2+build.5").version_at_least("0.17.0-rc.2")
+        assert not _reported("0.17.0-rc..1").version_at_least("0.0.0")
+        assert not _reported("0.17.0-").version_at_least("0.0.0")
+
     def test_missing_capabilities(self) -> None:
         info = _reported("0.17.0", COMMIT_ORDERED)
         assert info.missing_capabilities([COMMIT_ORDERED]) == []
