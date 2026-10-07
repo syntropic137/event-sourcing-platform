@@ -107,7 +107,9 @@
 //! - [`repository`] - Event store repository: load/replay, save with optimistic
 //!   concurrency, idempotent retry of unknown-outcome saves
 //! - [`projection`] - Checkpointed projection runner (catch-up, live, resume,
-//!   rebuild) with transactional and external checkpoint stores
+//!   rebuild) with transactional and external checkpoint stores, and
+//!   supervision (`run_supervised`: reconnect with backoff, halt on
+//!   undecodable events, health)
 //! - [`wire`] - The cross-language event envelope (ADR-027) shared with the
 //!   TypeScript and Python SDKs
 //! - [`upcast`] - Upcasters that migrate stored events to the current schema
@@ -134,9 +136,10 @@ pub mod prelude {
         DomainEvent, EventEnvelope, EventMetadata, EventSchema, SerializedEvent,
     };
     pub use crate::projection::{
-        CheckpointKey, CheckpointStore, CheckpointedProjection, DispatchContext,
+        BackoffPolicy, CheckpointKey, CheckpointStore, CheckpointedProjection, DispatchContext,
         ExternalCheckpoints, InMemoryCheckpointStore, InMemoryProjectionStore, LiveProcessor,
-        ProjectionRunner, ProjectionStore, RecordedEvent, RunExit,
+        ProcessorPanicPolicy, ProjectionRunner, ProjectionStore, RecordedEvent, RunExit,
+        RunnerHealth, RunnerState,
     };
     pub use crate::repository::{
         AggregateRepository, EventStoreRepository, Repository, RetryPolicy,

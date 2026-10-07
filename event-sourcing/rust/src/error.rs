@@ -118,6 +118,55 @@ pub enum Error {
         received: u64,
     },
 
+    /// The event store reported an undecodable stored event (gRPC
+    /// `DATA_LOSS` with trailing metadata `esp-undecodable-global-nonce`,
+    /// ADR-026). Not retryable: reconnecting fails at the same position.
+    /// Runners stop here and never advance a checkpoint past it.
+    ///
+    /// Operator recovery: repair the row or deploy an event store that
+    /// decodes it, or, if unrecoverable, set the checkpoint of every consumer
+    /// that has not passed `global_nonce` to `global_nonce` (it resumes at
+    /// `global_nonce + 1`). See ADR-026.
+    #[error(
+        "Undecodable stored event at global_nonce {global_nonce} (gRPC DATA_LOSS); retrying \
+         cannot fix this. Repair the row or deploy an event store that decodes it, or, if \
+         unrecoverable, set the checkpoint of every consumer that has not passed \
+         {global_nonce} to {global_nonce} (ADR-026). Server: {message}"
+    )]
+    DataLoss {
+        /// Position of the undecodable event.
+        global_nonce: u64,
+        /// Server message (names the position and column, never payload).
+        message: String,
+    },
+
+    /// A checkpoint commit was refused because the stored checkpoint is
+    /// already at or beyond `position`: another runner owns this key, or the
+    /// event was already processed. Not retryable.
+    #[error(
+        "checkpoint for {projection} is at {stored}; refusing to commit {position} \
+         (another runner owns this key, or the event was already processed)"
+    )]
+    CheckpointFenced {
+        /// Checkpoint key of the projection.
+        projection: String,
+        /// Position found in the store.
+        stored: u64,
+        /// Position the runner tried to commit.
+        position: u64,
+    },
+
+    /// A [`LiveProcessor`](crate::projection::LiveProcessor) pass panicked.
+    /// The runner stops with this error unless configured to restart the
+    /// processor ([`ProcessorPanicPolicy::Restart`](crate::projection::ProcessorPanicPolicy)).
+    #[error("Live processor of {projection} panicked: {message}")]
+    LiveProcessorPanicked {
+        /// Checkpoint key of the projection.
+        projection: String,
+        /// Panic payload, when it was a string.
+        message: String,
+    },
+
     /// The event store does not meet a stated capability or version floor
     /// (`EventStoreClient::require_capabilities` / `require_min_version`).
     #[error("{0}")]
@@ -211,13 +260,41 @@ impl Error {
     pub fn status_code(&self) -> Option<tonic::Code> {
         match self {
             Error::EventStore(status) => Some(status.code()),
+            Error::DataLoss { .. } => Some(tonic::Code::DataLoss),
+            _ => None,
+        }
+    }
+
+    /// Position of the undecodable stored event, for [`Error::DataLoss`].
+    pub fn data_loss_position(&self) -> Option<u64> {
+        match self {
+            Error::DataLoss { global_nonce, .. } => Some(*global_nonce),
             _ => None,
         }
     }
 }
 
+/// gRPC trailing-metadata key carrying the position of an undecodable
+/// stored event on a `DATA_LOSS` status (ADR-026).
+pub const UNDECODABLE_GLOBAL_NONCE_KEY: &str = "esp-undecodable-global-nonce";
+
 impl From<tonic::Status> for Error {
+    /// `DATA_LOSS` carrying the `esp-undecodable-global-nonce` position
+    /// becomes [`Error::DataLoss`]; anything else is [`Error::EventStore`].
     fn from(status: tonic::Status) -> Self {
+        if status.code() == tonic::Code::DataLoss {
+            let position = status
+                .metadata()
+                .get(UNDECODABLE_GLOBAL_NONCE_KEY)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok());
+            if let Some(global_nonce) = position {
+                return Error::DataLoss {
+                    global_nonce,
+                    message: status.message().to_string(),
+                };
+            }
+        }
         Error::EventStore(Box::new(status))
     }
 }
@@ -233,5 +310,37 @@ mod tests {
         assert!(!Error::from(tonic::Status::invalid_argument("x")).is_transient());
         assert!(!Error::concurrency_conflict(1, 2).is_transient());
         assert!(Error::concurrency_conflict(1, 2).is_concurrency_conflict());
+    }
+
+    fn data_loss_status(position: Option<&str>) -> tonic::Status {
+        let mut metadata = tonic::metadata::MetadataMap::new();
+        if let Some(p) = position {
+            metadata.insert(UNDECODABLE_GLOBAL_NONCE_KEY, p.parse().unwrap());
+        }
+        tonic::Status::with_metadata(tonic::Code::DataLoss, "bad row", metadata)
+    }
+
+    #[test]
+    fn data_loss_with_position_is_typed_and_not_transient() {
+        let err = Error::from(data_loss_status(Some("42")));
+        assert!(
+            matches!(err, Error::DataLoss { global_nonce: 42, ref message } if message == "bad row"),
+            "{err:?}"
+        );
+        assert_eq!(err.data_loss_position(), Some(42));
+        assert_eq!(err.status_code(), Some(tonic::Code::DataLoss));
+        assert!(!err.is_transient());
+        assert!(err.to_string().contains("ADR-026"), "{err}");
+    }
+
+    #[test]
+    fn data_loss_without_position_stays_a_non_transient_status() {
+        for position in [None, Some("x"), Some("-1")] {
+            let err = Error::from(data_loss_status(position));
+            assert!(matches!(err, Error::EventStore(_)), "{err:?}");
+            assert_eq!(err.status_code(), Some(tonic::Code::DataLoss));
+            assert!(!err.is_transient());
+            assert_eq!(err.data_loss_position(), None);
+        }
     }
 }

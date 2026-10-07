@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use common::{connect, spawn_server, unique_tenant};
-use event_sourcing_rust::client::{proto, EventDataStream, EventStoreClient, EventStorePort};
+use event_sourcing_rust::client::{
+    proto, EventDataStream, EventStoreClient, EventStorePort, ServerInfo,
+};
 use event_sourcing_rust::error::{Error, Result};
 use event_sourcing_rust::event::EventSchema;
 use event_sourcing_rust::projection::{
@@ -413,6 +415,9 @@ impl EventStorePort for DuplicatingPort {
         }
         Ok(resp)
     }
+    async fn server_info(&self) -> Result<ServerInfo> {
+        self.0.server_info().await
+    }
     async fn subscribe(&self, req: proto::SubscribeRequest) -> Result<EventDataStream> {
         use tokio_stream::StreamExt;
         let mut inner = self.0.subscribe(req).await?;
@@ -538,6 +543,9 @@ impl EventStorePort for FaultySubscribePort {
     }
     async fn read_all(&self, req: proto::ReadAllRequest) -> Result<proto::ReadAllResponse> {
         self.0.read_all(req).await
+    }
+    async fn server_info(&self) -> Result<ServerInfo> {
+        self.0.server_info().await
     }
     async fn subscribe(&self, _req: proto::SubscribeRequest) -> Result<EventDataStream> {
         let items: Vec<Result<proto::EventData>> = match self.1 {
@@ -1128,6 +1136,9 @@ impl EventStorePort for ReorderingPort {
     }
     async fn read_all(&self, req: proto::ReadAllRequest) -> Result<proto::ReadAllResponse> {
         self.0.read_all(req).await
+    }
+    async fn server_info(&self) -> Result<ServerInfo> {
+        self.0.server_info().await
     }
     async fn subscribe(&self, req: proto::SubscribeRequest) -> Result<EventDataStream> {
         use tokio_stream::StreamExt;
