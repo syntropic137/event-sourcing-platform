@@ -28,7 +28,7 @@ impl DomainEvent for CounterEvent {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct Counter {
     id: Option<String>,
     value: u64,

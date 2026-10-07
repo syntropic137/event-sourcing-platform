@@ -13,6 +13,7 @@ use event_sourcing_rust::prelude::*;
 enum AccountEvent {
     Opened { id: String, owner: String },
     Deposited { amount: i64 },
+    Poison,
 }
 
 impl DomainEvent for AccountEvent {
@@ -20,11 +21,12 @@ impl DomainEvent for AccountEvent {
         match self {
             AccountEvent::Opened { .. } => "AccountOpened",
             AccountEvent::Deposited { .. } => "MoneyDeposited",
+            AccountEvent::Poison => "Poison",
         }
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct Account {
     id: Option<String>,
     owner: String,
@@ -55,6 +57,7 @@ impl Aggregate for Account {
                 self.owner = owner.clone();
             }
             AccountEvent::Deposited { amount } => self.balance += amount,
+            AccountEvent::Poison => return Err(Error::invalid_state("poisoned")),
         }
         self.version += 1;
         Ok(())
@@ -65,6 +68,7 @@ impl Aggregate for Account {
 enum AccountCommand {
     Open { id: String, owner: String },
     Deposit { amount: i64 },
+    DepositThenPoison { amount: i64 },
 }
 
 impl Command for AccountCommand {}
@@ -87,6 +91,10 @@ impl AggregateRoot for Account {
                 }
                 Ok(vec![AccountEvent::Deposited { amount }])
             }
+            AccountCommand::DepositThenPoison { amount } => Ok(vec![
+                AccountEvent::Deposited { amount },
+                AccountEvent::Poison,
+            ]),
         }
     }
 }
@@ -422,4 +430,56 @@ async fn aggregate_type_mismatch_is_an_error() {
             .committed_version(),
         2
     );
+
+    // Instance metadata is not trusted: a Savings stream rehydrated by hand
+    // (metadata says "Account") must still be rejected by the Account repo.
+    let mut savings = opened_with_deposit("sav-1").await;
+    other.save(&mut savings).await.unwrap();
+    let mut forged = AggregateInstance::from_history("sav-1".into(), Account::default(), 2);
+    forged.execute(open("sav-1")).await.unwrap();
+    assert!(repo.save(&mut forged).await.is_err());
+    assert!(
+        other.load("sav-1").await.unwrap().is_some(),
+        "stream intact"
+    );
+    assert_eq!(
+        other
+            .load("sav-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .committed_version(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn execute_is_atomic_when_an_event_fails_to_apply() {
+    let server = spawn_server().await;
+    let store: Arc<dyn EventStorePort> = Arc::new(connect(&server.addr).await);
+    let repo = EventStoreRepository::<Account>::new(store, unique_tenant());
+
+    let mut acct = opened_with_deposit("acct-9").await;
+    repo.save(&mut acct).await.unwrap();
+    let err = acct
+        .execute(AccountCommand::DepositThenPoison { amount: 50 })
+        .await
+        .expect_err("second event fails to apply");
+    assert!(
+        matches!(err, Error::InvalidAggregateState { .. }),
+        "{err:?}"
+    );
+    assert_eq!(acct.aggregate.balance, 10, "state rolled back");
+    assert_eq!(acct.aggregate.version, 2);
+    assert_eq!(acct.uncommitted_count(), 0);
+    assert_eq!(acct.metadata.version, 2);
+
+    // The instance stays consistent with the store.
+    acct.execute(AccountCommand::Deposit { amount: 1 })
+        .await
+        .unwrap();
+    repo.save(&mut acct).await.unwrap();
+    let loaded = repo.load("acct-9").await.unwrap().unwrap();
+    assert_eq!(loaded.aggregate.balance, acct.aggregate.balance);
+    assert_eq!(loaded.aggregate.balance, 11);
 }

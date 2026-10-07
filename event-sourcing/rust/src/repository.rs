@@ -333,11 +333,12 @@ where
             ));
         }
         // Appending to an existing stream must not change its aggregate type.
-        // Instances loaded or saved by this repository carry its type; any
-        // other instance is verified against the stream before appending.
-        if instance.committed_version() > 0
-            && instance.metadata.aggregate_type != self.aggregate_type
-        {
+        // Instance metadata is caller-controlled (fields are public,
+        // `from_history` takes any type), so verify against the type stored
+        // on the stream's first event. One single-event read per save of an
+        // existing stream; a new stream (expected 0) needs no read because
+        // the store rejects it if the stream already exists.
+        if instance.committed_version() > 0 {
             let page = self.read_page(&aggregate_id, 1, 1).await?;
             if let Some(meta) = page.events.first().and_then(|e| e.meta.as_ref()) {
                 self.check_type(&aggregate_id, meta)?;
