@@ -99,19 +99,15 @@ nothing partial is ever visible and commit order is unaffected.
 
 ## Subscriptions
 
-A subscription is not one long query. Replay runs a query for the backlog;
-the live phase runs one short query per wake-up (NOTIFY or 5 s fallback
-poll). The deadline bounds each query, never the subscription's lifetime, so
-idle live subscriptions are never killed by these timeouts.
-
-The replay query is the one that grows with history. Until replay is paged
-([#369](https://github.com/syntropic137/event-sourcing-platform/issues/369)),
-it fetches the whole backlog after the consumer's checkpoint in one
-statement; the #354 baseline measured 3.6 s for 1M events. If a catch-up
-from far behind hits `statement_timeout`, it fails with `UNAVAILABLE` and
-the consumer retries from the same checkpoint, hitting it again. Raise
-`PG_STATEMENT_TIMEOUT_MS` for such deployments, or catch up with paged
-`ReadAll` first.
+A subscription is not one long query. Replay and live delivery read keyset
+pages of at most 1000 rows
+([#369](https://github.com/syntropic137/event-sourcing-platform/issues/369));
+the live phase queries only per wake-up (NOTIFY or 5 s fallback poll). Every
+page query goes through the same pool, session timeouts and client deadline,
+and each reads one page, so neither `statement_timeout` nor the deadline
+grows with history, and idle live subscriptions run no query that could
+time out. A catch-up from far behind is many short queries, never one long
+one.
 
 ## Sizing the pool
 
@@ -135,7 +131,6 @@ the consumer retries from the same checkpoint, hitting it again. Raise
   by `PG_ACQUIRE_TIMEOUT_MS`): a legitimate migration may take long, so no
   timeout fits. A path that stalls mid-migration hangs startup; the process
   never becomes ready, which readiness probes see.
-- **Unpaged replay** (#369): see [Subscriptions](#subscriptions).
 - **LISTEN reconnects**: sqlx cleans up a dropped listener connection in a
   background task without a timeout. On a dead path each such task (at most
   one per reconnect, 40 s or more apart) lives until the OS abandons the

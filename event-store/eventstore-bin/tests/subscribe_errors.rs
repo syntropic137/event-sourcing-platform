@@ -43,6 +43,7 @@ async fn postgres_subscription_query_failure_reaches_client_as_unavailable() {
     for cap in [
         eventstore_core::capabilities::SUBSCRIPTION_ERRORS_SURFACED,
         eventstore_core::capabilities::UNDECODABLE_EVENTS_SURFACED,
+        eventstore_core::capabilities::LITERAL_SUBSCRIPTION_PREFIX,
     ] {
         assert!(info.capabilities.iter().any(|c| c == cap), "{cap}");
     }

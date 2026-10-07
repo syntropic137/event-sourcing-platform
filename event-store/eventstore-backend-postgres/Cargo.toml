@@ -63,3 +63,13 @@ required-features = ["test-utils"]
 name = "it_append_batch"
 path = "tests/it_append_batch.rs"
 required-features = ["test-utils"]
+
+[[test]]
+name = "it_subscribe_prefix"
+path = "tests/it_subscribe_prefix.rs"
+required-features = ["test-utils"]
+
+[[test]]
+name = "it_subscribe_paging"
+path = "tests/it_subscribe_paging.rs"
+required-features = ["test-utils"]

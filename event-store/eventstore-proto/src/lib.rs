@@ -31,4 +31,8 @@ pub mod capabilities {
     /// with `DATA_LOSS` at its position; later events are never delivered past
     /// it and it is never skipped (#351, v0.17.0).
     pub const UNDECODABLE_EVENTS_SURFACED: &str = "undecodable_events_surfaced";
+
+    /// `SubscribeRequest.aggregate_id_prefix` is matched literally: `\`, `%`
+    /// and `_` are ordinary characters, never wildcards (#361, v0.17.0).
+    pub const LITERAL_SUBSCRIPTION_PREFIX: &str = "literal_subscription_prefix";
 }
