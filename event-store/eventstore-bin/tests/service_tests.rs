@@ -21,11 +21,13 @@ const TENANT: &str = "tenant-service";
 /// behavior test: commit order (memory `live_order.rs`, postgres
 /// `it_commit_order.rs`), subscription errors (`subscribe_errors.rs`,
 /// `it_subscribe_faults.rs`, memory lag test), undecodable events
-/// (`subscribe_errors.rs`, `it_subscribe_undecodable.rs`).
-const ALL_CAPABILITIES: [&str; 3] = [
+/// (`subscribe_errors.rs`, `it_subscribe_undecodable.rs`), literal prefixes
+/// (memory `live_order.rs`, postgres `it_subscribe_prefix.rs`).
+const ALL_CAPABILITIES: [&str; 4] = [
     eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE,
     eventstore_core::capabilities::SUBSCRIPTION_ERRORS_SURFACED,
     eventstore_core::capabilities::UNDECODABLE_EVENTS_SURFACED,
+    eventstore_core::capabilities::LITERAL_SUBSCRIPTION_PREFIX,
 ];
 
 struct Service {

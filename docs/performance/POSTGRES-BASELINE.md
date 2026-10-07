@@ -321,8 +321,14 @@ Takeaways:
 5. **Subscription catch-up buffers the whole history.** `subscribe()` loads
    every matching row before yielding the first event. At 1M events: 3.6 s to
    first event and ~1.9 GB server RSS (from ~390 MB), which stays allocated.
-   Throughput once streaming is fine (~230k ev/s). (`subscribe()` is being
-   reworked separately; rerun this bench on that change.)
+   Throughput once streaming is fine (~230k ev/s). **Fixed by #369:**
+   `subscribe()` now reads keyset pages of 1000 rows on demand, so time to
+   first event and per-subscriber memory no longer grow with history. Quick
+   profile (10k history, 3 runs each, host load 25 to 300, so noisy): first
+   event 59 to 262 ms before, 13 to 47 ms after; server RSS after catch-up
+   33 to 45 MB before, 19 to 26 MB after; caught up 69 to 282 ms in both.
+   The 1M figures above predate the fix; rerun the full profile to replace
+   them.
 6. **Live delivery cost grows with subscribers.** Each subscriber runs its own
    query per wake-up on the shared pool. At 250 ev/s, delivery p99 goes from
    13 ms (1 subscriber) to 59 ms (8) to 297 ms (32), and append p99 rises with
@@ -355,7 +361,7 @@ is where tails stop being predictable.
 | Single-tenant appends, batched (10/request) | ≤ 1,000 ev/s | ~2,800 ev/s | finding 2 |
 | All tenants combined, 1 event each | ≤ 600 ev/s | ~1,300 ev/s | findings 1, 3 |
 | Live subscribers per tenant at ≤ 250 ev/s | ≤ 8 (delivery p99 < ~60 ms) | 32 (p99 ~300 ms, slows appends) | finding 6 |
-| Subscriber catch-up from 0 | ≤ 100k events per catch-up (< 0.5 s, < 400 MB RSS) | 1M (3.6 s stall, ~1.9 GB RSS per concurrent catch-up) | finding 5 |
+| Subscriber catch-up from 0 | ≤ 100k events per catch-up (< 0.5 s, < 400 MB RSS) | 1M (3.6 s stall, ~1.9 GB RSS per concurrent catch-up; before #369) | finding 5 |
 | Projection rebuild via paged `ReadAll` | ~70k ev/s, i.e. ~15 s per 1M events | n/a | replay table |
 | Aggregate rehydration (100 events) | ≤ 1,000/s | ~2,000/s | `ReadStream` table |
 | Slow consumers | lag is safe; drain time = backlog / consume rate | n/a | finding 7 |
