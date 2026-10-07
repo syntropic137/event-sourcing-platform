@@ -55,6 +55,9 @@ class ServerInfo:
 
     def missing_capabilities(self, required: Sequence[str]) -> list[str]:
         """The subset of ``required`` the server does not advertise, in order."""
+        if isinstance(required, str):
+            # A bare string is a Sequence[str] of characters; treat it as one name.
+            required = [required]
         return [c for c in required if c not in self.capabilities]
 
     def version_at_least(self, minimum: str) -> bool:

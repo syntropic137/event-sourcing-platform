@@ -52,6 +52,8 @@ class TestServerInfoHelpers:
         info = _reported("0.17.0", COMMIT_ORDERED)
         assert info.missing_capabilities([COMMIT_ORDERED]) == []
         assert info.missing_capabilities(["future_flag", COMMIT_ORDERED]) == ["future_flag"]
+        assert info.missing_capabilities("future_flag") == ["future_flag"]
+        assert info.missing_capabilities(COMMIT_ORDERED) == []
         assert LEGACY_SERVER_INFO.is_legacy
         assert LEGACY_SERVER_INFO.missing_capabilities([COMMIT_ORDERED]) == [COMMIT_ORDERED]
 
