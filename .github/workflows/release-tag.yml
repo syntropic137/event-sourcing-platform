@@ -1,0 +1,127 @@
+name: Release Tag
+
+# Creates the GitHub release vX.Y.Z for a commit on `release` once CI has
+# passed on it, then dispatches the publish workflows.
+#
+# Pushes to `release` only arrive via PRs that passed release-gate.yml
+# (branch protection requires "Release Gate", admins included), so the
+# push-CI success here is the last check before tagging.
+#
+# A release created with GITHUB_TOKEN does not fire `release` events, so
+# publish.yml and release-container.yml are started explicitly with
+# `gh workflow run --ref vX.Y.Z` (workflow_dispatch is exempt from that rule).
+# No extra secret is needed.
+#
+# Idempotent: if tag vX.Y.Z already exists at this SHA, nothing is created or
+# dispatched. If it exists at another SHA, the job fails.
+# Recovery when a dispatch failed after the release was created:
+#   gh workflow run publish.yml --ref vX.Y.Z -f tag=vX.Y.Z
+#   gh workflow run release-container.yml --ref vX.Y.Z -f version=vX.Y.Z
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [release]
+
+permissions: {}
+
+# Per-SHA: reruns for one commit serialize; other commits never drop each other.
+concurrency:
+  group: release-tag-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  # Runs repository code (bump_version.py), so it gets read-only access.
+  version:
+    name: Read version
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'release' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Checkout validated commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(python3 scripts/bump_version.py --current)
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Unexpected version '$VERSION'"
+            exit 1
+          fi
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version v${VERSION}"
+
+  # No checkout: only gh API calls, with the write token.
+  tag:
+    name: Create release
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write  # create tag + release
+      actions: write   # dispatch publish workflows
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      TAG: ${{ needs.version.outputs.tag }}
+
+    steps:
+      - name: Check tag
+        id: check
+        run: |
+          if TAG_SHA=$(gh api "repos/${GITHUB_REPOSITORY}/commits/refs/tags/${TAG}" --jq .sha 2>/dev/null); then
+            if [ "$TAG_SHA" != "$SHA" ]; then
+              echo "::error::Tag ${TAG} exists at ${TAG_SHA}, not ${SHA}. Version not bumped?"
+              exit 1
+            else
+              echo "Tag ${TAG} already exists at ${SHA}, nothing to do"
+            fi
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          # Notes: body of the merged main -> release PR that produced SHA.
+          # The body is untrusted text; it only ever goes to a file.
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${SHA}/pulls" \
+            --jq '[.[] | select(.merged_at != null and .base.ref == "release")][0].body // ""' \
+            > notes.md
+          if [ -n "$(tr -d '[:space:]' < notes.md)" ]; then
+            gh release create "$TAG" --target "$SHA" --title "$TAG" --notes-file notes.md
+          else
+            echo "No merged PR body found, using generated notes"
+            gh release create "$TAG" --target "$SHA" --title "$TAG" --generate-notes
+          fi
+
+      - name: Dispatch publish workflows
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          # Dispatch both even if one fails, then fail the job.
+          rc=0
+          gh workflow run publish.yml --ref "$TAG" -f tag="$TAG" || rc=1
+          gh workflow run release-container.yml --ref "$TAG" -f version="$TAG" || rc=1
+          {
+            echo "## Released ${TAG}"
+            echo ""
+            echo "Commit: \`${SHA}\`"
+            echo "Dispatched: publish.yml, release-container.yml (rc=${rc})"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
