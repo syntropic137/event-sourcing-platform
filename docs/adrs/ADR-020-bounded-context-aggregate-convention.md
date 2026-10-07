@@ -182,6 +182,85 @@ class SecurityPolicy:
    Consider moving to: orchestration/slices/ or sessions/slices/
 ```
 
+### Decision 7: Each Consuming Bounded Context Owns a Ubiquitous Language File
+
+**ESP supplies the machinery. It does NOT supply the vocabulary.**
+
+A bounded context is defined by the language that holds inside it. The
+decisions above make a context's STRUCTURE visible and checkable; none of them
+makes its MEANING reviewable. A context whose words are not written down
+offers nothing for a reader to check the model against, so "bounded context"
+drifts toward meaning "directory".
+
+A vocabulary file is evidence of the model, not proof of it, and a check for
+its presence is a presence check: it can say a context never wrote its words
+down, never that the words are right or shared. That is still worth having -
+the gap it catches is the common one - but it should not be mistaken for
+validating meaning.
+
+Every consuming repository therefore owns one vocabulary file per bounded
+context. **What is required is that each context has one and that its file
+identifies which context it speaks for.** The path is the consumer's to choose.
+
+The recommended default:
+
+```
+docs/architecture/<bounded-context>-ubiquitous-language.md
+```
+
+The `<bounded-context>` segment equals the context's directory name under the
+contexts root, so the file name alone identifies its context: two vocabularies
+cannot be confused and an orphaned file is detectable. A consumer that keeps
+docs beside the code, or has no `docs/` at all, satisfies this decision by
+applying the same naming rule wherever its documentation lives - ESP does not
+dictate a repository layout, and a check for this must take the location as
+configuration rather than assume one.
+
+**Keep authored vocabulary clear of generated output.** `docs/architecture` is
+also where the VSA visualizer is conventionally pointed (`--output
+docs/architecture`), and ESP's own integration target clears that directory
+before regenerating into it. Authored files in a directory something else
+regenerates are a data-loss hazard, so a consumer that generates there should
+either send generated output elsewhere or keep vocabularies in a sibling
+directory. The naming rule is what matters; the parent directory is not.
+
+**This is not ESP's glossary.** ESP's own documentation covers event-sourcing
+mechanics: aggregate, projection, checkpoint, process manager. Those are the
+same everywhere. A bounded context's vocabulary covers domain meaning, which is
+different in every context and, deliberately, may differ BETWEEN contexts in
+the same repository. One consumer has `resume` meaning "continue an execution
+that did not finish" in one context and "un-pause a trigger rule" in another.
+Both are correct. That is what a boundary is for, and an UNSCOPED shared
+glossary obscures the distinction: it can carry both meanings only by naming
+the context for each, which is per-context ownership written in one file and
+harder to keep honest as contexts are added.
+
+**What each file should carry**, beyond the terms themselves:
+
+- **Words the context deliberately does NOT use.** A reserved or retired word
+  is as load-bearing as an adopted one; without this section a renamed concept
+  drifts back under its old name within months.
+- **Genuine uncertainty, marked as such, with an issue.** A vocabulary that
+  hides its gaps lies about how well the model is understood.
+
+**No VSA check exists for this today.** The shape one would take, if #311
+ships it:
+
+```
+❌ ERROR: bounded context 'billing' has no ubiquitous language file
+   Expected: <configured docs root>/billing-ubiquitous-language.md
+❌ ERROR: metrics-ubiquitous-language.md names no bounded context
+```
+
+Tracked as [event-sourcing-platform#311](https://github.com/syntropic137/event-sourcing-platform/issues/311).
+A reference implementation of the check, and five worked vocabularies, exist in
+the syntropic137 repository at `ci/fitness/code_quality/test_ubiquitous_language.py`
+and `docs/architecture/*-ubiquitous-language.md`. Until the check ships here,
+consumers should copy it rather than go without.
+
+A check that scans an empty context list passes for the wrong reason, so it
+must assert it found contexts before checking any of them.
+
 ## Consequences
 
 ### Positive
@@ -208,6 +287,15 @@ class SecurityPolicy:
 | Root in folder | Root in `aggregate_*` | "Move to aggregate_* folder" |
 | Entities co-located | Entity in same folder as root | "Move entity to aggregate folder" |
 | No cross-context imports | Import analysis | "Boundary violation" |
+
+### Proposed, not implemented
+
+These do NOT run today. Listed separately so the table above stays a record of
+what VSA actually checks.
+
+| Rule | Check | Tracked |
+|------|-------|---------|
+| BC has a vocabulary | a `<bc>-ubiquitous-language.md` exists under the configured docs root | [#311](https://github.com/syntropic137/event-sourcing-platform/issues/311) |
 
 ## Examples
 

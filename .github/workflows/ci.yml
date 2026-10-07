@@ -1,9 +1,17 @@
 name: CI
 
 on:
+  # Only long-lived branches trigger on push. Feature and dependabot branches
+  # are validated by the pull_request run below, which tests the merge commit
+  # (strictly stronger evidence for merge safety than the raw head).
+  # Firing on both events previously ran the whole suite twice per commit.
   push:
-    branches: ["**"]
+    branches: [main, release]
+  # PRs into `release` are validated by release-gate.yml, which calls this
+  # workflow as `ci-check` and gates on it. Self-triggering here as well would
+  # run the identical suite a second time for the same SHA.
   pull_request:
+    branches-ignore: [release]
   workflow_call:
   workflow_dispatch:
 
@@ -30,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -46,7 +54,7 @@ jobs:
           cache-targets: true
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
       - name: QA fast
         run: make -C event-store qa-fast
@@ -58,7 +66,7 @@ jobs:
     # Keep independent so it runs in parallel with other jobs
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -71,7 +79,7 @@ jobs:
           cache-targets: true
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
       - name: Coverage setup
         run: make -C event-store cov-setup
@@ -88,7 +96,7 @@ jobs:
 
       - name: Upload coverage artifacts
         if: always()
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: event-store-coverage
           path: |
@@ -98,9 +106,23 @@ jobs:
   rust_sdk_fast:
     name: SDK (Rust) • qa-fast
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+        env:
+          POSTGRES_USER: eventstore
+          POSTGRES_PASSWORD: eventstore-ci
+          POSTGRES_DB: eventstore
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U eventstore"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -113,10 +135,18 @@ jobs:
           cache-targets: true
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
 
       - name: QA fast
         run: make -C event-sourcing/rust qa-fast
+
+      # Same live-server tests against the Postgres event store backend, plus
+      # the Postgres projection store (feature "postgres"). The Postgres tests
+      # fail rather than skip under CI when TEST_DATABASE_URL is missing.
+      - name: Tests (Postgres backend + postgres feature)
+        run: make -C event-sourcing/rust test-postgres
+        env:
+          TEST_DATABASE_URL: postgres://eventstore:eventstore-ci@localhost:5432/eventstore
 
   ts_sdk:
     name: SDK (TypeScript) • qa + tests (Node ${{ matrix.node-version }})
@@ -126,15 +156,15 @@ jobs:
         node-version: [20, 24]
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
           run_install: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
@@ -148,7 +178,7 @@ jobs:
           protoc --version
 
       - name: Cache generated protobuf files
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             event-store/sdks/sdk-ts/src/gen
@@ -157,7 +187,7 @@ jobs:
             protobuf-gen-${{ runner.os }}-
 
       - name: Cache TypeScript build outputs
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
         with:
           path: |
             event-sourcing/typescript/dist
@@ -180,35 +210,101 @@ jobs:
       - name: TypeScript SDK tests
         run: pnpm --filter "@syntropic137/event-sourcing-typescript" run test
 
+      - name: Event store TS client tests
+        run: |
+          pnpm --filter "@eventstore/sdk-ts" run gen
+          pnpm --filter "@eventstore/sdk-ts" run test
+
   python_sdk_fast:
     name: SDK (Python) • qa-fast
     runs-on: ubuntu-latest
+    # The event-store contract suite (tests/contract) holds MemoryEventStoreClient
+    # to the real server. It runs against eventstore-bin built from THIS commit,
+    # on both backends; under CI an unset ESP_EVENT_STORE_ADDRESS fails (#344).
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+        env:
+          POSTGRES_USER: eventstore
+          POSTGRES_PASSWORD: eventstore-ci
+          POSTGRES_DB: eventstore
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U eventstore"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
 
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.14"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           enable-cache: true
           cache-dependency-glob: "event-sourcing/python/uv.lock"
 
-      - name: Python SDK QA
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: "event-store -> target"
+          shared-key: "event-store-bin"
+          cache-targets: true
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Build event store server
+        working-directory: event-store
+        run: cargo build -p eventstore-bin
+
+      - name: Start event store servers (memory + postgres backends)
+        working-directory: event-store
+        env:
+          DATABASE_URL: postgres://eventstore:eventstore-ci@localhost:5432/eventstore
+        run: |
+          BACKEND=memory BIND_ADDR=127.0.0.1:50051 nohup ./target/debug/eventstore-bin > "$RUNNER_TEMP/es-memory.log" 2>&1 &
+          BACKEND=postgres BIND_ADDR=127.0.0.1:50052 nohup ./target/debug/eventstore-bin > "$RUNNER_TEMP/es-postgres.log" 2>&1 &
+          for port in 50051 50052; do
+            timeout 60 bash -c "until (exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null; do sleep 0.5; done" \
+              || { echo "event store on :$port did not start"; cat "$RUNNER_TEMP"/es-*.log; exit 1; }
+            echo "event store listening on :$port"
+          done
+
+      - name: Python SDK QA (contract vs memory-backend server)
+        env:
+          ESP_EVENT_STORE_ADDRESS: 127.0.0.1:50051
         run: make -C event-sourcing/python qa
+
+      - name: Event store contract vs postgres-backend server
+        working-directory: event-sourcing/python
+        env:
+          ESP_EVENT_STORE_ADDRESS: 127.0.0.1:50052
+        run: uv run pytest tests/contract -m integration -v --no-cov -p no:cacheprovider
+
+      - name: Event store server logs
+        if: failure()
+        run: cat "$RUNNER_TEMP"/es-*.log
 
       - name: Object ratchet — no increases allowed
         if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          git fetch origin ${{ github.base_ref }} --depth=1
+          git fetch origin "$BASE_REF" --depth=1
           branch_max=$(grep '^OBJECT_RATCHET_MAX[[:space:]]*:=' event-sourcing/python/Makefile | head -n1 | grep -oE '[0-9]+')
-          base_max=$(git show origin/${{ github.base_ref }}:event-sourcing/python/Makefile \
+          base_max=$(git show "origin/${BASE_REF}:event-sourcing/python/Makefile" \
             | grep '^OBJECT_RATCHET_MAX[[:space:]]*:=' | head -n1 | grep -oE '[0-9]+')
-          echo "Base (${{ github.base_ref }}): ${base_max}  PR branch: ${branch_max}"
+          echo "Base (${BASE_REF}): ${base_max}  PR branch: ${branch_max}"
           if [ "$branch_max" -gt "$base_max" ]; then
             echo "❌ OBJECT_RATCHET_MAX increased from ${base_max} → ${branch_max}."
             echo "The ratchet only goes down. Replace object annotations with concrete types."
@@ -223,15 +319,15 @@ jobs:
     needs: ts_sdk # Examples depend on TypeScript SDK
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
           run_install: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24
           cache: pnpm

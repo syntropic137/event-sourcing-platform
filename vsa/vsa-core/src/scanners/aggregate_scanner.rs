@@ -21,11 +21,7 @@ pub struct AggregateScanner<'a> {
 impl<'a> AggregateScanner<'a> {
     /// Create a new aggregate scanner (pascal_case convention by default)
     pub fn new(config: &'a AggregateConfig, root: &'a Path) -> Self {
-        Self {
-            config,
-            root,
-            filename_convention: FilenameConvention::default(),
-        }
+        Self { config, root, filename_convention: FilenameConvention::default() }
     }
 
     /// Set the filename convention used to detect aggregate files.

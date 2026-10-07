@@ -499,13 +499,8 @@ impl ValidationRule for SliceIsolationRule {
         let contexts = scanner.scan_contexts()?;
 
         // Slices excluded from isolation checks (shared read models)
-        let excluded: HashSet<&str> = ctx
-            .config
-            .validation
-            .exclude_from_isolation
-            .iter()
-            .map(|s| s.as_str())
-            .collect();
+        let excluded: HashSet<&str> =
+            ctx.config.validation.exclude_from_isolation.iter().map(|s| s.as_str()).collect();
 
         for context in contexts {
             let slices_path = context.path.join("slices");
@@ -931,11 +926,7 @@ mod tests {
 
         // Test file imports from another slice — should NOT be flagged
         let test_file = context_path.join("slices/slice1/test_integration.py");
-        std::fs::write(
-            &test_file,
-            "from slices.slice2.handler import Slice2Handler\n",
-        )
-        .unwrap();
+        std::fs::write(&test_file, "from slices.slice2.handler import Slice2Handler\n").unwrap();
 
         let rule = SliceIsolationRule;
         let mut report = EnhancedValidationReport::default();
@@ -952,11 +943,8 @@ mod tests {
 
         // conftest.py imports from another slice — should NOT be flagged
         let conftest_file = context_path.join("slices/slice1/conftest.py");
-        std::fs::write(
-            &conftest_file,
-            "from slices.slice2.handler import Slice2Handler\n",
-        )
-        .unwrap();
+        std::fs::write(&conftest_file, "from slices.slice2.handler import Slice2Handler\n")
+            .unwrap();
 
         let rule = SliceIsolationRule;
         let mut report = EnhancedValidationReport::default();
@@ -973,11 +961,7 @@ mod tests {
 
         // Source file imports from slices.conftest — "conftest" is not a real slice
         let handler_file = context_path.join("slices/slice1/handler.py");
-        std::fs::write(
-            &handler_file,
-            "from slices.conftest import some_fixture\n",
-        )
-        .unwrap();
+        std::fs::write(&handler_file, "from slices.conftest import some_fixture\n").unwrap();
 
         let rule = SliceIsolationRule;
         let mut report = EnhancedValidationReport::default();
@@ -1011,8 +995,7 @@ mod tests {
             exceptions: Vec::new(),
             layer_separation: None,
         };
-        config.validation.exclude_from_isolation =
-            vec!["list_repos".to_string()];
+        config.validation.exclude_from_isolation = vec!["list_repos".to_string()];
         let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
 
         // Create context with slices including the excluded one
@@ -1034,11 +1017,7 @@ mod tests {
 
         rule.validate(&ctx, &mut report).unwrap();
 
-        assert_eq!(
-            report.errors.len(),
-            0,
-            "Imports from excluded slices should not be flagged"
-        );
+        assert_eq!(report.errors.len(), 0, "Imports from excluded slices should not be flagged");
     }
 
     #[test]
@@ -1062,8 +1041,7 @@ mod tests {
             layer_separation: None,
         };
         // Exclude list_repos but NOT other_slice
-        config.validation.exclude_from_isolation =
-            vec!["list_repos".to_string()];
+        config.validation.exclude_from_isolation = vec!["list_repos".to_string()];
         let ctx = ValidationContext::new(config, temp_dir.path().to_path_buf());
 
         let context_path = temp_dir.path().join("org");
@@ -1073,11 +1051,8 @@ mod tests {
 
         // slice_a imports from slice_b (NOT excluded) — SHOULD be flagged
         let handler_file = context_path.join("slices/slice_a/handler.py");
-        std::fs::write(
-            &handler_file,
-            "from slices.slice_b.handler import SliceBHandler\n",
-        )
-        .unwrap();
+        std::fs::write(&handler_file, "from slices.slice_b.handler import SliceBHandler\n")
+            .unwrap();
 
         let rule = SliceIsolationRule;
         let mut report = EnhancedValidationReport::default();
@@ -1237,18 +1212,13 @@ impl LayerSeparationRule {
             .filter(|e| e.file_type().is_file())
             .filter(|e| !is_test_or_conftest(e.path()))
             .filter(|e| {
-                e.path()
-                    .extension()
-                    .map_or(false, |ext| ext == "py" || ext == "ts" || ext == "rs")
+                e.path().extension().is_some_and(|ext| ext == "py" || ext == "ts" || ext == "rs")
             })
         {
             let file_path = entry.path();
 
             // Skip __init__.py (public API definitions)
-            if file_path
-                .file_name()
-                .map_or(false, |n| n == "__init__.py")
-            {
+            if file_path.file_name().is_some_and(|n| n == "__init__.py") {
                 continue;
             }
 
@@ -1268,7 +1238,7 @@ impl LayerSeparationRule {
                 .config
                 .exceptions
                 .iter()
-                .filter(|e| e.rule == "VSA206" && rel_path.ends_with(&e.file))
+                .filter(|e| e.matches("VSA206", &rel_path))
                 .map(|e| e.budget)
                 .sum();
 
@@ -1286,11 +1256,7 @@ impl LayerSeparationRule {
                                 severity: Severity::Error,
                                 message: format!(
                                     "{} file '{}' imports forbidden package '{}': '{}' (line {})",
-                                    layer_name,
-                                    rel_path,
-                                    pkg,
-                                    import.module,
-                                    import.line_number,
+                                    layer_name, rel_path, pkg, import.module, import.line_number,
                                 ),
                                 suggestions: vec![
                                     Suggestion::manual(
@@ -1472,11 +1438,7 @@ mod layer_separation_tests {
         let mut report = EnhancedValidationReport::default();
 
         rule.validate(&ctx, &mut report).unwrap();
-        assert_eq!(
-            report.errors.len(),
-            0,
-            "Violation within budget should not be reported"
-        );
+        assert_eq!(report.errors.len(), 0, "Violation within budget should not be reported");
     }
 
     #[test]
@@ -1529,10 +1491,6 @@ mod layer_separation_tests {
         let mut report = EnhancedValidationReport::default();
 
         rule.validate(&ctx, &mut report).unwrap();
-        assert_eq!(
-            report.errors.len(),
-            0,
-            "Package prefix match should respect module boundaries"
-        );
+        assert_eq!(report.errors.len(), 0, "Package prefix match should respect module boundaries");
     }
 }

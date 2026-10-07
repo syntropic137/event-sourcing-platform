@@ -39,13 +39,12 @@ impl ValidationRuleSet {
             CrossContextPublicApiRule, DomainPurityRule, EventsIsolationRule,
             IntegrationEventNamingRule, IntegrationEventsLocationRule, NoCircularDependenciesRule,
             NoCrossSliceImportsRule, NoDuplicateIntegrationEventsRule, PortIsolationRule,
-            ProcessManagerStructureRule, ProjectionEventSubscriptionRule,
-            ProjectionPurityRule, RequireAggregatesInDomainRootRule,
-            RequireBusesInInfrastructureRule, RequireCommandsInDomainRule,
-            RequireEventsInDomainRule, RequireHandlerForQueryRule, RequirePortSuffixRule,
-            RequirePortsInPortsFolderRule, RequireProjectionForQueryRule, RequireSharedFolderRule,
-            RequireSliceLocationRule, RequireValueObjectsNamingRule, SliceIsolationRule,
-            ThinAdapterRule,
+            ProcessManagerStructureRule, ProjectionEventSubscriptionRule, ProjectionPurityRule,
+            RequireAggregatesInDomainRootRule, RequireBusesInInfrastructureRule,
+            RequireCommandsInDomainRule, RequireEventsInDomainRule, RequireHandlerForQueryRule,
+            RequirePortSuffixRule, RequirePortsInPortsFolderRule, RequireProjectionForQueryRule,
+            RequireSharedFolderRule, RequireSliceLocationRule, RequireValueObjectsNamingRule,
+            SliceIsolationRule, ThinAdapterRule,
         };
 
         let rules: Vec<Box<dyn ValidationRule>> = vec![
@@ -85,13 +84,13 @@ impl ValidationRuleSet {
             Box::new(ApplicationIsolationRule), // VSA030: Application isolation (no infra/slices)
             Box::new(SliceIsolationRule), // VSA031: Slice isolation (no cross-slice)
             // Consumer pattern rules (ADR-025)
-            Box::new(ProjectionPurityRule),          // VSA032: Projection purity (whitelist)
-            Box::new(ProcessManagerStructureRule),    // VSA033: ProcessManager structure
+            Box::new(ProjectionPurityRule), // VSA032: Projection purity (whitelist)
+            Box::new(ProcessManagerStructureRule), // VSA033: ProcessManager structure
             // Cross-context boundary rules
-            Box::new(CrossContextPublicApiRule),      // VSA204
-            Box::new(ContextPublicApiExistsRule),     // VSA205
+            Box::new(CrossContextPublicApiRule),  // VSA204
+            Box::new(ContextPublicApiExistsRule), // VSA205
             // Layer separation rules
-            Box::new(super::dependency_rules::LayerSeparationRule),  // VSA206
+            Box::new(super::dependency_rules::LayerSeparationRule), // VSA206
             // Slice isolation rules (legacy)
             Box::new(NoCrossSliceImportsRule),
             Box::new(ThinAdapterRule),

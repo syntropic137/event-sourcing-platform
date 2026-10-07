@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use eventstore_core::fingerprint::canonical_metadata_bytes;
 use eventstore_core::{proto, EventStore as EventStoreTrait, StoreError, StoreStream};
 use futures::stream;
-use prost::Message;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, types::Json, PgPool, Row};
 use tokio::sync::broadcast;
@@ -17,6 +17,11 @@ const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 const NOTIFY_CHANNEL: &str = "eventstore_events";
 const NOTIFY_BROADCAST_CAPACITY: usize = 256;
 const FALLBACK_POLL_SECS: u64 = 5;
+
+/// First key of the two-key advisory lock that orders appends per tenant, so
+/// it cannot collide with any other advisory lock in the database. Arbitrary,
+/// fixed: changing it while two versions run side by side breaks the ordering.
+const APPEND_ORDER_LOCK_NAMESPACE: i32 = 0x0E5_1545;
 
 /// Payload sent via PostgreSQL NOTIFY and the in-process broadcast channel.
 /// Format: `"{tenant_id}:{last_global_nonce}"`.
@@ -52,15 +57,10 @@ fn batch_fingerprint(events: &[proto::EventData]) -> Vec<u8> {
     let mut hasher = Sha256::new();
     for ev in events {
         if let Some(meta) = &ev.meta {
-            // Hash metadata fields and payload
-            // Note: We normalize by zeroing out recorded_time_unix_ms and global_nonce
-            // since these are set by the store and not part of the client-provided data
-            let mut normalized_meta = meta.clone();
-            normalized_meta.recorded_time_unix_ms = 0;
-            normalized_meta.global_nonce = 0;
-
-            // Hash the normalized metadata and payload
-            hasher.update(normalized_meta.encode_to_vec());
+            // Server-assigned fields zeroed, headers in key order: an identical
+            // retry must hash identically. Byte-compatible with fingerprints
+            // stored before the headers fix for requests with <= 1 header.
+            hasher.update(canonical_metadata_bytes(meta));
             hasher.update(&ev.payload);
         }
     }
@@ -258,6 +258,23 @@ fn map_db_error(e: sqlx::Error) -> StoreError {
 
 #[async_trait]
 impl EventStoreTrait for PostgresStore {
+    fn backend_kind(&self) -> &'static str {
+        "postgres"
+    }
+
+    fn capabilities(&self) -> Vec<&'static str> {
+        // #337: appends take a per-tenant transaction-scoped advisory lock
+        // before allocating global nonces, so within a tenant they become
+        // visible in commit order.
+        // #350: failed subscription queries end the stream with UNAVAILABLE.
+        // #351: undecodable rows end subscriptions/reads with DATA_LOSS.
+        vec![
+            eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE,
+            eventstore_core::capabilities::SUBSCRIPTION_ERRORS_SURFACED,
+            eventstore_core::capabilities::UNDECODABLE_EVENTS_SURFACED,
+        ]
+    }
+
     async fn append(&self, req: proto::AppendRequest) -> Result<proto::AppendResponse, StoreError> {
         if req.tenant_id.is_empty() {
             return Err(StoreError::Unauthenticated(
@@ -389,6 +406,39 @@ impl EventStoreTrait for PostgresStore {
                 )));
             }
         }
+
+        // Commit order must equal global_nonce order (syntropic137#1545).
+        //
+        // global_nonce is a BIGSERIAL: `nextval()` hands it out at INSERT, but
+        // the row only becomes visible at COMMIT. Without this lock a slow
+        // append can hold nonce N while a faster one commits N+1; a subscriber
+        // polling `global_nonce > cursor` then yields N+1, advances past N, and
+        // never sees N even after it commits. Nothing errors: the event is in
+        // the store, behind every cursor. That is how a WorkflowExecutionStarted
+        // at 39502 was skipped by every projection in syntropic137#1545.
+        //
+        // Held from before the first nonce is drawn until commit/rollback.
+        // Postgres releases transaction locks only after the commit is visible
+        // to new snapshots, so the next append for this tenant cannot draw a
+        // nonce until every lower nonce of the tenant is committed or rolled
+        // back. A reader of `global_nonce > cursor` can therefore never see a
+        // higher nonce while a lower one of the same tenant is still in flight.
+        //
+        // Per tenant because every read path (read_all, subscribe) filters by
+        // tenant_id. A reader that spans tenants would need a global lock.
+        //
+        // Deadlocks: taken after the FOR UPDATE row locks above. While holding
+        // it, an append only writes rows of its own aggregate and idempotency
+        // key, which another waiter can hold only if this append already lost
+        // the optimistic check (it then fails on the committed row, it does
+        // not wait). Postgres' deadlock detector covers advisory locks too.
+        // Cost: one tenant's INSERT..COMMIT windows are serialized.
+        sqlx::query("SELECT pg_advisory_xact_lock($1, hashtext($2))")
+            .bind(APPEND_ORDER_LOCK_NAMESPACE)
+            .bind(&tenant_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_db_error)?;
 
         let mut last_global_nonce = current_last_global;
         let mut assigned_events: Vec<proto::EventData> = Vec::with_capacity(events.len());
@@ -722,6 +772,20 @@ impl EventStoreTrait for PostgresStore {
         })
     }
 
+    /// Catch-up then live subscription over the tenant's global order.
+    ///
+    /// Delivery is at-least-once, in `global_nonce` order, starting at
+    /// `from_global_nonce` (inclusive). A response with `event: None` marks
+    /// "caught up" (end of replay) or is a live keep-alive.
+    ///
+    /// Failures are never hidden. If a replay or live query fails, the stream
+    /// yields one [`StoreError::Unavailable`] (gRPC `UNAVAILABLE`) and ends;
+    /// no caught-up marker is sent for a replay that failed, and the internal
+    /// cursor is not advanced past the last delivered event. The consumer
+    /// reconnects with `from_global_nonce = last processed global_nonce + 1`
+    /// (its own checkpoint). Reconnecting from an earlier position, e.g. when a
+    /// checkpoint was not saved yet, re-delivers events; consumers must be
+    /// idempotent. See ADR-026.
     fn subscribe(&self, req: proto::SubscribeRequest) -> StoreStream<proto::SubscribeResponse> {
         let pool = self.pool.clone();
         let tenant_id = req.tenant_id.clone();
@@ -735,11 +799,16 @@ impl EventStoreTrait for PostgresStore {
                 items: Vec<proto::EventData>,
                 idx: usize,
                 cursor: i64,
+                /// Yielded (and the stream ended) once `items` are delivered:
+                /// the row after the last item could not be decoded.
+                then_fail: Option<StoreError>,
             },
             Live {
                 cursor: i64,
                 interval: Interval,
             },
+            /// A query failed and the error was yielded; the stream ends.
+            Failed,
         }
 
         // State includes the broadcast receiver for LISTEN/NOTIFY wake-ups.
@@ -766,67 +835,34 @@ impl EventStoreTrait for PostgresStore {
             |(pool, tenant, prefix, cursor, phase, mut notify_rx): State| async move {
                 let mut phase = phase;
                 if phase.is_none() {
-                    let rows = if prefix.is_empty() {
-                        sqlx::query(
-                            r#"
-                            SELECT * FROM events
-                            WHERE tenant_id = $1 AND global_nonce >= $2
-                            ORDER BY global_nonce ASC
-                            "#,
-                        )
-                        .bind(&tenant)
-                        .bind(cursor)
-                        .fetch_all(&pool)
-                        .await
-                        .unwrap_or_default()
-                    } else {
-                        let like = format!("{prefix}%");
-                        sqlx::query(
-                            r#"
-                            SELECT * FROM events
-                            WHERE tenant_id = $1 AND global_nonce >= $2 AND aggregate_id LIKE $3
-                            ORDER BY global_nonce ASC
-                            "#,
-                        )
-                        .bind(&tenant)
-                        .bind(cursor)
-                        .bind(like)
-                        .fetch_all(&pool)
-                        .await
-                        .unwrap_or_default()
-                    };
+                    // Replay is inclusive of from_global_nonce (`cursor` here).
+                    let rows =
+                        match fetch_events_after(&pool, &tenant, &prefix, cursor.saturating_sub(1))
+                            .await
+                        {
+                            Ok(rows) => rows,
+                            Err(e) => {
+                                // Never report catch-up while replay is failing:
+                                // surface the error and end the stream.
+                                let err =
+                                    subscription_unavailable("replay", &tenant, &prefix, cursor, e);
+                                return Some((
+                                    Err(err),
+                                    (pool, tenant, prefix, cursor, Some(Phase::Failed), notify_rx),
+                                ));
+                            }
+                        };
 
-                    // FIX (ADR-013): Don't advance cursor during collection.
-                    // The cursor will be updated as events are yielded during replay iteration.
-                    // Track max_read_cursor to handle malformed rows (prevents infinite loop).
-                    let mut items = Vec::with_capacity(rows.len());
-                    let mut max_read_cursor = cursor;
-                    for row in rows.iter() {
-                        let row_cursor = row.get::<i64, _>("global_nonce");
-                        max_read_cursor = max_read_cursor.max(row_cursor);
-
-                        if let Ok(event) = row_to_event(row) {
-                            items.push(event);
-                        } else {
-                            // Log warning for malformed row (consistent with Live phase)
-                            eprintln!(
-                                "Warning: Failed to parse event at global_nonce={row_cursor}, skipping"
-                            );
-                        }
-                    }
-
-                    // If ALL rows were malformed, advance cursor to max_read_cursor to prevent infinite loop.
-                    // Otherwise, start from current cursor - it will advance as events are yielded.
-                    let initial_cursor = if items.is_empty() && !rows.is_empty() {
-                        max_read_cursor
-                    } else {
-                        cursor
-                    };
-
+                    // FIX (ADR-013): the cursor advances only as events are
+                    // yielded. Decoding stops at the first undecodable row
+                    // (#351): the events before it are delivered, then its
+                    // error, and nothing after it.
+                    let (items, then_fail) = decode_until_invalid(&rows, &tenant);
                     phase = Some(Phase::Replay {
                         items,
                         idx: 0,
-                        cursor: initial_cursor,
+                        cursor,
+                        then_fail,
                     });
                 }
 
@@ -835,6 +871,7 @@ impl EventStoreTrait for PostgresStore {
                         items,
                         mut idx,
                         cursor: _replay_cursor,
+                        mut then_fail,
                     }) => {
                         if idx < items.len() {
                             let event = items[idx].clone();
@@ -856,12 +893,21 @@ impl EventStoreTrait for PostgresStore {
                                     items,
                                     idx,
                                     cursor: yielded_cursor,
+                                    then_fail,
                                 }),
                                 notify_rx,
                             );
                             Some((
                                 Ok(proto::SubscribeResponse { event: Some(event) }),
                                 next_state,
+                            ))
+                        } else if let Some(err) = then_fail.take() {
+                            // Stop at the undecodable row: no caught-up marker,
+                            // no later positions, cursor stays at the last
+                            // delivered event.
+                            Some((
+                                Err(err),
+                                (pool, tenant, prefix, cursor, Some(Phase::Failed), notify_rx),
                             ))
                         } else {
                             // All replay items yielded, transition to Live phase.
@@ -914,53 +960,27 @@ impl EventStoreTrait for PostgresStore {
                             }
                         }
 
-                        let rows = if prefix.is_empty() {
-                            sqlx::query(
-                                r#"
-                                SELECT * FROM events
-                                WHERE tenant_id = $1 AND global_nonce > $2
-                                ORDER BY global_nonce ASC
-                                "#,
-                            )
-                            .bind(&tenant)
-                            .bind(cursor)
-                            .fetch_all(&pool)
-                            .await
-                            .unwrap_or_default()
-                        } else {
-                            let like = format!("{prefix}%");
-                            sqlx::query(
-                                r#"
-                                SELECT * FROM events
-                                WHERE tenant_id = $1 AND global_nonce > $2 AND aggregate_id LIKE $3
-                                ORDER BY global_nonce ASC
-                                "#,
-                            )
-                            .bind(&tenant)
-                            .bind(cursor)
-                            .bind(like)
-                            .fetch_all(&pool)
-                            .await
-                            .unwrap_or_default()
+                        let rows = match fetch_events_after(&pool, &tenant, &prefix, cursor).await {
+                            Ok(rows) => rows,
+                            Err(e) => {
+                                // `cursor` is the last delivered position; it is
+                                // reported, never advanced, on failure.
+                                let err = subscription_unavailable(
+                                    "live",
+                                    &tenant,
+                                    &prefix,
+                                    cursor.saturating_add(1),
+                                    e,
+                                );
+                                return Some((
+                                    Err(err),
+                                    (pool, tenant, prefix, cursor, Some(Phase::Failed), notify_rx),
+                                ));
+                            }
                         };
 
                         if !rows.is_empty() {
-                            let mut items = Vec::with_capacity(rows.len());
-                            let mut max_read_cursor = cursor; // Track max read for malformed row handling
-
-                            for row in rows.iter() {
-                                let row_cursor = row.get::<i64, _>("global_nonce");
-                                max_read_cursor = max_read_cursor.max(row_cursor);
-
-                                if let Ok(event) = row_to_event(row) {
-                                    items.push(event);
-                                } else {
-                                    // Log warning for malformed row but continue processing
-                                    eprintln!(
-                                        "Warning: Failed to parse event at global_nonce={row_cursor}, skipping"
-                                    );
-                                }
-                            }
+                            let (items, mut then_fail) = decode_until_invalid(&rows, &tenant);
 
                             if !items.is_empty() {
                                 // FIX (ADR-013): Only advance cursor to the event we're yielding
@@ -977,17 +997,19 @@ impl EventStoreTrait for PostgresStore {
                                     Vec::new()
                                 };
 
-                                let next_phase = if remaining.is_empty() {
+                                let next_phase = if remaining.is_empty() && then_fail.is_none() {
                                     Phase::Live {
                                         cursor: yielded_cursor,
                                         interval,
                                     }
                                 } else {
-                                    // Store remaining items with cursor at last yielded position
+                                    // Store remaining items (and a pending decode
+                                    // error) with cursor at last yielded position
                                     Phase::Replay {
                                         items: remaining,
                                         idx: 0,
                                         cursor: yielded_cursor,
+                                        then_fail: then_fail.take(),
                                     }
                                 };
 
@@ -1006,19 +1028,15 @@ impl EventStoreTrait for PostgresStore {
                                     next_state,
                                 ))
                             } else {
-                                // All rows failed to parse - advance cursor to prevent infinite loop
-                                let next_state = (
-                                    pool,
-                                    tenant,
-                                    prefix,
-                                    max_read_cursor,
-                                    Some(Phase::Live {
-                                        cursor: max_read_cursor,
-                                        interval,
-                                    }),
-                                    notify_rx,
-                                );
-                                Some((Ok(proto::SubscribeResponse { event: None }), next_state))
+                                // The first new row is undecodable. Never advance
+                                // past it: surface the error and end the stream.
+                                let err = then_fail
+                                    .take()
+                                    .expect("non-empty rows decode to an event or an error");
+                                Some((
+                                    Err(err),
+                                    (pool, tenant, prefix, cursor, Some(Phase::Failed), notify_rx),
+                                ))
                             }
                         } else {
                             // No new events — loop back to wait for next notification/poll
@@ -1033,48 +1051,174 @@ impl EventStoreTrait for PostgresStore {
                             Some((Ok(proto::SubscribeResponse { event: None }), next_state))
                         }
                     }
-                    None => None,
+                    // The error was already yielded; end the stream.
+                    Some(Phase::Failed) | None => None,
                 }
             },
         ))
     }
 }
 
+/// Events of `tenant` (optionally restricted to `prefix`) with
+/// `global_nonce > after`, in global order.
+async fn fetch_events_after(
+    pool: &PgPool,
+    tenant: &str,
+    prefix: &str,
+    after: i64,
+) -> Result<Vec<sqlx::postgres::PgRow>, sqlx::Error> {
+    if prefix.is_empty() {
+        sqlx::query(
+            r#"
+            SELECT * FROM events
+            WHERE tenant_id = $1 AND global_nonce > $2
+            ORDER BY global_nonce ASC
+            "#,
+        )
+        .bind(tenant)
+        .bind(after)
+        .fetch_all(pool)
+        .await
+    } else {
+        sqlx::query(
+            r#"
+            SELECT * FROM events
+            WHERE tenant_id = $1 AND global_nonce > $2 AND aggregate_id LIKE $3
+            ORDER BY global_nonce ASC
+            "#,
+        )
+        .bind(tenant)
+        .bind(after)
+        .bind(format!("{prefix}%"))
+        .fetch_all(pool)
+        .await
+    }
+}
+
+/// The error a subscription yields, as its last item, when a query fails.
+///
+/// `resume_from` is the first position the stream has not delivered. The
+/// consumer should resume from its own checkpoint (the last event it
+/// processed, plus one), which is at or before `resume_from`.
+fn subscription_unavailable(
+    phase: &str,
+    tenant: &str,
+    prefix: &str,
+    resume_from: i64,
+    error: sqlx::Error,
+) -> StoreError {
+    let resume_from = resume_from.max(0);
+    tracing::warn!(
+        tenant_id = tenant,
+        aggregate_id_prefix = prefix,
+        resume_from,
+        error = %error,
+        "subscription {phase} query failed; ending stream"
+    );
+    StoreError::Unavailable(format!(
+        "subscription {phase} query failed, stream closed; \
+         resume from global_nonce {resume_from} (or your last checkpoint + 1): {error}"
+    ))
+}
+
+/// Decode one stored event row. Never panics.
+///
+/// A column that cannot be decoded yields [`StoreError::UndecodableEvent`]
+/// naming the row's `global_nonce` and the column. The underlying decoder
+/// message is deliberately dropped: it can quote stored values (e.g. a
+/// header value), and this error is logged and sent to clients.
 fn row_to_event(row: &sqlx::postgres::PgRow) -> Result<proto::EventData, StoreError> {
-    let headers: Json<HashMap<String, String>> = row
-        .try_get("headers")
-        .map_err(|e| StoreError::Internal(anyhow::anyhow!(e)))?;
+    // global_nonce first, so every other failure can name its position.
+    let global_nonce = match row.try_get::<i64, _>("global_nonce") {
+        Ok(n) => n as u64,
+        Err(_) => {
+            return Err(StoreError::UndecodableEvent {
+                global_nonce: 0,
+                reason: "column 'global_nonce' could not be decoded".into(),
+            })
+        }
+    };
+    let col = |name: &'static str| {
+        move |_: sqlx::Error| StoreError::UndecodableEvent {
+            global_nonce,
+            reason: format!("column '{name}' could not be decoded"),
+        }
+    };
+    let opt_text = |name: &'static str| -> Result<String, StoreError> {
+        Ok(row
+            .try_get::<Option<String>, _>(name)
+            .map_err(col(name))?
+            .unwrap_or_default())
+    };
+
+    let headers: Json<HashMap<String, String>> = row.try_get("headers").map_err(col("headers"))?;
     let meta = proto::EventMetadata {
-        event_id: row.get::<String, _>("event_id"),
-        aggregate_id: row.get::<String, _>("aggregate_id"),
-        aggregate_type: row.get::<String, _>("aggregate_type"),
-        aggregate_nonce: row.get::<i64, _>("aggregate_nonce") as u64,
-        event_type: row.get::<String, _>("event_type"),
-        event_version: row.get::<i32, _>("event_version") as u32,
-        content_type: row.get::<String, _>("content_type"),
-        content_schema: row
-            .get::<Option<String>, _>("content_schema")
-            .unwrap_or_default(),
-        correlation_id: row
-            .get::<Option<String>, _>("correlation_id")
-            .unwrap_or_default(),
-        causation_id: row
-            .get::<Option<String>, _>("causation_id")
-            .unwrap_or_default(),
-        actor_id: row.get::<Option<String>, _>("actor_id").unwrap_or_default(),
-        tenant_id: row.get::<String, _>("tenant_id"),
-        timestamp_unix_ms: row.get::<i64, _>("timestamp_unix_ms") as u64,
-        recorded_time_unix_ms: row.get::<i64, _>("recorded_time_unix_ms") as u64,
+        event_id: row.try_get("event_id").map_err(col("event_id"))?,
+        aggregate_id: row.try_get("aggregate_id").map_err(col("aggregate_id"))?,
+        aggregate_type: row
+            .try_get("aggregate_type")
+            .map_err(col("aggregate_type"))?,
+        aggregate_nonce: row
+            .try_get::<i64, _>("aggregate_nonce")
+            .map_err(col("aggregate_nonce"))? as u64,
+        event_type: row.try_get("event_type").map_err(col("event_type"))?,
+        event_version: row
+            .try_get::<i32, _>("event_version")
+            .map_err(col("event_version"))? as u32,
+        content_type: row.try_get("content_type").map_err(col("content_type"))?,
+        content_schema: opt_text("content_schema")?,
+        correlation_id: opt_text("correlation_id")?,
+        causation_id: opt_text("causation_id")?,
+        actor_id: opt_text("actor_id")?,
+        tenant_id: row.try_get("tenant_id").map_err(col("tenant_id"))?,
+        timestamp_unix_ms: row
+            .try_get::<i64, _>("timestamp_unix_ms")
+            .map_err(col("timestamp_unix_ms"))? as u64,
+        recorded_time_unix_ms: row
+            .try_get::<i64, _>("recorded_time_unix_ms")
+            .map_err(col("recorded_time_unix_ms"))? as u64,
         payload_sha256: row
-            .get::<Option<Vec<u8>>, _>("payload_sha256")
+            .try_get::<Option<Vec<u8>>, _>("payload_sha256")
+            .map_err(col("payload_sha256"))?
             .unwrap_or_default(),
         headers: headers.0,
-        global_nonce: row.get::<i64, _>("global_nonce") as u64,
+        global_nonce,
     };
     Ok(proto::EventData {
         meta: Some(meta),
-        payload: row.get::<Option<Vec<u8>>, _>("payload").unwrap_or_default(),
+        payload: row
+            .try_get::<Option<Vec<u8>>, _>("payload")
+            .map_err(col("payload"))?
+            .unwrap_or_default(),
     })
+}
+
+/// Decode rows in order, stopping at the first undecodable one.
+///
+/// Returns the events before it and, if any row failed, its error. Rows after
+/// a failed one are never decoded or delivered: delivering them would move
+/// the consumer's checkpoint past an event it never saw (#351).
+fn decode_until_invalid(
+    rows: &[sqlx::postgres::PgRow],
+    tenant: &str,
+) -> (Vec<proto::EventData>, Option<StoreError>) {
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        match row_to_event(row) {
+            Ok(event) => items.push(event),
+            Err(e) => {
+                // No payload or stored values here; position and column only.
+                tracing::error!(
+                    tenant_id = tenant,
+                    error = %e,
+                    "subscription stopped at an undecodable stored event; \
+                     operator action required (see ADR-026)"
+                );
+                return (items, Some(e));
+            }
+        }
+    }
+    (items, None)
 }
 
 #[cfg(test)]
@@ -1108,6 +1252,54 @@ mod tests {
             from_global_nonce: 0,
         });
         // Test passes if we can create the stream without panicking
+    }
+
+    /// A store whose pool can never connect: every query fails fast.
+    fn unreachable_store() -> PostgresStore {
+        let (notify_tx, _) = broadcast::channel(NOTIFY_BROADCAST_CAPACITY);
+        PostgresStore {
+            pool: PgPoolOptions::new()
+                .acquire_timeout(Duration::from_secs(2))
+                .connect_lazy("postgres://test:test@127.0.0.1:1/test")
+                .expect("lazy connect should not attempt network"),
+            notify_tx,
+            listener_handle: tokio::spawn(async {}),
+        }
+    }
+
+    async fn assert_replay_failure_surfaces(prefix: &str) {
+        use futures::StreamExt;
+        let store = unreachable_store();
+        let mut stream = store.subscribe(proto::SubscribeRequest {
+            tenant_id: "tenant".into(),
+            aggregate_id_prefix: prefix.into(),
+            from_global_nonce: 7,
+        });
+        let first = tokio::time::timeout(Duration::from_secs(10), stream.next())
+            .await
+            .expect("stream must not hang");
+        match first {
+            Some(Err(e @ StoreError::Unavailable(_))) => {
+                let msg = e.to_string();
+                assert!(msg.contains("replay"), "{msg}");
+                assert!(msg.contains("resume from global_nonce 7"), "{msg}");
+            }
+            other => panic!("replay DB failure must surface Unavailable, got {other:?}"),
+        }
+        assert!(
+            stream.next().await.is_none(),
+            "stream must end after the error"
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_surfaces_replay_query_failure_without_prefix() {
+        assert_replay_failure_surfaces("").await;
+    }
+
+    #[tokio::test]
+    async fn subscribe_surfaces_replay_query_failure_with_prefix() {
+        assert_replay_failure_surfaces("Order-").await;
     }
 
     #[test]

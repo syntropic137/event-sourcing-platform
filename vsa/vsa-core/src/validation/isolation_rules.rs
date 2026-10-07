@@ -612,16 +612,10 @@ export class CreateOrderController {}
         .unwrap();
 
         // Non-test source file needed so the slice is detected
-        fs::write(
-            slice1.join("CreateOrderCommand.py"),
-            "class CreateOrderCommand: pass\n",
-        )
-        .unwrap();
-        fs::write(
-            slice2.join("OrderListProjection.py"),
-            "class OrderListProjection: pass\n",
-        )
-        .unwrap();
+        fs::write(slice1.join("CreateOrderCommand.py"), "class CreateOrderCommand: pass\n")
+            .unwrap();
+        fs::write(slice2.join("OrderListProjection.py"), "class OrderListProjection: pass\n")
+            .unwrap();
 
         let mut config = create_test_config(root.clone());
         config.language = "python".to_string();

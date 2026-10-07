@@ -10,14 +10,21 @@ types are confined to internal proto interactions.
 
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 
 import grpc
 
+from event_sourcing.client.server_info import (
+    LEGACY_SERVER_INFO,
+    ServerInfo,
+    assert_capabilities,
+    assert_min_version,
+)
 from event_sourcing.core.errors import (
     ConcurrencyConflictError,
     EventStoreError,
     StreamAlreadyExistsError,
+    UndecodableEventError,
 )
 from event_sourcing.core.event import (
     DomainEvent,
@@ -29,6 +36,30 @@ from event_sourcing.decorators.events import resolve_event_type
 from event_sourcing.proto.eventstore.v1 import eventstore_pb2, eventstore_pb2_grpc
 
 logger = logging.getLogger(__name__)
+
+# Trailing-metadata key the event store sets on DATA_LOSS for an undecodable
+# stored event (eventstore-core UNDECODABLE_GLOBAL_NONCE_KEY).
+UNDECODABLE_GLOBAL_NONCE_KEY = "esp-undecodable-global-nonce"
+
+
+def _undecodable_global_nonce(error: grpc.RpcError) -> int | None:
+    """global_nonce of the undecodable stored event, if `error` reports one."""
+    try:
+        if error.code() != grpc.StatusCode.DATA_LOSS:
+            return None
+        for key, value in error.trailing_metadata() or ():
+            if key == UNDECODABLE_GLOBAL_NONCE_KEY:
+                return int(value)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return None
+
+
+def _raise_if_undecodable(error: grpc.RpcError, context: str) -> None:
+    """Raise UndecodableEventError when the store reports an undecodable event."""
+    nonce = _undecodable_global_nonce(error)
+    if nonce is not None:
+        raise UndecodableEventError(nonce, f"{context}: {error}", error) from error
 
 
 class GrpcEventStoreClient:
@@ -87,6 +118,43 @@ class GrpcEventStoreClient:
             self._stub = None
             logger.info("Disconnected from event store")
 
+    async def server_info(self) -> ServerInfo:
+        """Ask the server for its version, backend, and capability flags.
+
+        A server older than v0.17.0 answers ``UNIMPLEMENTED``; that returns
+        :data:`LEGACY_SERVER_INFO` (no version, no capabilities) rather than
+        raising. Any other failure raises :class:`EventStoreError`.
+        """
+        if not self._stub:
+            raise EventStoreError("Client is not connected")
+        try:
+            resp = await self._stub.GetServerInfo(eventstore_pb2.GetServerInfoRequest())
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.UNIMPLEMENTED:
+                return LEGACY_SERVER_INFO
+            raise EventStoreError(f"Failed to get server info: {e}", e) from e
+        return ServerInfo(
+            server_version=resp.server_version,
+            api_version=resp.api_version,
+            backend=resp.backend,
+            capabilities=tuple(resp.capabilities),
+        )
+
+    async def require_capabilities(self, required: Sequence[str]) -> ServerInfo:
+        """Raise :class:`CompatibilityError` unless the server advertises every
+        capability in ``required``. Legacy servers advertise none."""
+        info = await self.server_info()
+        assert_capabilities(info, required)
+        return info
+
+    async def require_min_version(self, minimum: str) -> ServerInfo:
+        """Raise :class:`CompatibilityError` unless the server version is
+        ``>= minimum``. Legacy servers always fail. Prefer
+        :meth:`require_capabilities`."""
+        info = await self.server_info()
+        assert_min_version(info, minimum)
+        return info
+
     async def read_events(
         self, stream_name: str, from_version: int | None = None
     ) -> list[EventEnvelope[DomainEvent]]:
@@ -134,6 +202,7 @@ class GrpcEventStoreClient:
 
         except grpc.RpcError as e:
             logger.error(f"gRPC error reading stream: {e}")
+            _raise_if_undecodable(e, "Failed to read stream")
             raise EventStoreError(f"Failed to read stream: {e}") from e
 
     async def append_events(
@@ -205,12 +274,16 @@ class GrpcEventStoreClient:
             raise EventStoreError(f"Failed to append events: {e}") from e
 
     async def stream_exists(self, stream_name: str) -> bool:
-        """Check if a stream exists."""
-        try:
-            events = await self.read_events(stream_name, from_version=0)
-            return len(events) > 0
-        except Exception:
-            return False
+        """Check if a stream exists.
+
+        An absent stream is not an error on the wire: the store answers
+        ReadStream with no events. So any failure here means the store could
+        not be asked, and it propagates as EventStoreError rather than
+        becoming False. "Cannot see" answered as "does not exist" lets every
+        existence check built on this pass while the store is down.
+        """
+        events = await self.read_events(stream_name, from_version=0)
+        return len(events) > 0
 
     @staticmethod
     def _extract_actual_version(rpc_error: grpc.RpcError) -> int:
@@ -391,6 +464,7 @@ class GrpcEventStoreClient:
 
         except grpc.RpcError as e:
             logger.error(f"gRPC error in ReadAll: {e}")
+            _raise_if_undecodable(e, "Failed to read all events")
             raise EventStoreError(f"Failed to read all events: {e}") from e
 
     async def read_all_events_from(
@@ -465,4 +539,5 @@ class GrpcEventStoreClient:
                 logger.info("Subscription cancelled")
                 return
             logger.error(f"gRPC error in subscription: {e}")
+            _raise_if_undecodable(e, "Subscription failed")
             raise EventStoreError(f"Subscription failed: {e}") from e

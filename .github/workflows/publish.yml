@@ -24,13 +24,16 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
 
       - name: Get version from tag
         id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            TAG_NAME=${{ github.event.release.tag_name }}
+          if [ "$EVENT_NAME" = "release" ]; then
+            TAG_NAME="$RELEASE_TAG"
           else
             TAG_NAME=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
           fi
@@ -40,15 +43,16 @@ jobs:
           echo "Release version: $VERSION (tag: $TAG_NAME)"
 
       - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.11"
 
       - name: Verify version consistency
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           python3 scripts/bump_version.py --check
           PLATFORM_VERSION=$(python3 scripts/bump_version.py --current)
-          RELEASE_VERSION="${{ steps.version.outputs.version }}"
           echo "Platform version: $PLATFORM_VERSION"
           echo "Release version: $RELEASE_VERSION"
           if [ "$PLATFORM_VERSION" != "$RELEASE_VERSION" ]; then
@@ -59,10 +63,10 @@ jobs:
           echo "✅ Versions match!"
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "24.x"
           cache: "pnpm"
@@ -115,13 +119,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "20.x"
           registry-url: "https://npm.pkg.github.com"
@@ -155,24 +159,29 @@ jobs:
 
       - name: Dry run - Package ready
         if: ${{ github.event.inputs.dry-run == 'true' }}
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           echo "🚀 Dry run mode - Package would be published"
-          echo "Version: ${{ needs.validate.outputs.version }}"
+          echo "Version: $VERSION"
           echo "Package: @syntropic137/event-sourcing-typescript"
 
       - name: Create release notes
         if: ${{ github.event_name == 'release' && github.event.inputs.dry-run != 'true' }}
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          TAG: ${{ needs.validate.outputs.tag }}
         run: |
           echo "## Published Package" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "📦 **Package:** @syntropic137/event-sourcing-typescript" >> $GITHUB_STEP_SUMMARY
-          echo "🏷️ **Version:** ${{ needs.validate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "📝 **Tag:** ${{ needs.validate.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "🏷️ **Version:** $VERSION" >> $GITHUB_STEP_SUMMARY
+          echo "📝 **Tag:** $TAG" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Installation" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "npm install @syntropic137/event-sourcing-typescript@${{ needs.validate.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "npm install @syntropic137/event-sourcing-typescript@$VERSION" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
   verify-publication:
@@ -189,7 +198,7 @@ jobs:
         run: sleep 30
 
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "20.x"
           registry-url: "https://npm.pkg.github.com"
@@ -200,12 +209,13 @@ jobs:
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" > ~/.npmrc
           echo "@syntropic137:registry=https://npm.pkg.github.com" >> ~/.npmrc
 
-          npm view @syntropic137/event-sourcing-typescript@${{ needs.validate.outputs.version }} || {
+          npm view "@syntropic137/event-sourcing-typescript@$VERSION" || {
             echo "⚠️ Package not immediately available (may take a few minutes)"
             exit 0
           }
           echo "✅ Package successfully published and accessible"
         env:
+          VERSION: ${{ needs.validate.outputs.version }}
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Ensure package is public

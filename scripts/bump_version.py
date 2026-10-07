@@ -281,10 +281,14 @@ def bump(target: str) -> None:
     for path in PYPROJECT_FILES:
         text = path.read_text()
         new_text = PYPROJECT_VERSION_RE.sub(rf"\g<1>{target}\2", text, count=1)
-        if new_text == text:
-            errors.append(str(path.relative_to(ROOT)))
-        else:
+        if new_text != text:
             pending.append((path, new_text))
+        elif read_pyproject_version(path) != target:
+            # Unchanged AND not already correct means the field is genuinely
+            # missing. A file already at `target` substitutes to itself, which
+            # is success, not failure - reporting it as "no version field"
+            # aborted every bump where one file had run ahead of the rest.
+            errors.append(str(path.relative_to(ROOT)))
 
     if errors:
         print(f"ERROR: No version field found in: {', '.join(errors)}", file=sys.stderr)

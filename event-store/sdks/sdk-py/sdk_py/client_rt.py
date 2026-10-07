@@ -34,3 +34,45 @@ class EventStoreClientRT:
         """Read all events from a global position (for projections/catch-up)."""
         message = json_format.ParseDict(req, self.pb.ReadAllRequest())
         return self.stub.ReadAll(message)
+
+    def server_info(self) -> dict:
+        """Server version, backend, and capability flags.
+
+        A server older than v0.17.0 answers UNIMPLEMENTED; that returns a
+        legacy result (``legacy: True``, no capabilities) instead of raising.
+        Other errors propagate.
+        """
+        try:
+            resp = self.stub.GetServerInfo(self.pb.GetServerInfoRequest())
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.UNIMPLEMENTED:
+                return {
+                    "server_version": None,
+                    "api_version": None,
+                    "backend": None,
+                    "capabilities": [],
+                    "legacy": True,
+                }
+            raise
+        return {
+            "server_version": resp.server_version,
+            "api_version": resp.api_version,
+            "backend": resp.backend,
+            "capabilities": list(resp.capabilities),
+            "legacy": False,
+        }
+
+    def require_capabilities(self, required: list[str]) -> dict:
+        """Raise RuntimeError unless the server advertises every capability.
+
+        Legacy (pre-0.17.0) servers advertise none, so they always fail a
+        non-empty requirement.
+        """
+        info = self.server_info()
+        missing = [c for c in required if c not in info["capabilities"]]
+        if missing:
+            version = info["server_version"] or "< 0.17.0 (no GetServerInfo)"
+            raise RuntimeError(
+                f"event store server {version} lacks required capabilities: {', '.join(missing)}"
+            )
+        return info

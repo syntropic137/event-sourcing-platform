@@ -93,6 +93,21 @@ class EventStoreError(EventSourcingError):
         self.original_error = original_error
 
 
+class UndecodableEventError(EventStoreError):
+    """A stored event cannot be decoded by the event store (gRPC DATA_LOSS).
+
+    Retrying does not help: an operator must repair the row or explicitly move
+    consumer checkpoints past ``global_nonce`` (see ADR-026).
+    """
+
+    def __init__(
+        self, global_nonce: int, message: str, original_error: Exception | None = None
+    ) -> None:
+        super().__init__(message, original_error)
+        self.global_nonce = global_nonce
+        self.details["global_nonce"] = global_nonce
+
+
 class SerializationError(EventSourcingError):
     """Raised when serialization/deserialization fails."""
 

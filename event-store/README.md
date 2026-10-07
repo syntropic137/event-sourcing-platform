@@ -122,6 +122,9 @@ A Docusaurus-powered documentation site is available for a richer reading experi
 
 - Run all checks and tests: `make qa`
 - Lints only: `make fmt` and `make clippy`
+- Recovery drills (Docker, slow, not part of `qa`): `make recovery-drill`.
+  Restart, retry, outage and backup/restore guarantees are documented in
+  [docs/operations/BACKUP-RESTORE.md](../docs/operations/BACKUP-RESTORE.md).
 
 ### Coverage
 

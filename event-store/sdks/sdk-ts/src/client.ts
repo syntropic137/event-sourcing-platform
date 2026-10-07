@@ -12,6 +12,15 @@ import type {
   SubscribeResponse,
 } from "./gen/eventstore/v1/eventstore.js";
 import { EventMetadata } from "./gen/eventstore/v1/eventstore.js";
+import {
+  LEGACY_SERVER_INFO,
+  assertCapabilities,
+  assertMinVersion,
+  fromServerInfoResponse,
+  isUnimplemented,
+  type ServerInfo,
+} from "./server-info.js";
+import { streamToAsyncIterator } from "./stream-iterator.js";
 
 export interface ClientOptions {
   /** plaintext by default */
@@ -60,23 +69,55 @@ export class EventStoreClientTS {
     });
   }
 
+  /**
+   * Server version, backend, and capability flags. A server older than
+   * v0.17.0 answers UNIMPLEMENTED; that resolves to a legacy ServerInfo
+   * (legacy: true, no capabilities) rather than rejecting. Other errors reject.
+   */
+  serverInfo(): Promise<ServerInfo> {
+    return new Promise((resolve, reject) => {
+      this.client.getServerInfo({}, (err, resp) => {
+        if (err) {
+          if (isUnimplemented(err)) return resolve({ ...LEGACY_SERVER_INFO, capabilities: [] });
+          return reject(err);
+        }
+        resolve(fromServerInfoResponse(resp));
+      });
+    });
+  }
+
+  /**
+   * Reject with CompatibilityError unless the server advertises every
+   * capability in `required`. Legacy servers advertise none.
+   */
+  async requireCapabilities(required: readonly string[]): Promise<ServerInfo> {
+    const info = await this.serverInfo();
+    assertCapabilities(info, required);
+    return info;
+  }
+
+  /**
+   * Reject with CompatibilityError unless the server version is >= `min`.
+   * Legacy servers always fail. Prefer requireCapabilities.
+   */
+  async requireMinVersion(min: string): Promise<ServerInfo> {
+    const info = await this.serverInfo();
+    assertMinVersion(info, min);
+    return info;
+  }
+
+  /** Close the underlying channel. */
+  close(): void {
+    this.client.close();
+  }
+
+  /**
+   * Catch-up then live subscription. The iterator rejects with the gRPC error
+   * when the stream fails (e.g. `UNAVAILABLE`, `DATA_LOSS`), even if it fails
+   * while you are processing an event. Reconnect from your checkpoint + 1.
+   */
   subscribe(req: SubscribeRequest): AsyncIterable<SubscribeResponse> {
-    const call = this.client.subscribe(req);
-    const iterator = {
-      [Symbol.asyncIterator]() { return this; },
-      next(): Promise<IteratorResult<SubscribeResponse>> {
-        return new Promise((resolve, reject) => {
-          call.once("data", (data: SubscribeResponse) => resolve({ value: data, done: false }));
-          call.once("error", (err: unknown) => reject(err));
-          call.once("end", () => resolve({ done: true } as IteratorReturnResult<SubscribeResponse>));
-        });
-      },
-      return(): Promise<IteratorResult<SubscribeResponse>> {
-        call.cancel();
-        return Promise.resolve({ done: true } as IteratorReturnResult<SubscribeResponse>);
-      }
-    } as AsyncIterableIterator<SubscribeResponse>;
-    return iterator;
+    return streamToAsyncIterator<SubscribeResponse>(this.client.subscribe(req));
   }
 
   // High-level, fully typed append that requires event metadata
