@@ -1,0 +1,106 @@
+name: Release Tag
+
+# Creates the GitHub release vX.Y.Z for a commit on `release` once CI has
+# passed on it, then dispatches the publish workflows.
+#
+# A release created with GITHUB_TOKEN does not fire `release` events, so
+# publish.yml and release-container.yml are started explicitly with
+# `gh workflow run --ref vX.Y.Z` (workflow_dispatch is exempt from that rule).
+# No extra secret is needed.
+#
+# Idempotent: if tag vX.Y.Z already exists, nothing is created or dispatched.
+# Recovery when a dispatch failed after the release was created:
+#   gh workflow run publish.yml --ref vX.Y.Z -f tag=vX.Y.Z
+#   gh workflow run release-container.yml --ref vX.Y.Z -f version=vX.Y.Z
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [release]
+
+permissions: {}
+
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Create release
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'release' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write  # create tag + release
+      actions: write   # dispatch publish workflows
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+
+    steps:
+      - name: Checkout validated commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(python3 scripts/bump_version.py --current)
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Unexpected version '$VERSION'"
+            exit 1
+          fi
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version v${VERSION} at ${SHA}"
+
+      - name: Check tag
+        id: check
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" > /dev/null 2>&1; then
+            echo "Tag ${TAG} already exists, nothing to do"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          # Notes: body of the merged main -> release PR that produced SHA.
+          # The body is untrusted text; it only ever goes to a file.
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${SHA}/pulls" \
+            --jq '[.[] | select(.merged_at != null and .base.ref == "release")][0].body // ""' \
+            > notes.md
+          if [ -n "$(tr -d '[:space:]' < notes.md)" ]; then
+            gh release create "$TAG" --target "$SHA" --title "$TAG" --notes-file notes.md
+          else
+            echo "No merged PR body found, using generated notes"
+            gh release create "$TAG" --target "$SHA" --title "$TAG" --generate-notes
+          fi
+
+      - name: Dispatch publish workflows
+        if: steps.check.outputs.exists == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh workflow run publish.yml --ref "$TAG" -f tag="$TAG"
+          gh workflow run release-container.yml --ref "$TAG" -f version="$TAG"
+          {
+            echo "## Released ${TAG}"
+            echo ""
+            echo "Commit: \`${SHA}\`"
+            echo "Dispatched: publish.yml, release-container.yml"
+          } >> "$GITHUB_STEP_SUMMARY"

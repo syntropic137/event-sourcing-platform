@@ -1,10 +1,18 @@
 name: Publish to GitHub Packages
 
+# Releases created by release-tag.yml use GITHUB_TOKEN, which does not fire
+# `release` events, so that workflow dispatches this one with `tag` set and
+# `--ref <tag>`. Manually created releases still trigger it via `created`.
+# Publishing skips a version that already exists, so both paths are safe.
 on:
   release:
     types: [created]
   workflow_dispatch:
     inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.17.0). Dispatch with --ref set to the same tag."
+        required: false
+        default: ""
       dry-run:
         description: "Dry run (skip actual publish)"
         required: false
@@ -31,15 +39,18 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           if [ "$EVENT_NAME" = "release" ]; then
             TAG_NAME="$RELEASE_TAG"
+          elif [ -n "$INPUT_TAG" ]; then
+            TAG_NAME="$INPUT_TAG"
           else
             TAG_NAME=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
           fi
           VERSION=${TAG_NAME#v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
           echo "Release version: $VERSION (tag: $TAG_NAME)"
 
       - name: Setup Python
@@ -148,8 +159,24 @@ jobs:
           cd event-sourcing/typescript
           pnpm run build
 
-      - name: Publish to GitHub Packages
+      - name: Check if version already published
+        id: published
         if: ${{ github.event.inputs.dry-run != 'true' }}
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # npm view exits 0 with empty output for a missing version, so compare.
+          FOUND=$(npm view "@syntropic137/event-sourcing-typescript@${VERSION}" version 2>/dev/null || true)
+          if [ "$FOUND" = "$VERSION" ]; then
+            echo "Version ${VERSION} already published, skipping"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to GitHub Packages
+        if: ${{ github.event.inputs.dry-run != 'true' && steps.published.outputs.exists != 'true' }}
         run: |
           cd event-sourcing/typescript
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" > .npmrc
@@ -167,7 +194,7 @@ jobs:
           echo "Package: @syntropic137/event-sourcing-typescript"
 
       - name: Create release notes
-        if: ${{ github.event_name == 'release' && github.event.inputs.dry-run != 'true' }}
+        if: ${{ github.event.inputs.dry-run != 'true' }}
         env:
           VERSION: ${{ needs.validate.outputs.version }}
           TAG: ${{ needs.validate.outputs.tag }}
