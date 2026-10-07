@@ -126,6 +126,31 @@ class UndecodableEventError(EventStoreError):
         self.details["global_nonce"] = global_nonce
 
 
+class ProjectionHandlerFailedError(EventSourcingError):
+    """A projection did not apply an event it is subscribed to.
+
+    Raised by ``SubscriptionCoordinator`` when ``handle_event`` returns
+    FAILURE or raises (the original exception is the ``__cause__``). It fails
+    the subscription attempt instead of letting the track move on, because the
+    projection's next successful event would checkpoint past this one and
+    nothing re-reads below a checkpoint. ``start()`` retries with backoff from
+    the held checkpoint, which delivers this event again.
+    """
+
+    def __init__(self, projection_name: str, event_type: str, global_nonce: int) -> None:
+        super().__init__(
+            f"Projection {projection_name!r} failed to apply {event_type} at "
+            f"global_nonce={global_nonce}; its checkpoint is held below it and the "
+            "event will be delivered again"
+        )
+        self.projection_name = projection_name
+        self.event_type = event_type
+        self.global_nonce = global_nonce
+        self.details["projection_name"] = projection_name
+        self.details["event_type"] = event_type
+        self.details["global_nonce"] = global_nonce
+
+
 ADR_026_PATH = "docs/adrs/ADR-026-subscription-failure-semantics.md"
 
 

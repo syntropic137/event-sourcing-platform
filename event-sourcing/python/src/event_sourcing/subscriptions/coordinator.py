@@ -28,7 +28,11 @@ from event_sourcing.core.checkpoint import (
     ProjectionCheckpointStore,
     ProjectionResult,
 )
-from event_sourcing.core.errors import SubscriptionHaltedError, UndecodableEventError
+from event_sourcing.core.errors import (
+    ProjectionHandlerFailedError,
+    SubscriptionHaltedError,
+    UndecodableEventError,
+)
 from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.subscriptions.drain import ProcessManagerDrain
 
@@ -982,6 +986,18 @@ class SubscriptionCoordinator:
         """
         Dispatch an event to a single projection with error handling.
 
+        A handler that fails, by returning FAILURE or by raising, stops the
+        track: this raises ProjectionHandlerFailedError. Logging and moving on
+        is not an option, because the track's cursor moves on with it and the
+        projection's next successful event saves a checkpoint above the one
+        that failed. Nothing re-reads below a checkpoint, so the event would
+        be lost until a rebuild, with the read model reporting itself current
+        (syntropic137#1696). Raising instead fails the subscription attempt:
+        ``start()`` records the error (``is_healthy`` goes False) and re-plans
+        from the checkpoints after a backoff, which delivers the failed event
+        again. A handler that keeps failing holds its read model at that event,
+        visibly, rather than skipping it silently.
+
         Args:
             track: The track the event arrived on, source of catch-up state
             projection: Target projection
@@ -1011,7 +1027,7 @@ class SubscriptionCoordinator:
                         "global_nonce": global_nonce,
                     },
                 )
-                # DO NOT advance checkpoint - event will be retried
+                raise ProjectionHandlerFailedError(name, event_type, global_nonce)
             elif result == ProjectionResult.SUCCESS:
                 logger.debug(
                     "Projection processed event",
@@ -1046,6 +1062,8 @@ class SubscriptionCoordinator:
                 )
                 await self._advance_checkpoint_if_behind(name, global_nonce)
 
+        except ProjectionHandlerFailedError:
+            raise
         except Exception as e:
             logger.error(
                 "Projection raised exception",
@@ -1057,7 +1075,7 @@ class SubscriptionCoordinator:
                 },
                 exc_info=True,
             )
-            # DO NOT advance checkpoint - event will be retried
+            raise ProjectionHandlerFailedError(name, event_type, global_nonce) from e
 
     async def _advance_checkpoint_if_behind(
         self,
