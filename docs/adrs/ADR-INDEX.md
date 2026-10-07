@@ -84,6 +84,7 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 | [ADR-026](./ADR-026-subscription-failure-semantics.md) | Subscription Failure Semantics | ✅ Accepted | Subscribe surfaces DB failures as `UNAVAILABLE` and undecodable events as `DATA_LOSS`, then ends; at-least-once reconnect; operator recovery path |
 | [ADR-027](./ADR-027-cross-language-event-envelope.md) | **Cross-Language Event Envelope** | ✅ Accepted | **Canonical wire encoding of events shared by the TS, Python and Rust SDKs: flat JSON body, type/version in metadata, upcast then dispatch** |
 | [ADR-028](./ADR-028-append-idempotency-semantics.md) | Append Idempotency Semantics | ✅ Accepted | Idempotency key checked before the concurrency precondition; canonical batch fingerprint shared by all backends; backend conformance suite |
+| [ADR-029](./ADR-029-hash-chained-event-log.md) | Hash-Chained Event Log | 📋 Proposed | Server-computed SHA-256 link per event into its stream and tenant chains; canonical v1 encoding; verification and anchoring in SDKs (#308) |
 
 ---
 
@@ -562,6 +563,7 @@ vsa validate --config vsa.yaml
 | 2026-04-07 | 2.3.0 | **Added ADR-023: Event Type Registry (auto-populated by @event, resolves concrete types from wire format)** |
 | 2026-10-06 | 2.4.0 | **Added ADR-027: Cross-Language Event Envelope (canonical event encoding across SDKs, golden fixtures)** |
 | 2026-10-06 | 2.5.0 | **Added ADR-024: nginx gateway two-port auth model for the event store's gRPC service (eventstore-bin has no authn/authz of its own)** |
+| 2026-10-07 | 2.6.0 | Added ADR-029 (Proposed): hash-chained event log for tamper-evident integrity |
 
 ---
 
