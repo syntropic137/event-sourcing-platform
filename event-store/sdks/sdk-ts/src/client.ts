@@ -12,6 +12,7 @@ import type {
   SubscribeResponse,
 } from "./gen/eventstore/v1/eventstore.js";
 import { EventMetadata } from "./gen/eventstore/v1/eventstore.js";
+import { streamToAsyncIterator } from "./stream-iterator.js";
 
 export interface ClientOptions {
   /** plaintext by default */
@@ -60,23 +61,13 @@ export class EventStoreClientTS {
     });
   }
 
+  /**
+   * Catch-up then live subscription. The iterator rejects with the gRPC error
+   * when the stream fails (e.g. `UNAVAILABLE`, `DATA_LOSS`), even if it fails
+   * while you are processing an event. Reconnect from your checkpoint + 1.
+   */
   subscribe(req: SubscribeRequest): AsyncIterable<SubscribeResponse> {
-    const call = this.client.subscribe(req);
-    const iterator = {
-      [Symbol.asyncIterator]() { return this; },
-      next(): Promise<IteratorResult<SubscribeResponse>> {
-        return new Promise((resolve, reject) => {
-          call.once("data", (data: SubscribeResponse) => resolve({ value: data, done: false }));
-          call.once("error", (err: unknown) => reject(err));
-          call.once("end", () => resolve({ done: true } as IteratorReturnResult<SubscribeResponse>));
-        });
-      },
-      return(): Promise<IteratorResult<SubscribeResponse>> {
-        call.cancel();
-        return Promise.resolve({ done: true } as IteratorReturnResult<SubscribeResponse>);
-      }
-    } as AsyncIterableIterator<SubscribeResponse>;
-    return iterator;
+    return streamToAsyncIterator<SubscribeResponse>(this.client.subscribe(req));
   }
 
   // High-level, fully typed append that requires event metadata

@@ -8,7 +8,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Error types that can occur in the event sourcing SDK
 #[derive(Error, Debug)]
 pub enum Error {
-    /// Event store communication errors
+    /// Event store communication errors (gRPC status from the store or transport).
+    ///
+    /// Use [`Error::is_transient`] to decide whether the call may be retried and
+    /// whether the outcome of a write is unknown.
     #[error("Event store error: {0}")]
     EventStore(Box<tonic::Status>),
 
@@ -19,7 +22,11 @@ pub enum Error {
         aggregate_id: String,
     },
 
-    /// Concurrency conflict when saving aggregate
+    /// Optimistic concurrency conflict when saving an aggregate.
+    ///
+    /// `expected` is the stream revision the writer based its decision on;
+    /// `actual` is the store's current revision (0 when the store did not
+    /// report it). The writer's state is stale: reload and re-run the command.
     #[error("Concurrency conflict: expected version {expected}, got {actual}")]
     ConcurrencyConflict { expected: u64, actual: u64 },
 
@@ -34,6 +41,34 @@ pub enum Error {
     /// Invalid command
     #[error("Invalid command: {message}")]
     InvalidCommand { message: String },
+
+    /// A projection handler failed; its checkpoint was not advanced.
+    #[error("Projection {projection} failed at global nonce {global_nonce}: {source}")]
+    ProjectionFailed {
+        /// Checkpoint key of the projection (`tenant/name@vN[feed]`).
+        projection: String,
+        /// Position of the event that failed.
+        global_nonce: u64,
+        /// Handler error.
+        source: Box<Error>,
+    },
+
+    /// A subscription delivered a live event below the last applied position
+    /// that cannot be proven to be a duplicate. The event store must deliver
+    /// live events in global-nonce commit order (`commit_ordered_global_nonce`,
+    /// see #366); skipping it could lose data, so the runner stops.
+    #[error(
+        "Projection {projection} received live event {received} after {last_applied}: \
+         out-of-order delivery"
+    )]
+    OutOfOrderDelivery {
+        /// Checkpoint key of the projection.
+        projection: String,
+        /// Last applied global nonce.
+        last_applied: u64,
+        /// Global nonce of the out-of-order event.
+        received: u64,
+    },
 
     /// Repository error
     #[error("Repository error: {0}")]
@@ -78,10 +113,60 @@ impl Error {
             message: message.into(),
         }
     }
+
+    /// True for an optimistic concurrency conflict (stale writer).
+    pub fn is_concurrency_conflict(&self) -> bool {
+        matches!(self, Error::ConcurrencyConflict { .. })
+    }
+
+    /// True when the failure is transient and the call may be retried.
+    ///
+    /// For writes this also means the outcome is **unknown**: the store may
+    /// have committed the batch before the acknowledgment was lost. Retrying
+    /// a repository save is safe because each pending batch carries stable
+    /// event IDs and an idempotency key (see
+    /// [`EventStoreRepository`](crate::repository::EventStoreRepository)).
+    pub fn is_transient(&self) -> bool {
+        use tonic::Code;
+        match self {
+            Error::EventStore(status) => matches!(
+                status.code(),
+                Code::Unavailable
+                    | Code::DeadlineExceeded
+                    | Code::Unknown
+                    | Code::Cancelled
+                    | Code::Internal
+                    | Code::ResourceExhausted
+            ),
+            _ => false,
+        }
+    }
+
+    /// The gRPC status code, when this error came from the event store.
+    pub fn status_code(&self) -> Option<tonic::Code> {
+        match self {
+            Error::EventStore(status) => Some(status.code()),
+            _ => None,
+        }
+    }
 }
 
 impl From<tonic::Status> for Error {
     fn from(status: tonic::Status) -> Self {
         Error::EventStore(Box::new(status))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transient_classification() {
+        assert!(Error::from(tonic::Status::unavailable("x")).is_transient());
+        assert!(Error::from(tonic::Status::deadline_exceeded("x")).is_transient());
+        assert!(!Error::from(tonic::Status::invalid_argument("x")).is_transient());
+        assert!(!Error::concurrency_conflict(1, 2).is_transient());
+        assert!(Error::concurrency_conflict(1, 2).is_concurrency_conflict());
     }
 }
