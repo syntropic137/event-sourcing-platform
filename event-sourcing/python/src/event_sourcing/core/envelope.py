@@ -63,7 +63,10 @@ class DecodedEvent:
 
 
 def event_version_of(event: DomainEvent) -> int:
-    """The ``event_version`` to write for ``event``: its class ``schema_version``."""
+    """The ``event_version`` to write for ``event``: its class ``schema_version``,
+    or for a ``GenericDomainEvent`` the version it was read at."""
+    if isinstance(event, GenericDomainEvent):
+        return event.event_version
     version: Any = type(event).schema_version  # runtime-checked
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         msg = (
@@ -96,7 +99,14 @@ def _strip_echo_keys(body: dict[str, Any], keep: frozenset[str]) -> dict[str, An
 
 
 def _model_fields(cls: type[DomainEvent]) -> frozenset[str]:
-    return frozenset(cls.model_fields)
+    """Payload keys ``cls`` declares: field names and their string aliases."""
+    names: set[str] = set()
+    for name, info in cls.model_fields.items():
+        names.add(name)
+        for alias in (info.alias, info.validation_alias):
+            if isinstance(alias, str):
+                names.add(alias)
+    return frozenset(names)
 
 
 def decode_event(
@@ -146,7 +156,9 @@ def decode_event(
         raise EventPayloadError(
             event_type, stored_version, "payload is not a JSON object", global_nonce
         )
-    obj = _strip_echo_keys(cast("dict[str, Any]", body), _target_fields(event_type, stored_version))
+    # Before upcasting the final class is unknown: keep a key any registered
+    # version of the stored type declares, so an upcaster still sees it.
+    obj = _strip_echo_keys(cast("dict[str, Any]", body), _declared_by_type(event_type))
 
     ty, version = event_type, stored_version
     if upcasters is not None and upcasters.handles(ty, version):
@@ -175,7 +187,7 @@ def decode_event(
             )
         if require_registered:
             raise UnknownEventTypeError(ty, version, "no event class registered", global_nonce)
-        return done(_generic(ty, obj))
+        return done(_generic(ty, version, obj))
 
     try:
         return done(cls.model_validate(obj))
@@ -189,7 +201,7 @@ def decode_event(
                 cls.__name__,
                 extra={"global_nonce": global_nonce},
             )
-            return done(_generic(ty, obj))
+            return done(_generic(ty, version, obj))
         raise EventPayloadError(
             ty,
             version,
@@ -204,9 +216,18 @@ def _target_fields(event_type: str, event_version: int) -> frozenset[str]:
     return _model_fields(cls) if cls is not None else frozenset()
 
 
-def _generic(event_type: str, body: dict[str, Any]) -> GenericDomainEvent:
+def _declared_by_type(event_type: str) -> frozenset[str]:
+    keys: set[str] = set()
+    for version in registered_event_versions(event_type) if event_type else ():
+        keys |= _target_fields(event_type, version)
+    return frozenset(keys)
+
+
+def _generic(event_type: str, event_version: int, body: dict[str, Any]) -> GenericDomainEvent:
     fields = {k: v for k, v in body.items() if k != "event_type"}
     if event_type:
         # An instance attribute, so aggregates can dispatch on it (ADR-023).
         fields["event_type"] = event_type
-    return GenericDomainEvent.model_validate(fields)
+    event = GenericDomainEvent.model_validate(fields)
+    event._event_version = event_version  # pyright: ignore[reportPrivateUsage]
+    return event

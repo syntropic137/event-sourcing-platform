@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import ClassVar, Generic, Literal, TypeVar
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 class DomainEvent(BaseModel):
@@ -86,6 +86,15 @@ class GenericDomainEvent(DomainEvent):
     """
 
     model_config = {"frozen": True, "extra": "allow"}
+
+    # The event_version it was read at (ADR-027), so writing it back keeps its
+    # version. Private: never part of the payload.
+    _event_version: int = PrivateAttr(default=1)
+
+    @property
+    def event_version(self) -> int:
+        """The version this event was read at (1 when constructed directly)."""
+        return self._event_version
 
 
 class EventMetadata(BaseModel):

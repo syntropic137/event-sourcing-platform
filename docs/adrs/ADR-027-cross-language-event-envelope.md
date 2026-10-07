@@ -65,10 +65,20 @@ unknown field is a payload-mismatch error, so a field that strict readers must
 tolerate needs a version bump and an upcaster.
 
 Readers MUST tolerate the keys `eventType` and `schemaVersion` (written into
-every payload by TypeScript SDK <= 0.17) and `event_type` (older Python
-producers) even in strict models: they duplicate metadata and are dropped
-before upcasting and decoding, unless the target schema declares a field of
-that name. Streams written before #382 stay readable without migration.
+every payload by TypeScript SDK <= 0.17), and Python also `event_type`
+(older Python producers). Streams written before #382 stay readable without
+migration:
+
+- TypeScript drops `eventType`/`schemaVersion` (`DomainEvent` members, never
+  event data) before upcasting and decoding.
+- Python drops the three keys before upcasting unless some registered
+  version of the stored type declares the field (name or alias), and again
+  before validation unless the target model declares it, so strict models
+  accept legacy payloads.
+- Rust passes the body through unchanged; serde ignores unknown fields by
+  default, so legacy payloads decode. A Rust event that may read pre-#382 TS
+  streams MUST NOT use `#[serde(deny_unknown_fields)]`, and an upcaster
+  step for such a stream sees the keys.
 
 ### SDK mapping
 

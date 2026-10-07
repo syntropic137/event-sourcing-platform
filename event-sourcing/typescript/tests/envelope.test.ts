@@ -233,6 +233,11 @@ describe('upcasting', () => {
 });
 
 describe('backward compatibility', () => {
+  it('keeps an event_type data field (only eventType/schemaVersion are dropped)', () => {
+    const env = decodeGrpcEvent(wire('EnvUnregistered', { event_type: 'invoice', x: 1 }), '');
+    expect(env.event.toJson()).toEqual({ event_type: 'invoice', x: 1 });
+  });
+
   it('reads payloads stored by TS <= 0.17 (eventType/schemaVersion echoed)', () => {
     const legacy = { eventType: 'EnvDeposited', schemaVersion: 2, amount: 5, currency: 'EUR' };
     const env = decodeGrpcEvent(wire('EnvDeposited', legacy, { version: 2 }), '');

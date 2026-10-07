@@ -166,15 +166,14 @@ export class EventFactory {
 
 /**
  * Keys the TypeScript SDK <= 0.17 wrote into every payload (its event class
- * fields `eventType`/`schemaVersion`), and older Python producers'
- * `event_type`. They duplicate envelope metadata (ADR-027): writers no longer
- * emit them and readers drop them before upcasting and decoding, so payloads
- * already stored by those writers still decode.
+ * fields). They duplicate envelope metadata (ADR-027): writers no longer emit
+ * them and readers drop them before upcasting and decoding, so payloads
+ * already stored still decode. They are `DomainEvent` members, so a TS event
+ * can never carry them as data. (`event_type` is NOT dropped: for TS it is
+ * an ordinary field name.)
  */
-export const ENVELOPE_ECHO_KEYS: readonly string[] = ['eventType', 'schemaVersion', 'event_type'];
-
-/** `eventType`/`schemaVersion` are `DomainEvent` members, never event data. */
-const TS_RESERVED_KEYS: readonly string[] = ['eventType', 'schemaVersion'];
+export const ENVELOPE_ECHO_KEYS: readonly string[] = ['eventType', 'schemaVersion'];
+const TS_RESERVED_KEYS = ENVELOPE_ECHO_KEYS;
 
 /** The event body without the keys that duplicate envelope metadata. */
 export function stripEnvelopeKeys(

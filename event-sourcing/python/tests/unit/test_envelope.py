@@ -137,6 +137,13 @@ class TestWrite:
         assert d.meta.event_type == "Unregistered"
         assert json.loads(d.payload) == {"x": 1}
 
+    def test_generic_event_is_written_back_at_the_version_it_was_read(self) -> None:
+        env = decode(data("EnvUnregistered", {"x": 1}, version=4))
+        assert isinstance(env.event, GenericDomainEvent)
+        d = encode(env.event)
+        assert (d.meta.event_type, d.meta.event_version) == ("EnvUnregistered", 4)
+        assert json.loads(d.payload) == {"x": 1}
+
     def test_invalid_schema_version_is_refused_on_write(self) -> None:
         class Broken(DomainEvent):
             event_type: ClassVar[str] = "Broken"
@@ -217,6 +224,31 @@ class TestUpcasting:
         with pytest.raises(UpcastError) as exc:
             decode(data("EnvDeposited", {"amount": 5}, version=1), upcasters=up)
         assert exc.value.global_nonce == 42
+
+
+class TestEchoKeysDeclaredByAnyVersion:
+    def test_field_declared_only_by_the_target_version_reaches_the_upcaster(self) -> None:
+        @event("EnvSchemaDoc", "v2")
+        class EnvSchemaDocV2(DomainEvent):
+            event_type: ClassVar[str] = "EnvSchemaDoc"
+            schema_version: ClassVar[int] = 2
+            schemaVersion: str  # noqa: N815 - a domain field named like the echo key
+            title: str
+
+        up = Upcasters().register("EnvSchemaDoc", 1, 2, lambda b: {**b, "title": "t"})
+        env = decode(data("EnvSchemaDoc", {"schemaVersion": "draft-7"}, version=1), up)
+        assert env.event == EnvSchemaDocV2(schemaVersion="draft-7", title="t")
+
+    def test_alias_with_an_echo_name_is_kept(self) -> None:
+        from pydantic import Field
+
+        @event("EnvAliased", "v1")
+        class EnvAliased(DomainEvent):
+            event_type: ClassVar[str] = "EnvAliased"
+            kind: str = Field(alias="eventType")
+
+        env = decode(data("EnvAliased", {"eventType": "invoice"}))
+        assert env.event == EnvAliased.model_validate({"eventType": "invoice"})
 
 
 class TestBackwardCompatibility:

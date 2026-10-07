@@ -52,6 +52,8 @@ strict models: readers drop those keys.
 
 - A `GenericDomainEvent` is written without its `event_type` attribute in the
   payload (the type is metadata).
+- A `GenericDomainEvent` read from the store keeps the version it was read at
+  (`event.event_version`) and is written back at that version.
 
 ## [0.14.0] - 2026-04-16
 
