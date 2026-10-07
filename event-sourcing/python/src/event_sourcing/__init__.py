@@ -15,15 +15,22 @@ from event_sourcing.client import (
 from event_sourcing.core.aggregate import AggregateRoot, BaseAggregate
 from event_sourcing.core.checkpoint import DispatchContext, ProjectionReadStore, ProjectionStore
 from event_sourcing.core.command import Command, CommandBus, CommandHandler, InMemoryCommandBus
+from event_sourcing.core.envelope import ENVELOPE_ECHO_KEYS, DecodedEvent, decode_event
 from event_sourcing.core.errors import (
     AggregateNotFoundError,
     ConcurrencyConflictError,
+    EventDecodeError,
+    EventPayloadError,
     EventSourcingError,
     EventStoreError,
     InvalidAggregateStateError,
     StreamAlreadyExistsError,
     SubscriptionHaltedError,
     UndecodableEventError,
+    UnknownEventTypeError,
+    UnknownEventVersionError,
+    UnsupportedContentTypeError,
+    UpcastError,
 )
 from event_sourcing.core.event import (
     BaseDomainEvent,
@@ -54,6 +61,7 @@ from event_sourcing.core.repository import (
     Repository,
     RepositoryFactory,
 )
+from event_sourcing.core.upcast import Upcasters
 from event_sourcing.decorators.commands import (
     aggregate,
     command,
@@ -65,6 +73,8 @@ from event_sourcing.decorators.events import (
     event_sourcing_handler,
     get_event_metadata,
     get_event_type_registry,
+    registered_event_versions,
+    resolve_event_class,
     resolve_event_type,
 )
 from event_sourcing.stores import (
@@ -138,7 +148,14 @@ __all__ = [
     "get_command_metadata",
     "get_event_metadata",
     "get_event_type_registry",
+    "registered_event_versions",
+    "resolve_event_class",
     "resolve_event_type",
+    # Cross-language envelope and upcasting (ADR-027)
+    "DecodedEvent",
+    "ENVELOPE_ECHO_KEYS",
+    "Upcasters",
+    "decode_event",
     # Concurrency Control
     "ExpectedVersion",
     # Errors
@@ -150,4 +167,10 @@ __all__ = [
     "EventStoreError",
     "UndecodableEventError",
     "SubscriptionHaltedError",
+    "EventDecodeError",
+    "EventPayloadError",
+    "UnknownEventTypeError",
+    "UnknownEventVersionError",
+    "UnsupportedContentTypeError",
+    "UpcastError",
 ]

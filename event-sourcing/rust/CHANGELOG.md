@@ -31,6 +31,8 @@ The SDK is alpha: breaking changes may land in minor versions and are listed und
 - `Error::CheckpointFenced { projection, stored, position }` for fenced checkpoint commits; `Error::data_loss_position()`.
 - Example `supervised_projection` (projection service with supervision, live processor and health).
 
+- Cross-language tests cover all six directions between TypeScript, Python and Rust (#382): `tests/fixtures/xlang/rust.json` (Rust encoder, checked by `rust_fixture_is_current`) and the frozen `typescript-legacy.json` (TS SDK 0.17 payloads) join the TS and Python fixtures, which were regenerated because those encoders now write ADR-027 exactly (no `eventType`/`schemaVersion` in TS payloads; Python writes its v2 event). No Rust encoder output changed.
+
 ### Fixed
 
 - `EventStoreClient::connect("https://...")` no longer becomes `http://https://...`; it now connects over TLS (#373).

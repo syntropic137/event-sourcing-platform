@@ -13,6 +13,7 @@ export * from './core/event';
 export * from './core/repository';
 export * from './core/query';
 export * from './core/errors';
+export * from './core/upcast';
 
 // Event store client integration
 export type { EventStoreClient, EventStoreClientConfig } from './client/event-store-client';

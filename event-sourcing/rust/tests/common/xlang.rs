@@ -75,8 +75,7 @@ impl Aggregate for Account {
 
 pub const NOTE: &str = "caf\u{e9} \u{2615} \"quoted\"";
 
-/// The events every peer writes for aggregate `id`. Python writes only the
-/// first two (it cannot write version 2 yet, see ADR-027).
+/// The events every peer writes for aggregate `id` (`AccountClosed` is v2).
 pub fn fixture_events(id: &str) -> Vec<AccountEvent> {
     vec![
         AccountOpened {
@@ -142,6 +141,28 @@ impl EventStorePort for CapturePort {
     async fn subscribe(&self, _req: proto::SubscribeRequest) -> Result<EventDataStream> {
         Err(Error::domain("not supported"))
     }
+}
+
+/// Minimal standard base64 encoder (fixtures only).
+pub fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 /// Minimal standard base64 decoder (fixtures only).
