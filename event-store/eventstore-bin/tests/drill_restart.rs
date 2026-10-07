@@ -7,7 +7,7 @@
 
 mod drill;
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +20,7 @@ use drill::workload::{
     global_nonce_of, head, idempotency_rows, open, read_stream, Cmd, RetryStats,
 };
 use drill::{eventually, unique, STEP};
-use eventstore_proto::gen::{AppendResponse, EventData, ReadStreamRequest};
+use eventstore_proto::gen::{AppendResponse, EventData, EventMetadata, ReadStreamRequest};
 use sqlx::PgPool;
 use tonic::Code;
 
@@ -67,17 +67,16 @@ async fn wait_backend_gone(pool: &PgPool, pid: i32) {
 fn assert_stored_as_sent(stored: &EventData, sent: &EventData, acked_global: u64) {
     let s = stored.meta.as_ref().unwrap();
     let m = sent.meta.as_ref().unwrap();
-    assert_eq!(s.event_id, m.event_id);
     assert_eq!(s.global_nonce, acked_global, "{}", m.event_id);
-    assert_eq!(s.aggregate_id, m.aggregate_id);
-    assert_eq!(s.aggregate_type, m.aggregate_type);
-    assert_eq!(s.aggregate_nonce, m.aggregate_nonce);
-    assert_eq!(s.event_type, m.event_type);
-    assert_eq!(s.event_version, m.event_version);
-    assert_eq!(s.content_type, m.content_type);
-    assert_eq!(s.correlation_id, m.correlation_id);
-    assert_eq!(s.timestamp_unix_ms, m.timestamp_unix_ms);
-    assert_eq!(s.headers, m.headers);
+    assert!(s.recorded_time_unix_ms > 0, "{}", m.event_id);
+    // Every client-supplied field round-trips; only the two server-assigned
+    // fields differ from the request.
+    let expected = EventMetadata {
+        global_nonce: acked_global,
+        recorded_time_unix_ms: s.recorded_time_unix_ms,
+        ..m.clone()
+    };
+    assert_eq!(s, &expected, "metadata of {}", m.event_id);
     assert_eq!(stored.payload, sent.payload, "payload of {}", m.event_id);
 }
 
@@ -132,7 +131,7 @@ async fn acked_appends_survive_eventstore_and_postgres_crashes() {
     let mut stats = RetryStats::default();
     let mut acks3 = Vec::new();
     for c in phase3 {
-        acks3.push(append_until_acked(&es.endpoint(), &mut client, c, &mut stats).await);
+        acks3.push(append_until_acked(&es.endpoint(), &mut client, c, &mut stats, None).await);
     }
     assert_eq!(es.pid(), pid, "event store was not restarted");
     eprintln!("retries after postgres crash: {stats:?}");
@@ -333,25 +332,30 @@ async fn kill_storm_during_writes_reconciles_exactly_once() {
     let total = cmds.len();
 
     let progress = Arc::new(AtomicUsize::new(0));
+    let in_flight = Arc::new(AtomicBool::new(false));
     let writer = {
         let endpoint = es.endpoint();
         let cmds = cmds.clone();
         let progress = progress.clone();
+        let in_flight = in_flight.clone();
         tokio::spawn(async move {
             let mut client = None;
             let mut stats = RetryStats::default();
             let mut acks = Vec::new();
             for c in &cmds {
-                acks.push(append_until_acked(&endpoint, &mut client, c, &mut stats).await);
+                let ack =
+                    append_until_acked(&endpoint, &mut client, c, &mut stats, Some(&in_flight))
+                        .await;
+                acks.push(ack);
                 progress.fetch_add(1, Ordering::SeqCst);
             }
             (acks, stats)
         })
     };
 
-    // Kill at fixed progress points, with a varying sub-append delay so the
-    // kill lands at different points of the in-flight request.
-    let mut kills = 0;
+    // Kill at fixed progress points, only while an append call is in flight,
+    // after a varying delay so the kill lands at different points of it.
+    let mut kills_in_flight = 0;
     for k in 0..KILLS {
         let at = (k + 1) * total / (KILLS + 2);
         eventually("writer progress", Duration::from_secs(120), || {
@@ -359,21 +363,33 @@ async fn kill_storm_during_writes_reconciles_exactly_once() {
             async move { (p >= at).then_some(()) }
         })
         .await;
-        tokio::time::sleep(Duration::from_micros(300 * k as u64)).await;
+        let deadline = std::time::Instant::now() + STEP;
+        while !in_flight.load(Ordering::SeqCst) {
+            assert!(std::time::Instant::now() < deadline, "no append in flight");
+            std::hint::spin_loop();
+        }
+        std::thread::sleep(Duration::from_micros(250 * k as u64));
         assert!(!writer.is_finished(), "writer finished before kill {k}");
+        if in_flight.load(Ordering::SeqCst) {
+            kills_in_flight += 1;
+        }
         es.kill();
-        kills += 1;
         es.restart().await;
     }
     let (acks, stats) = tokio::time::timeout(Duration::from_secs(300), writer)
         .await
         .expect("writer finished")
         .unwrap();
-    eprintln!("kills={kills} retry stats: {stats:?}");
-    assert_eq!(kills, KILLS);
+    eprintln!("kills={KILLS} in_flight_at_kill={kills_in_flight} retry stats: {stats:?}");
+    // Each in-flight kill fails the writer's pending call. Allow for a call
+    // that completed between the flag check and the kill.
     assert!(
-        stats.transport_or_unavailable > 0,
-        "kills were observed by the writer"
+        kills_in_flight >= KILLS / 2,
+        "kills_in_flight={kills_in_flight}"
+    );
+    assert!(
+        stats.transport_or_unavailable >= KILLS / 2,
+        "in-flight kills were observed by the writer: {stats:?}"
     );
 
     assert_exactly_once(&pool, &tenant, &cmds).await;

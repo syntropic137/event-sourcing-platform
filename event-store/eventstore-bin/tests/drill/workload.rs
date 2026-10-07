@@ -3,6 +3,7 @@
 //! original request.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use eventstore_proto::gen::event_store_client::EventStoreClient;
@@ -191,6 +192,7 @@ pub async fn append_until_acked(
     client: &mut Option<EventStoreClient<Channel>>,
     cmd: &Cmd,
     stats: &mut RetryStats,
+    in_flight: Option<&AtomicBool>,
 ) -> AppendResponse {
     for _attempt in 0..2000 {
         if client.is_none() {
@@ -209,7 +211,13 @@ pub async fn append_until_acked(
             }
         }
         let c = client.as_mut().unwrap();
+        if let Some(f) = in_flight {
+            f.store(true, Ordering::SeqCst);
+        }
         let res = tokio::time::timeout(Duration::from_secs(20), c.append(cmd.req.clone())).await;
+        if let Some(f) = in_flight {
+            f.store(false, Ordering::SeqCst);
+        }
         match res {
             Ok(Ok(resp)) => return resp.into_inner(),
             Ok(Err(status)) => match status.code() {
