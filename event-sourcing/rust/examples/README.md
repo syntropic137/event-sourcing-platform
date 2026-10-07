@@ -9,7 +9,8 @@ This directory contains Rust examples demonstrating event sourcing patterns with
 **Focus:** Basic aggregate pattern with command handlers
 
 Demonstrates:
-- `Aggregate` trait for state management
+- One struct per event (`EventSchema`) grouped with `event_enum!`; payloads use the cross-language envelope (ADR-026)
+- `Aggregate` trait with a stable `AGGREGATE_TYPE`, for state management
 - `AggregateRoot` trait for command handling
 - Business validation in `handle_command()`
 - State updates only in `apply_event()`
@@ -64,8 +65,9 @@ struct MyAggregate {
 
 // State management trait
 impl Aggregate for MyAggregate {
-    type Event = MyEvent;
+    type Event = MyEvent; // an event_enum! of EventSchema structs
     type Error = Error;
+    const AGGREGATE_TYPE: &'static str = "My"; // stable, shared with TS/Python
 
     fn aggregate_id(&self) -> Option<&str> {
         self.id.as_deref()
@@ -103,7 +105,8 @@ impl AggregateRoot for MyAggregate {
 
 | Aspect | TypeScript/Python | Rust |
 |--------|------------------|------|
-| Aggregate Marking | `@Aggregate` decorator | `impl Aggregate` trait |
+| Aggregate Marking | `@Aggregate('Order')` decorator | `impl Aggregate` with `AGGREGATE_TYPE = "Order"` |
+| Event Type/Version | `@Event('OrderPlaced', 'v1')` | `impl EventSchema` (`EVENT_TYPE`, `EVENT_VERSION`) |
 | Command Handlers | `@CommandHandler` decorator | `impl AggregateRoot` trait |
 | Event Handlers | `@EventSourcingHandler` decorator | `apply_event()` method |
 | Event Emission | `this.apply(event)` / `self._apply(event)` | Return `Vec<Event>` |
@@ -125,7 +128,7 @@ All three language implementations follow these principles:
 
 ### Prerequisites
 
-- Rust 1.70+ (stable)
+- Rust 1.80+ (stable)
 - Cargo
 
 ### Build Examples

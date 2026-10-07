@@ -1,6 +1,6 @@
 # Rust Event Sourcing SDK Makefile
 
-.PHONY: help build test check fmt clippy clean qa qa-fast qa-full setup test-postgres
+.PHONY: help build test check fmt clippy clean qa qa-fast qa-full setup test-postgres test-xlang test-xlang-fixtures
 
 help:
 	@echo "Rust Event Sourcing SDK - Available Targets:"
@@ -48,6 +48,17 @@ qa-fast: fmt clippy check
 test-postgres:
 	@test -n "$$TEST_DATABASE_URL" || { echo "TEST_DATABASE_URL must be set"; exit 1; }
 	cargo test --features postgres --tests
+
+# Live cross-language round trips (ADR-026): TypeScript/Python write, Rust
+# reads, and back. Needs node (after `pnpm install` at the repo root) and uv.
+test-xlang:
+	cargo test --test xlang_live -- --ignored
+
+# Regenerate the golden fixtures from the real TypeScript and Python encoders.
+# The envelope is a one-way door: review any diff in tests/fixtures/xlang.
+test-xlang-fixtures:
+	node tests/xlang/ts_peer.cjs capture tests/fixtures/xlang/typescript.json
+	uv run --quiet --project ../python --extra grpc python tests/xlang/py_peer.py capture tests/fixtures/xlang/python.json
 
 qa: qa-fast
 	@echo "⚠️  The slow tests have NOT run. For full QA, run: make qa-full"

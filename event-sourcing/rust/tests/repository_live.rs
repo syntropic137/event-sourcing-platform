@@ -10,19 +10,34 @@ use event_sourcing_rust::client::{proto, EventStorePort};
 use event_sourcing_rust::prelude::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-enum AccountEvent {
-    Opened { id: String, owner: String },
-    Deposited { amount: i64 },
-    Poison,
+struct Opened {
+    id: String,
+    owner: String,
+}
+impl EventSchema for Opened {
+    const EVENT_TYPE: &'static str = "AccountOpened";
 }
 
-impl DomainEvent for AccountEvent {
-    fn event_type(&self) -> &'static str {
-        match self {
-            AccountEvent::Opened { .. } => "AccountOpened",
-            AccountEvent::Deposited { .. } => "MoneyDeposited",
-            AccountEvent::Poison => "Poison",
-        }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct Deposited {
+    amount: i64,
+}
+impl EventSchema for Deposited {
+    const EVENT_TYPE: &'static str = "MoneyDeposited";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct Poison {}
+impl EventSchema for Poison {
+    const EVENT_TYPE: &'static str = "Poison";
+}
+
+event_sourcing_rust::event_enum! {
+    #[derive(Debug, Clone, PartialEq)]
+    enum AccountEvent {
+        Opened(Opened),
+        Deposited(Deposited),
+        Poison(Poison),
     }
 }
 
@@ -37,13 +52,10 @@ struct Account {
 impl Aggregate for Account {
     type Event = AccountEvent;
     type Error = Error;
+    const AGGREGATE_TYPE: &'static str = "Account";
 
     fn aggregate_id(&self) -> Option<&str> {
         self.id.as_deref()
-    }
-
-    fn aggregate_type(&self) -> &'static str {
-        "Account"
     }
 
     fn version(&self) -> u64 {
@@ -52,12 +64,12 @@ impl Aggregate for Account {
 
     fn apply_event(&mut self, event: &AccountEvent) -> Result<()> {
         match event {
-            AccountEvent::Opened { id, owner } => {
+            AccountEvent::Opened(Opened { id, owner }) => {
                 self.id = Some(id.clone());
                 self.owner = owner.clone();
             }
-            AccountEvent::Deposited { amount } => self.balance += amount,
-            AccountEvent::Poison => return Err(Error::invalid_state("poisoned")),
+            AccountEvent::Deposited(Deposited { amount }) => self.balance += amount,
+            AccountEvent::Poison(_) => return Err(Error::invalid_state("poisoned")),
         }
         self.version += 1;
         Ok(())
@@ -83,18 +95,17 @@ impl AggregateRoot for Account {
                 if self.id.is_some() {
                     return Err(Error::invalid_command("already open"));
                 }
-                Ok(vec![AccountEvent::Opened { id, owner }])
+                Ok(vec![Opened { id, owner }.into()])
             }
             AccountCommand::Deposit { amount } => {
                 if self.id.is_none() {
                     return Err(Error::invalid_command("not open"));
                 }
-                Ok(vec![AccountEvent::Deposited { amount }])
+                Ok(vec![Deposited { amount }.into()])
             }
-            AccountCommand::DepositThenPoison { amount } => Ok(vec![
-                AccountEvent::Deposited { amount },
-                AccountEvent::Poison,
-            ]),
+            AccountCommand::DepositThenPoison { amount } => {
+                Ok(vec![Deposited { amount }.into(), Poison {}.into()])
+            }
         }
     }
 }
@@ -103,6 +114,28 @@ fn open(id: &str) -> AccountCommand {
     AccountCommand::Open {
         id: id.into(),
         owner: "alice".into(),
+    }
+}
+
+/// Same events, different aggregate type: its streams are not Account's.
+#[derive(Debug, Clone, Default)]
+struct Savings(Account);
+
+impl Aggregate for Savings {
+    type Event = AccountEvent;
+    type Error = Error;
+    const AGGREGATE_TYPE: &'static str = "Savings";
+
+    fn aggregate_id(&self) -> Option<&str> {
+        self.0.aggregate_id()
+    }
+
+    fn version(&self) -> u64 {
+        self.0.version()
+    }
+
+    fn apply_event(&mut self, event: &AccountEvent) -> Result<()> {
+        self.0.apply_event(event)
     }
 }
 
@@ -407,7 +440,7 @@ async fn aggregate_type_mismatch_is_an_error() {
     let store: Arc<dyn EventStorePort> = Arc::new(connect(&server.addr).await);
     let tenant = unique_tenant();
     let repo = EventStoreRepository::<Account>::new(store.clone(), &tenant);
-    let other = EventStoreRepository::<Account>::new(store, &tenant).with_aggregate_type("Savings");
+    let other = EventStoreRepository::<Savings>::new(store, &tenant);
 
     let mut acct = opened_with_deposit("acct-7").await;
     repo.save(&mut acct).await.unwrap();
@@ -415,10 +448,9 @@ async fn aggregate_type_mismatch_is_an_error() {
     assert!(other.exists("acct-7").await.is_err());
 
     // Saving through a repository of another type must not append.
-    let mut loaded = repo.load("acct-7").await.unwrap().unwrap();
+    let mut loaded = AggregateInstance::from_history("acct-7".into(), Savings::default(), 2);
     loaded
-        .execute(AccountCommand::Deposit { amount: 1 })
-        .await
+        .add_events(vec![Deposited { amount: 1 }.into()])
         .unwrap();
     assert!(other.save(&mut loaded).await.is_err());
     assert_eq!(loaded.uncommitted_count(), 1);
@@ -433,7 +465,17 @@ async fn aggregate_type_mismatch_is_an_error() {
 
     // Instance metadata is not trusted: a Savings stream rehydrated by hand
     // (metadata says "Account") must still be rejected by the Account repo.
-    let mut savings = opened_with_deposit("sav-1").await;
+    let mut savings = AggregateInstance::new("sav-1".to_string(), Savings::default());
+    savings
+        .add_events(vec![
+            Opened {
+                id: "sav-1".into(),
+                owner: "bob".into(),
+            }
+            .into(),
+            Deposited { amount: 10 }.into(),
+        ])
+        .unwrap();
     other.save(&mut savings).await.unwrap();
     let mut forged = AggregateInstance::from_history("sav-1".into(), Account::default(), 2);
     forged.execute(open("sav-1")).await.unwrap();
@@ -482,4 +524,182 @@ async fn execute_is_atomic_when_an_event_fails_to_apply() {
     let loaded = repo.load("acct-9").await.unwrap().unwrap();
     assert_eq!(loaded.aggregate.balance, acct.aggregate.balance);
     assert_eq!(loaded.aggregate.balance, 11);
+}
+
+// ---------------------------------------------------------------------------
+// Wire format (ADR-026) and upcasting
+// ---------------------------------------------------------------------------
+
+async fn read_raw(store: &dyn EventStorePort, tenant: &str, id: &str) -> Vec<proto::EventData> {
+    store
+        .read_stream(proto::ReadStreamRequest {
+            tenant_id: tenant.into(),
+            aggregate_id: id.into(),
+            from_aggregate_nonce: 1,
+            max_count: 1000,
+            forward: true,
+        })
+        .await
+        .unwrap()
+        .events
+}
+
+/// Append raw events as another SDK would: (event_type, version, payload).
+async fn append_raw(
+    store: &dyn EventStorePort,
+    tenant: &str,
+    id: &str,
+    events: &[(&str, u32, &str)],
+) {
+    store
+        .append(proto::AppendRequest {
+            tenant_id: tenant.into(),
+            aggregate_id: id.into(),
+            aggregate_type: "Account".into(),
+            expected_aggregate_nonce: 0,
+            idempotency_key: String::new(),
+            events: events
+                .iter()
+                .enumerate()
+                .map(|(i, (ty, version, payload))| proto::EventData {
+                    meta: Some(proto::EventMetadata {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        aggregate_id: id.into(),
+                        aggregate_type: "Account".into(),
+                        aggregate_nonce: i as u64 + 1,
+                        event_type: (*ty).into(),
+                        event_version: *version,
+                        content_type: "application/json".into(),
+                        tenant_id: tenant.into(),
+                        ..Default::default()
+                    }),
+                    payload: payload.as_bytes().to_vec(),
+                })
+                .collect(),
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn saved_events_use_the_cross_language_envelope() {
+    let server = spawn_server().await;
+    let store: Arc<dyn EventStorePort> = Arc::new(connect(&server.addr).await);
+    let tenant = unique_tenant();
+    let repo = EventStoreRepository::<Account>::new(store.clone(), &tenant);
+    let mut acct = opened_with_deposit("acct-w").await;
+    repo.save(&mut acct).await.unwrap();
+
+    let raw = read_raw(store.as_ref(), &tenant, "acct-w").await;
+    let metas: Vec<_> = raw.iter().map(|e| e.meta.clone().unwrap()).collect();
+    assert_eq!(metas[0].event_type, "AccountOpened");
+    assert_eq!(metas[1].event_type, "MoneyDeposited");
+    for m in &metas {
+        assert_eq!(m.event_version, 1);
+        assert_eq!(m.aggregate_type, "Account");
+        assert_eq!(m.content_type, "application/json");
+        assert_eq!(m.tenant_id, tenant);
+        assert!(uuid::Uuid::parse_str(&m.event_id).is_ok());
+        assert!(m.timestamp_unix_ms > 0);
+    }
+    // Flat body, no enum tag.
+    assert_eq!(raw[0].payload, br#"{"id":"acct-w","owner":"alice"}"#);
+    assert_eq!(raw[1].payload, br#"{"amount":10}"#);
+}
+
+#[tokio::test]
+async fn foreign_events_load_including_unset_version() {
+    let server = spawn_server().await;
+    let store: Arc<dyn EventStorePort> = Arc::new(connect(&server.addr).await);
+    let tenant = unique_tenant();
+    append_raw(
+        store.as_ref(),
+        &tenant,
+        "acct-f",
+        &[
+            // Extra keys (as the TS SDK writes) are ignored; version 0 is 1.
+            (
+                "AccountOpened",
+                1,
+                r#"{"eventType":"AccountOpened","schemaVersion":1,"id":"acct-f","owner":"zed"}"#,
+            ),
+            ("MoneyDeposited", 0, r#"{"amount": 7}"#),
+        ],
+    )
+    .await;
+    let repo = EventStoreRepository::<Account>::new(store, &tenant);
+    let loaded = repo.load("acct-f").await.unwrap().unwrap();
+    assert_eq!(loaded.aggregate.owner, "zed");
+    assert_eq!(loaded.aggregate.balance, 7);
+    assert_eq!(loaded.committed_version(), 2);
+}
+
+#[tokio::test]
+async fn old_events_are_upcast_on_load() {
+    let server = spawn_server().await;
+    let store: Arc<dyn EventStorePort> = Arc::new(connect(&server.addr).await);
+    let tenant = unique_tenant();
+    append_raw(
+        store.as_ref(),
+        &tenant,
+        "acct-u",
+        &[
+            ("AccountOpened", 1, r#"{"id":"acct-u","owner":"amy"}"#),
+            // A v1 event under an old name with an old field name.
+            ("CashIn", 1, r#"{"amt":3}"#),
+        ],
+    )
+    .await;
+
+    let plain = EventStoreRepository::<Account>::new(store.clone(), &tenant);
+    let err = plain.load("acct-u").await.expect_err("no upcaster");
+    assert!(
+        matches!(&err, Error::UnknownEventType { event_type, .. } if event_type == "CashIn"),
+        "{err:?}"
+    );
+
+    let upcasters = Upcasters::new().rename("CashIn", 1, "MoneyDeposited", 1, |v| {
+        Ok(serde_json::json!({ "amount": v["amt"] }))
+    });
+    let repo = EventStoreRepository::<Account>::new(store, &tenant).with_upcasters(upcasters);
+    let loaded = repo.load("acct-u").await.unwrap().unwrap();
+    assert_eq!(loaded.aggregate.balance, 3);
+}
+
+#[tokio::test]
+async fn undecodable_events_fail_the_load() {
+    let server = spawn_server().await;
+    let store: Arc<dyn EventStorePort> = Arc::new(connect(&server.addr).await);
+    let tenant = unique_tenant();
+    append_raw(
+        store.as_ref(),
+        &tenant,
+        "acct-n",
+        &[
+            ("AccountOpened", 1, r#"{"id":"acct-n","owner":"amy"}"#),
+            ("MoneyDeposited", 2, r#"{"amount":1}"#),
+        ],
+    )
+    .await;
+    append_raw(
+        store.as_ref(),
+        &tenant,
+        "acct-m",
+        &[("AccountOpened", 1, r#"{"id":1}"#)],
+    )
+    .await;
+    let repo = EventStoreRepository::<Account>::new(store, &tenant);
+    let err = repo.load("acct-n").await.expect_err("newer version");
+    assert!(
+        matches!(
+            err,
+            Error::UnknownEventVersion {
+                event_version: 2,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
+    let err = repo.load("acct-m").await.expect_err("bad payload");
+    assert!(matches!(err, Error::EventDecode { .. }), "{err:?}");
 }

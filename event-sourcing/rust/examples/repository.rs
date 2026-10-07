@@ -13,18 +13,30 @@ use std::sync::Arc;
 
 use event_sourcing_rust::prelude::*;
 
+// Each event is a struct; its fields are the JSON payload. The event type and
+// version go to event metadata, so TypeScript and Python services can read
+// these streams too (ADR-026).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum CounterEvent {
-    Created { id: String },
-    Incremented { by: u32 },
+struct CounterCreated {
+    id: String,
+}
+impl EventSchema for CounterCreated {
+    const EVENT_TYPE: &'static str = "CounterCreated";
 }
 
-impl DomainEvent for CounterEvent {
-    fn event_type(&self) -> &'static str {
-        match self {
-            CounterEvent::Created { .. } => "CounterCreated",
-            CounterEvent::Incremented { .. } => "CounterIncremented",
-        }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CounterIncremented {
+    by: u32,
+}
+impl EventSchema for CounterIncremented {
+    const EVENT_TYPE: &'static str = "CounterIncremented";
+}
+
+event_sourcing_rust::event_enum! {
+    #[derive(Debug, Clone)]
+    enum CounterEvent {
+        Created(CounterCreated),
+        Incremented(CounterIncremented),
     }
 }
 
@@ -38,13 +50,10 @@ struct Counter {
 impl Aggregate for Counter {
     type Event = CounterEvent;
     type Error = Error;
+    const AGGREGATE_TYPE: &'static str = "Counter";
 
     fn aggregate_id(&self) -> Option<&str> {
         self.id.as_deref()
-    }
-
-    fn aggregate_type(&self) -> &'static str {
-        "Counter"
     }
 
     fn version(&self) -> u64 {
@@ -53,8 +62,8 @@ impl Aggregate for Counter {
 
     fn apply_event(&mut self, event: &CounterEvent) -> Result<()> {
         match event {
-            CounterEvent::Created { id } => self.id = Some(id.clone()),
-            CounterEvent::Incremented { by } => self.value += u64::from(*by),
+            CounterEvent::Created(e) => self.id = Some(e.id.clone()),
+            CounterEvent::Incremented(e) => self.value += u64::from(e.by),
         }
         self.version += 1;
         Ok(())
@@ -76,13 +85,13 @@ impl AggregateRoot for Counter {
     async fn handle_command(&self, command: CounterCommand) -> Result<Vec<CounterEvent>> {
         match command {
             CounterCommand::Create { id } if self.id.is_none() => {
-                Ok(vec![CounterEvent::Created { id }])
+                Ok(vec![CounterCreated { id }.into()])
             }
             CounterCommand::Create { .. } => Err(Error::invalid_command("already created")),
             CounterCommand::Increment { .. } if self.id.is_none() => {
                 Err(Error::invalid_command("counter does not exist"))
             }
-            CounterCommand::Increment { by } => Ok(vec![CounterEvent::Incremented { by }]),
+            CounterCommand::Increment { by } => Ok(vec![CounterIncremented { by }.into()]),
         }
     }
 }

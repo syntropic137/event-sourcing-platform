@@ -66,6 +66,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::client::{proto, EventStorePort};
 use crate::error::{Error, Result};
+use crate::event::{DomainEvent, SerializedEvent};
+use crate::upcast::Upcasters;
+use crate::wire;
 
 #[cfg(feature = "postgres")]
 mod postgres;
@@ -118,10 +121,17 @@ impl fmt::Display for CheckpointKey {
 }
 
 /// An event as recorded in the store, with an untyped payload.
+///
+/// Decode it with [`decode`](Self::decode), which dispatches on
+/// `event_type` and `event_version` (ADR-026). Inside a
+/// [`ProjectionRunner`] configured with
+/// [`with_upcasters`](ProjectionRunner::with_upcasters), the event has already
+/// been upcast: type, version and payload are the chain's result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordedEvent {
     pub event_id: String,
     pub event_type: String,
+    /// Schema version (`0` on the wire, meaning unset, is reported as 1).
     pub event_version: u32,
     pub tenant_id: String,
     pub aggregate_id: String,
@@ -143,9 +153,33 @@ fn non_empty(s: String) -> Option<String> {
 }
 
 impl RecordedEvent {
-    /// Deserialize the JSON payload.
-    pub fn decode<T: DeserializeOwned>(&self) -> Result<T> {
-        Ok(serde_json::from_slice(&self.payload)?)
+    /// Decode as `E` by dispatching on `event_type` and `event_version`.
+    ///
+    /// An event `E` does not know is [`Error::UnknownEventType`] or
+    /// [`Error::UnknownEventVersion`]; a non-JSON payload is
+    /// [`Error::UnsupportedContentType`]. `E` is an
+    /// [`event_enum!`](crate::event_enum) or a single
+    /// [`EventSchema`](crate::event::EventSchema) struct.
+    pub fn decode<E: DomainEvent>(&self) -> Result<E> {
+        wire::check_content_type(&self.event_type, &self.content_type)?;
+        E::from_payload(&SerializedEvent::new(
+            &self.event_type,
+            self.event_version,
+            &self.payload,
+        ))
+    }
+
+    /// Upcast with `upcasters`, then [`decode`](Self::decode). For events
+    /// obtained outside a runner configured with upcasters.
+    pub fn decode_with<E: DomainEvent>(&self, upcasters: &Upcasters) -> Result<E> {
+        upcasters.upcast_recorded(self)?.decode()
+    }
+
+    /// Deserialize the raw JSON payload as `T`, without checking type or
+    /// version and without upcasting. Prefer [`decode`](Self::decode).
+    pub fn payload_json<T: DeserializeOwned>(&self) -> Result<T> {
+        wire::check_content_type(&self.event_type, &self.content_type)?;
+        SerializedEvent::new(&self.event_type, self.event_version, &self.payload).deserialize()
     }
 
     /// Convert a wire event. Fails if metadata is missing.
@@ -156,7 +190,7 @@ impl RecordedEvent {
         Ok(Self {
             event_id: m.event_id,
             event_type: m.event_type,
-            event_version: m.event_version,
+            event_version: wire::normalize_version(m.event_version),
             tenant_id: m.tenant_id,
             aggregate_id: m.aggregate_id,
             aggregate_type: m.aggregate_type,
@@ -507,6 +541,7 @@ pub struct ProjectionRunner<P, S: ProjectionStore> {
     processor: Option<Arc<dyn LiveProcessor>>,
     drain_on_live_start: bool,
     processor_retry: Duration,
+    upcasters: Upcasters,
     position: u64,
     progress: watch::Sender<RunnerProgress>,
 }
@@ -534,6 +569,7 @@ where
             processor: None,
             drain_on_live_start: true,
             processor_retry: Duration::from_secs(1),
+            upcasters: Upcasters::new(),
             position: 0,
             progress,
         }
@@ -576,6 +612,16 @@ where
     /// capped at 30 s). Default 1 s.
     pub fn with_processor_retry_delay(mut self, delay: Duration) -> Self {
         self.processor_retry = delay;
+        self
+    }
+
+    /// Upcast every event before the projection sees it (and before
+    /// [`CheckpointedProjection::handles`] is asked, so a renamed type is
+    /// routed by its new name). An upcaster failure stops the runner with
+    /// [`Error::ProjectionFailed`] at that event; the checkpoint does not
+    /// advance past it.
+    pub fn with_upcasters(mut self, upcasters: Upcasters) -> Self {
+        self.upcasters = upcasters;
         self
     }
 
@@ -797,6 +843,13 @@ where
         if event.global_nonce <= self.position {
             return Ok(false);
         }
+        let failed = |source: Error| Error::ProjectionFailed {
+            projection: self.key.to_string(),
+            global_nonce: event.global_nonce,
+            source: Box::new(source),
+        };
+        let upcast = self.upcasters.upcast_recorded(event).map_err(failed)?;
+        let event = upcast.as_ref();
         let mut tx = self.store.begin(&self.key).await?;
         if self.projection.handles(&event.event_type) {
             self.projection

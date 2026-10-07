@@ -19,40 +19,63 @@ struct User {
     version: u64,
 }
 
-/// Events that can happen to a user
+// Events that can happen to a user. Each event is a struct whose fields are
+// the stored JSON payload; event type and version are metadata (ADR-026).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-enum UserEvent {
-    Created {
-        id: String,
-        name: String,
-        email: String,
-    },
-    NameChanged {
-        name: String,
-    },
-    EmailChanged {
-        email: String,
-    },
-    Activated,
-    Deactivated,
+struct UserCreated {
+    id: String,
+    name: String,
+    email: String,
+}
+impl EventSchema for UserCreated {
+    const EVENT_TYPE: &'static str = "UserCreated";
 }
 
-impl DomainEvent for UserEvent {
-    fn event_type(&self) -> &'static str {
-        match self {
-            UserEvent::Created { .. } => "UserCreated",
-            UserEvent::NameChanged { .. } => "UserNameChanged",
-            UserEvent::EmailChanged { .. } => "UserEmailChanged",
-            UserEvent::Activated => "UserActivated",
-            UserEvent::Deactivated => "UserDeactivated",
-        }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UserNameChanged {
+    name: String,
+}
+impl EventSchema for UserNameChanged {
+    const EVENT_TYPE: &'static str = "UserNameChanged";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UserEmailChanged {
+    email: String,
+}
+impl EventSchema for UserEmailChanged {
+    const EVENT_TYPE: &'static str = "UserEmailChanged";
+}
+
+// An event without data is an empty struct (payload `{}`), never a unit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UserActivated {}
+impl EventSchema for UserActivated {
+    const EVENT_TYPE: &'static str = "UserActivated";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UserDeactivated {}
+impl EventSchema for UserDeactivated {
+    const EVENT_TYPE: &'static str = "UserDeactivated";
+}
+
+event_sourcing_rust::event_enum! {
+    /// Events of the User aggregate
+    #[derive(Debug, Clone)]
+    enum UserEvent {
+        Created(UserCreated),
+        NameChanged(UserNameChanged),
+        EmailChanged(UserEmailChanged),
+        Activated(UserActivated),
+        Deactivated(UserDeactivated),
     }
 }
 
 impl Aggregate for User {
     type Event = UserEvent;
     type Error = Error;
+    const AGGREGATE_TYPE: &'static str = "User";
 
     fn aggregate_id(&self) -> Option<&str> {
         self.id.as_deref()
@@ -64,26 +87,26 @@ impl Aggregate for User {
 
     fn apply_event(&mut self, event: &Self::Event) -> Result<()> {
         match event {
-            UserEvent::Created { id, name, email } => {
+            UserEvent::Created(UserCreated { id, name, email }) => {
                 self.id = Some(id.clone());
                 self.name = name.clone();
                 self.email = email.clone();
                 self.is_active = false;
                 self.version += 1;
             }
-            UserEvent::NameChanged { name } => {
+            UserEvent::NameChanged(UserNameChanged { name }) => {
                 self.name = name.clone();
                 self.version += 1;
             }
-            UserEvent::EmailChanged { email } => {
+            UserEvent::EmailChanged(UserEmailChanged { email }) => {
                 self.email = email.clone();
                 self.version += 1;
             }
-            UserEvent::Activated => {
+            UserEvent::Activated(_) => {
                 self.is_active = true;
                 self.version += 1;
             }
-            UserEvent::Deactivated => {
+            UserEvent::Deactivated(_) => {
                 self.is_active = false;
                 self.version += 1;
             }
@@ -138,7 +161,7 @@ impl AggregateRoot for User {
                 if email.is_empty() || !email.contains('@') {
                     return Err(Error::invalid_command("Valid email is required"));
                 }
-                Ok(vec![UserEvent::Created { id, name, email }])
+                Ok(vec![UserCreated { id, name, email }.into()])
             }
 
             // CHANGE NAME - Validate user exists
@@ -154,7 +177,7 @@ impl AggregateRoot for User {
                 if self.name == name {
                     return Err(Error::invalid_command("Name is already set to this value"));
                 }
-                Ok(vec![UserEvent::NameChanged { name }])
+                Ok(vec![UserNameChanged { name }.into()])
             }
 
             // CHANGE EMAIL - Validate user exists and email format
@@ -170,7 +193,7 @@ impl AggregateRoot for User {
                 if self.email == email {
                     return Err(Error::invalid_command("Email is already set to this value"));
                 }
-                Ok(vec![UserEvent::EmailChanged { email }])
+                Ok(vec![UserEmailChanged { email }.into()])
             }
 
             // ACTIVATE - Validate user exists and not already active
@@ -181,7 +204,7 @@ impl AggregateRoot for User {
                 if self.is_active {
                     return Err(Error::invalid_command("User is already active"));
                 }
-                Ok(vec![UserEvent::Activated])
+                Ok(vec![UserActivated {}.into()])
             }
 
             // DEACTIVATE - Validate user exists and is active
@@ -194,7 +217,7 @@ impl AggregateRoot for User {
                 if !self.is_active {
                     return Err(Error::invalid_command("User is already inactive"));
                 }
-                Ok(vec![UserEvent::Deactivated])
+                Ok(vec![UserDeactivated {}.into()])
             }
         }
     }
