@@ -39,8 +39,9 @@ from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.subscriptions.drain import ProcessManagerDrain
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Collection
+    from collections.abc import AsyncIterator
 
+    from event_sourcing.core.envelope import EventTypeFilter
     from event_sourcing.core.event import DomainEvent, EventEnvelope
 
 
@@ -191,6 +192,25 @@ def _held_retry_delay(attempts: int) -> float:
     return min(HELD_RETRY_INITIAL_DELAY * 2**exponent, HELD_RETRY_MAX_DELAY)
 
 
+class _TrackEventTypes:
+    """The types the projections on a track handle, read live.
+
+    Live, not a snapshot: a projection held off the track (``_hold``) must
+    stop widening its filter, or its types would still be decoded, and could
+    halt, for the members left on it.
+    """
+
+    def __init__(self, track: _SubscriptionTrack) -> None:
+        self._track = track
+
+    def __contains__(self, event_type: str, /) -> bool:
+        for projection in self._track.projections.values():
+            subscribed = projection.get_subscribed_event_types()
+            if subscribed is None or event_type in subscribed:
+                return True
+        return False
+
+
 class _BehindProjection(NamedTuple):
     """A projection that still needs history, and where it needs it from."""
 
@@ -246,7 +266,7 @@ class TypeFilteringSubscriber(Protocol):
     """
 
     def subscribe(
-        self, from_global_nonce: int, event_types: Collection[str] | None = None
+        self, from_global_nonce: int, event_types: EventTypeFilter | None = None
     ) -> AsyncIterator[EventEnvelope[DomainEvent]]: ...
 
 
@@ -704,23 +724,13 @@ class SubscriptionCoordinator:
         Filter before decode (ADR-027): an event no projection on the track
         handles is skipped, so it must not be decoded either. An evolved type
         with no upcaster would otherwise raise an ``UndecodableEventError``
-        and halt every track for projections that never asked for it. The
-        set is fixed when the track starts; members only ever leave a track.
+        and halt every track for projections that never asked for it.
         """
-        event_types: set[str] | None = set() if self._filters_types else None
-        for projection in track.projections.values():
-            if event_types is None:
-                break
-            subscribed = projection.get_subscribed_event_types()
-            if subscribed is None:
-                event_types = None  # one handles every type: decode them all
-            else:
-                event_types |= subscribed
-        if event_types is None:
+        if not self._filters_types:
             return self._event_store.subscribe(from_global_nonce=track.from_position)
         store = cast("TypeFilteringSubscriber", self._event_store)
         return store.subscribe(
-            from_global_nonce=track.from_position, event_types=frozenset(event_types)
+            from_global_nonce=track.from_position, event_types=_TrackEventTypes(track)
         )
 
     def _hold(self, track: _SubscriptionTrack, failure: ProjectionHandlerFailedError) -> None:

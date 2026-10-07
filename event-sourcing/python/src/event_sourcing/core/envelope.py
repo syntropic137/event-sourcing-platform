@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 
 from pydantic import ValidationError
 
@@ -25,9 +25,6 @@ from event_sourcing.core.errors import (
 from event_sourcing.core.event import DomainEvent, GenericDomainEvent
 from event_sourcing.core.upcast import Upcasters, normalize_version
 from event_sourcing.decorators.events import registered_event_versions, resolve_event_class
-
-if TYPE_CHECKING:
-    from collections.abc import Collection
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +41,12 @@ CONTENT_TYPE_JSON = "application/json"
 ENVELOPE_ECHO_KEYS: tuple[str, ...] = ("eventType", "schemaVersion", "event_type")
 
 InvalidPayloadPolicy = Literal["raise", "generic"]
+
+
+class EventTypeFilter(Protocol):
+    """The event types a reader handles: any ``set``/``frozenset`` of ``str``."""
+
+    def __contains__(self, event_type: str, /) -> bool: ...
 
 
 def is_json_content_type(content_type: str) -> bool:
@@ -218,7 +221,7 @@ def decode_event(
 def skip_unless_wanted(
     event_type: str,
     event_version: int,
-    wanted: Collection[str],
+    wanted: EventTypeFilter,
     *,
     upcasters: Upcasters | None = None,
 ) -> DecodedEvent | None:

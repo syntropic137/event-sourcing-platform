@@ -239,3 +239,40 @@ async def test_a_projection_handling_the_evolved_type_halts_there(
         await asyncio.wait_for(coordinator.start(), TIMEOUT_S)
     assert halted.value.global_nonce == 2
     assert projection.applied == [1]
+
+
+class FailingEvolvedProjection(EvolvedProjection):
+    """Handles the evolved type, but fails event 1 every time: held below it for good."""
+
+    def get_name(self) -> str:
+        return "failing"
+
+    async def on_fbd_wanted(self, data: dict[str, int]) -> None:
+        raise ConnectionError("projection store unavailable")
+
+
+async def test_a_projection_held_off_the_track_no_longer_widens_its_filter(
+    client: GrpcEventStoreClient,
+) -> None:
+    """Held below 1 and taken off the shared track, its types stop being decoded there."""
+    failing, wanted = FailingEvolvedProjection(), WantedProjection()
+    coordinator = SubscriptionCoordinator(
+        event_store=client,
+        checkpoint_store=MemoryCheckpointStore(),
+        projections=[failing, wanted],
+        replay_concurrency=1,  # both replay on one track
+    )
+    running = asyncio.create_task(coordinator.start())
+    try:
+        async with asyncio.timeout(TIMEOUT_S):
+            while 3 not in wanted.applied:
+                assert not running.done(), running
+                await asyncio.sleep(0.01)
+        assert coordinator.halted is None
+        assert set(coordinator.held_projections) == {"failing"}
+    finally:
+        await coordinator.stop()
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+
+    assert wanted.applied == [1, 3]

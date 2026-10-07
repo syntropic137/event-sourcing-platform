@@ -9,7 +9,7 @@ types are confined to internal proto interactions.
 """
 
 import logging
-from collections.abc import AsyncIterator, Collection, Sequence
+from collections.abc import AsyncIterator, Sequence
 
 import grpc
 
@@ -27,6 +27,7 @@ from event_sourcing.client.server_info import (
 )
 from event_sourcing.core.envelope import (
     CONTENT_TYPE_JSON,
+    EventTypeFilter,
     InvalidPayloadPolicy,
     decode_event,
     encode_payload,
@@ -431,7 +432,7 @@ class GrpcEventStoreClient:
     def _proto_to_envelope(
         self,
         event_data: eventstore_pb2.EventData,
-        event_types: Collection[str] | None = None,
+        event_types: EventTypeFilter | None = None,
     ) -> EventEnvelope[DomainEvent]:
         """Convert protobuf EventData to an EventEnvelope.
 
@@ -562,7 +563,7 @@ class GrpcEventStoreClient:
     async def subscribe(
         self,
         from_global_nonce: int = 0,
-        event_types: Collection[str] | None = None,
+        event_types: EventTypeFilter | None = None,
     ) -> AsyncIterator[EventEnvelope[DomainEvent]]:
         """
         Subscribe to events from a global nonce (live streaming).

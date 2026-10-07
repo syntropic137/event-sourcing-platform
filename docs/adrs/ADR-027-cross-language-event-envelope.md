@@ -108,7 +108,7 @@ Python filters before decoding on subscriptions: `subscribe(event_types=...)`
 yields an event whose type after upcasting (known from the upcaster chain
 without running it) is not in the set undecoded, as a `GenericDomainEvent`
 with no payload fields, carrying its position and type. `SubscriptionCoordinator`
-passes each track the types its projections subscribe to (none when one of
+passes each track the types its current projections subscribe to (all when one of
 them subscribes to every type), so an event no projection on the track handles
 is skipped and checkpointed past like any other skipped type, and cannot halt
 the track. An event a projection handles still raises, and halts (ADR-026).
