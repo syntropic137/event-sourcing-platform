@@ -153,6 +153,45 @@ Postgres projection-store connection loss) reconnect from the checkpoint
 with jittered exponential backoff; everything else stops with a typed
 error.
 
+## Projection handler failures (syntropic137#1696)
+
+The same "stop, never skip" rule applies one level up, in the Python
+`SubscriptionCoordinator`, when the store delivered an event fine but a
+projection failed to apply it (`handle_event` returned `FAILURE` or raised).
+
+Before, the coordinator logged it ("event will be retried") and the track
+moved on. Nothing retried it: the projection's next successful event saved a
+higher checkpoint, and nothing re-reads below a checkpoint. One transient
+projection-store error lost the event for good while the read model reported
+itself current. Production lost two `WorkflowExecutionStarted` events this way.
+
+Now:
+
+1. **The failing projection is held below the event.** Its checkpoint is not
+   advanced past it by anything: not by its next event, not by a skip. Under
+   `start()` it is taken off its track; under `dispatch_event()` the call
+   raises `ProjectionHandlerFailedError` and later events are not handed to
+   that projection until the failed one is delivered again and applied.
+2. **Only that projection waits.** Every other projection, on the same track
+   or another, keeps consuming. One poison event must not stall the whole
+   read side, including ProcessManagers that drive work.
+3. **It is retried alone, with backoff.** After 1s, doubling per consecutive
+   failure of the same event up to 30s, a track of its own resumes it from its
+   checkpoint, which delivers the event again. The exponent is capped, so the
+   delay never overflows however long an event stays poison. A held
+   ProcessManager runs no `process_pending()`, even when its retry track
+   starts live: its to-do list is missing the event. A drain already inside
+   `process_pending()` when the hold lands is cancelled. It is woken once it
+   has applied the event. A retry still pending when the projection is
+   rebuilt is dropped; the next plan replays it from 0.
+4. **Visible.** `held_projections` names each held projection and the event,
+   `is_healthy` is False while any is held, and each failure logs an `ERROR`
+   plus a `WARNING` with the retry delay. A handler that keeps failing holds
+   its read model at that event until it is fixed or rebuilt.
+
+There is no skip or dead-letter policy. As with undecodable rows, any future
+one must be opt-in, observable and auditable.
+
 ## Consumer contract (at-least-once)
 
 - `from_global_nonce` is **inclusive**. Events arrive in `global_nonce` order.
@@ -177,7 +216,7 @@ error.
 | Rust SDK (`sdk-rs`) | `tonic::Streaming` yields `Err(Status)` with `Code::Unavailable`, or `Code::DataLoss` for an undecodable event (position in trailing metadata `esp-undecodable-global-nonce`). |
 | Rust event sourcing SDK (`event-sourcing-rust`) | `Error::EventStore(Status)` for `UNAVAILABLE`; `Error::DataLoss { global_nonce }` for `DATA_LOSS` with a position. `ProjectionRunner::run_supervised` retries the former with backoff and halts on the latter (see above). |
 | TypeScript SDK (`sdk-ts`) | The async iterator rejects with the gRPC error (`code` 14 `UNAVAILABLE`, or 15 `DATA_LOSS`). Messages and a terminal error/end that arrive while the consumer is busy are buffered and delivered on later `next()` calls (`streamToAsyncIterator`), so a failure is never lost between reads. |
-| Python (`event_sourcing` `GrpcEventStoreClient.subscribe`) | Raises `EventStoreError`; for `DATA_LOSS` with a position, the subclass `UndecodableEventError` (`.global_nonce`). `SubscriptionCoordinator` retries `UNAVAILABLE` with exponential backoff and resumes each projection from its saved checkpoint; on `UndecodableEventError` it halts with `SubscriptionHaltedError` instead (see above). |
+| Python (`event_sourcing` `GrpcEventStoreClient.subscribe`) | Raises `EventStoreError`; for `DATA_LOSS` with a position, the subclass `UndecodableEventError` (`.global_nonce`). `SubscriptionCoordinator` retries `UNAVAILABLE` with exponential backoff and resumes each projection from its saved checkpoint; on `UndecodableEventError` it halts with `SubscriptionHaltedError` instead (see above). A projection that fails an event is held below it and retried alone (see Projection handler failures). |
 
 ## Consequences
 
