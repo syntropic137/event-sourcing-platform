@@ -347,11 +347,45 @@ Takeaways:
 9. **Completeness and ordering held everywhere**, including the overloaded
    open-loop and 32-subscriber runs.
 
+## Re-baseline after #370 (quick profile, loaded host)
+
+#370 made the pool size configurable (`PG_POOL_MAX_CONNECTIONS`, default 10;
+see [POSTGRES-CONNECTIONS.md](../operations/POSTGRES-CONNECTIONS.md)) and
+writes an append's events, stream head, idempotency record and NOTIFY in one
+statement while the order lock is held (was one round trip per event plus
+three). The lock and `it_commit_order.rs` are unchanged.
+
+`make bench-pg` (quick, durable) was run interleaved, main / #370 / main /
+#370, on the baseline machine while it was **heavily loaded by other jobs**
+(load average 35 to 60 on 16 CPUs, versus idle for the tables above). Treat
+the absolute numbers as noise-bounded; the ratios between neighbouring runs
+are the signal. Both sides predate #381, which adds one or two plain reads
+under the lock (idempotency re-check); expect slightly lower ceilings after it.
+
+| Scenario (closed loop, 8 writers unless noted) | main (2 runs) ev/s, p99 | #370 ev/s, p99 |
+|---|---|---|
+| 1 tenant, batch 1, 1 writer | 148 / 448, 73 / 6.6 ms | 464, 8.2 ms |
+| 1 tenant, batch 1 (same-tenant ceiling) | 327 / 682, 106 / 34 ms | **972, 20 ms** |
+| 8 tenants, batch 1 | 297 / 1,168, 168 / 14 ms | 1,810, 10 ms |
+| 1 tenant, batch 10 | 503 / 1,934, 892 / 154 ms | **7,785, 30 ms** |
+| 1 tenant, batch 100 | 1,026 / 3,247, 1,084 / 493 ms | **19,119, 142 ms** |
+| 1 tenant, batch 1, 4 KiB payload | 204 / 562 | 902 |
+
+"Pool busy" (all connections checked out) dropped from 8 to 97% of samples
+on main to 0% with #370 in every append scenario. All runs passed
+completeness and ordering verification. A second #370 run was cut short in
+its end-to-end phase by a 10 s pool acquire timeout on the overloaded host;
+the acquire default was then restored to 30 s (the previous fixed value).
+The capacity budget below is left as measured on the idle host until a full
+profile is rerun on a quiet machine; the new numbers only move the ceilings
+up.
+
 ## Capacity budget (DreamShip-relevant)
 
 DreamShip consumes the store through its ESP adapter (per-tenant appends,
 paged `ReadAll` replay, live subscriptions; see #343). Until DreamShip's own
-production rates are known, budget per **server instance** (pool of 5) on
+production rates are known, budget per **server instance** (measured with a
+pool of 5, before #370; see the re-baseline above) on
 hardware comparable to the baseline. Plan on the left column. The right column
 is where tails stop being predictable.
 
@@ -368,10 +402,9 @@ is where tails stop being predictable.
 
 If a DreamShip tenant needs more than ~200 single-event appends per second,
 the levers, in order, are: batch events per command; spread load over tenants;
-raise the server pool size (a config change, needs its own measurement); and
-only then reduce the time the lock is held (for example, one multi-row INSERT
-per batch), keeping `it_commit_order.rs` green. Removing the lock is out of
-scope.
+raise `PG_POOL_MAX_CONNECTIONS` (#370). The lock hold is already one write
+statement per append (#370); `it_commit_order.rs` stays green. Removing the
+lock is out of scope.
 
 ## Before setting regression thresholds
 
