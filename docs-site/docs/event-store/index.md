@@ -19,6 +19,7 @@ A compact guide to the Rust Event Store that powers the platform.
 - [Concurrency & consistency](implementation/concurrency-and-consistency.md) — optimistic checks and sequencing.
 - [SQL enforcement](implementation/sql-enforcement.md) — database invariants and triggers.
 - [Operations checklist](operations/README.md) — deploy, monitor, and recover.
+- [Server compatibility](operations/server-compatibility.md): `GetServerInfo`, capability flags, and the minimum server version for each correctness fix.
 
 ## SDKs & APIs
 

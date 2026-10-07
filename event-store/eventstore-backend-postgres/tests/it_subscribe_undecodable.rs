@@ -141,6 +141,10 @@ fn assert_data_integrity_error(e: &StoreError, bad: u64) {
 async fn replay_stops_at_undecodable_row_between_valid_rows() {
     let tenant = unique_tenant("replay");
     let store = connect().await;
+    // This is the behavior the backend advertises as a capability.
+    assert!(store
+        .capabilities()
+        .contains(&eventstore_core::capabilities::UNDECODABLE_EVENTS_SURFACED));
     let good1 = insert_row(&store, &tenant, "Order-1", 1, true).await;
     let bad = insert_row(&store, &tenant, "Order-1", 2, false).await;
     let _good2 = insert_row(&store, &tenant, "Order-1", 3, true).await;

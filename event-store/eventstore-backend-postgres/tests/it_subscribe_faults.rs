@@ -189,6 +189,10 @@ async fn replay_failure_is_surfaced_and_recoverable(prefix: &str) {
 
     // Fault: the subscriber's pool is gone before the replay query runs.
     let subscriber = connect().await;
+    // This is the behavior the backend advertises as a capability.
+    assert!(subscriber
+        .capabilities()
+        .contains(&eventstore_core::capabilities::SUBSCRIPTION_ERRORS_SURFACED));
     subscriber.pool().close().await;
     let mut stream = subscriber.subscribe(request(&tenant, prefix, 0));
     expect_unavailable_then_end(&mut stream, 0).await;

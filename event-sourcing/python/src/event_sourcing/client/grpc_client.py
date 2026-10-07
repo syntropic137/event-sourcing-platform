@@ -10,10 +10,16 @@ types are confined to internal proto interactions.
 
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 
 import grpc
 
+from event_sourcing.client.server_info import (
+    LEGACY_SERVER_INFO,
+    ServerInfo,
+    assert_capabilities,
+    assert_min_version,
+)
 from event_sourcing.core.errors import (
     ConcurrencyConflictError,
     EventStoreError,
@@ -111,6 +117,43 @@ class GrpcEventStoreClient:
             self._channel = None
             self._stub = None
             logger.info("Disconnected from event store")
+
+    async def server_info(self) -> ServerInfo:
+        """Ask the server for its version, backend, and capability flags.
+
+        A server older than v0.17.0 answers ``UNIMPLEMENTED``; that returns
+        :data:`LEGACY_SERVER_INFO` (no version, no capabilities) rather than
+        raising. Any other failure raises :class:`EventStoreError`.
+        """
+        if not self._stub:
+            raise EventStoreError("Client is not connected")
+        try:
+            resp = await self._stub.GetServerInfo(eventstore_pb2.GetServerInfoRequest())
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.UNIMPLEMENTED:
+                return LEGACY_SERVER_INFO
+            raise EventStoreError(f"Failed to get server info: {e}", e) from e
+        return ServerInfo(
+            server_version=resp.server_version,
+            api_version=resp.api_version,
+            backend=resp.backend,
+            capabilities=tuple(resp.capabilities),
+        )
+
+    async def require_capabilities(self, required: Sequence[str]) -> ServerInfo:
+        """Raise :class:`CompatibilityError` unless the server advertises every
+        capability in ``required``. Legacy servers advertise none."""
+        info = await self.server_info()
+        assert_capabilities(info, required)
+        return info
+
+    async def require_min_version(self, minimum: str) -> ServerInfo:
+        """Raise :class:`CompatibilityError` unless the server version is
+        ``>= minimum``. Legacy servers always fail. Prefer
+        :meth:`require_capabilities`."""
+        info = await self.server_info()
+        assert_min_version(info, minimum)
+        return info
 
     async def read_events(
         self, stream_name: str, from_version: int | None = None
