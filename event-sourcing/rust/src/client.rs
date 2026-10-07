@@ -260,8 +260,7 @@ mod tests {
         let port = portpicker::pick_unused_port().expect("free port");
         let err = EventStoreClient::connect(format!("127.0.0.1:{port}"))
             .await
-            .err()
-            .expect("connect must fail");
+            .expect_err("connect must fail");
         assert!(err.is_transient(), "{err:?}");
     }
 }
