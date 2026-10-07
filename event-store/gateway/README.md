@@ -28,6 +28,7 @@ for the prior-art pattern this follows.
 | `ESP_GATEWAY_TLS_RELOAD_INTERVAL` | `300` | Seconds between checks for a changed cert/key; a change triggers `nginx -t` then a graceful reload. `0` disables the watcher. |
 | `ESP_GATEWAY_PUBLISH_BIND` | *(unset)* | Host address the port is published on (compose passes `ESP_GATEWAY_BIND`). With TLS off, a non-loopback or unset value aborts startup. |
 | `ESP_GATEWAY_ALLOW_PLAINTEXT_EXTERNAL` | `false` | Override the check above, only when TLS is terminated in front of the gateway on a path you trust. |
+| `ESP_GATEWAY_ALLOW_UNAUTHENTICATED` | `false` | An empty password with a non-loopback or unset `ESP_GATEWAY_PUBLISH_BIND` aborts startup unless this is `true`. |
 
 ## Usage
 
@@ -40,7 +41,9 @@ docker compose up gateway        # local dev: plaintext on 127.0.0.1 only
 Port 8081 carries the Basic Auth credential on every call, so anything
 reachable beyond your own machine must use TLS (#301). nginx terminates TLS
 itself (TLS 1.2/1.3, ECDHE + AEAD ciphers, h2 via ALPN); gRPC streaming
-(`Subscribe`) is unaffected (`grpc_read_timeout 24h`). Mount a **directory**
+(`Subscribe`) is unaffected: a subscription survives a cert reload, and as
+before an idle one (no events) is closed after `grpc_read_timeout 24h`, so
+clients must resubscribe on stream end. Mount a **directory**
 holding `fullchain.pem` and `privkey.pem` at `/etc/nginx/tls` (a directory,
 not single files, so renewed files written into it are seen). Plain HTTP to
 the TLS port gets a 400 and never reaches the upstream.
@@ -83,11 +86,15 @@ reloads nginx:
 ```sh
 #!/bin/sh
 set -eu
+install -d -m 0750 /etc/event-store/tls
 install -m 0644 "$RENEWED_LINEAGE/fullchain.pem" /etc/event-store/tls/fullchain.pem.new
 install -m 0600 "$RENEWED_LINEAGE/privkey.pem"   /etc/event-store/tls/privkey.pem.new
 mv /etc/event-store/tls/fullchain.pem.new /etc/event-store/tls/fullchain.pem
 mv /etc/event-store/tls/privkey.pem.new   /etc/event-store/tls/privkey.pem
-docker exec event-store-gateway sh -c 'nginx -t -q && nginx -s reload' || true
+# Not running yet (first issuance): it reads the files when it starts.
+if [ "$(docker inspect -f '{{.State.Running}}' event-store-gateway 2>/dev/null)" = "true" ]; then
+  docker exec event-store-gateway sh -c 'nginx -t -q && nginx -s reload'
+fi
 ```
 
 Run the hook once by hand after the first `certonly` (with

@@ -334,4 +334,25 @@ async fn gateway_fails_closed_without_certificate() {
     // ...and so is an unknown publish address.
     let out = docker(&["run", "--rm", "-e", "ESP_GATEWAY_TLS=off", &img]);
     assert!(!out.status.success(), "{out:?}");
+
+    // A valid cert but no password on a non-loopback bind is refused too.
+    let dir = tls_dir("nopw");
+    let (_ca, cert, key) = pki();
+    write_pair(&dir, &cert, &key);
+    let mount = format!("{}:/etc/nginx/tls:ro", dir.display());
+    let out = docker(&[
+        "run",
+        "--rm",
+        "-v",
+        &mount,
+        "-e",
+        "ESP_GATEWAY_PUBLISH_BIND=0.0.0.0",
+        &img,
+    ]);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("ESP_GATEWAY_PASSWORD"),
+        "{out:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

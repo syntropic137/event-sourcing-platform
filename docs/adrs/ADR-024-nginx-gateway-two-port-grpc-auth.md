@@ -47,7 +47,11 @@ Enforced whenever `ESP_GATEWAY_PASSWORD` is non-empty. Generated via
 `docker-entrypoint.sh` into an nginx `auth_basic_user_file` at container
 start (`htpasswd -Bbc`, bcrypt). An unset password disables auth and logs a
 loud warning — acceptable for local development, **not** for any deployment
-reachable from outside the operator's own machine.
+reachable from outside the operator's own machine. Since #301 the gateway
+refuses to start without a password unless its published bind address
+(`ESP_GATEWAY_PUBLISH_BIND`) is loopback or `ESP_GATEWAY_ALLOW_UNAUTHENTICATED=true`.
+The gateway strips `Authorization` before proxying, so the credential never
+crosses the plaintext hop to `eventstore-bin`.
 
 ### Port 8081 — TLS (amendment, #301)
 

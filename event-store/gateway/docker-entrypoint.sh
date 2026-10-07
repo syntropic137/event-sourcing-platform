@@ -26,8 +26,6 @@ if [ -n "${ESP_GATEWAY_PASSWORD:-}" ]; then
     cat > /etc/nginx/auth/auth.conf <<EOF
 auth_basic "Event Store";
 auth_basic_user_file /etc/nginx/auth/htpasswd;
-# The credential stops here: the upstream has no auth and must never see it.
-grpc_set_header Authorization "";
 EOF
     echo "gateway: Basic Auth ENABLED on port 8081 (user=$ESP_GATEWAY_USER)"
 else
@@ -77,6 +75,18 @@ off)
     ;;
 esac
 
+# No password on a port published beyond loopback (or on an unknown bind)
+# would open every RPC to the network: refuse unless explicitly allowed.
+if [ -z "${ESP_GATEWAY_PASSWORD:-}" ]; then
+    case "${ESP_GATEWAY_PUBLISH_BIND:-}" in
+    127.* | ::1 | "[::1]" | localhost) ;;
+    *)
+        [ "${ESP_GATEWAY_ALLOW_UNAUTHENTICATED:-false}" = "true" ] ||
+            die "ESP_GATEWAY_PASSWORD is not set and the port is published on '${ESP_GATEWAY_PUBLISH_BIND:-<unknown, set ESP_GATEWAY_PUBLISH_BIND>}'. Set a password, bind to 127.0.0.1, or set ESP_GATEWAY_ALLOW_UNAUTHENTICATED=true."
+        ;;
+    esac
+fi
+
 export ESP_UPSTREAM
 envsubst '${ESP_UPSTREAM}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
@@ -92,10 +102,13 @@ if [ "$ESP_GATEWAY_TLS" = "on" ] && [ "$ESP_GATEWAY_TLS_RELOAD_INTERVAL" -gt 0 ]
         while sleep "$ESP_GATEWAY_TLS_RELOAD_INTERVAL"; do
             now=$(fingerprint)
             [ "$now" = "$last" ] && continue
-            if nginx -t -q; then
+            # Only record the pair as applied if it did not change again
+            # while being tested (cert and key are replaced separately);
+            # otherwise the next tick re-tests and reloads.
+            if nginx -t -q && [ "$(fingerprint)" = "$now" ]; then
                 nginx -s reload && last=$now && echo "gateway: TLS certificate changed, nginx reloaded"
             else
-                echo "gateway: WARNING - new TLS certificate/key failed nginx -t, keeping the old one" >&2
+                echo "gateway: WARNING - changed TLS certificate/key not applied (fails nginx -t or still changing), keeping the old one" >&2
             fi
         done
     ) &

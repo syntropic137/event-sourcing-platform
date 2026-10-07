@@ -41,6 +41,11 @@ http {
     # Keep idle subscriptions alive rather than nginx killing them.
     grpc_read_timeout 24h;
 
+    # The Basic Auth credential stops at the gateway: the upstream has no
+    # auth, and the hop to it is plaintext, so it must never see the header
+    # (on either port, with or without auth enabled).
+    grpc_set_header Authorization "";
+
     # ------------------------------------------------------------------
     # PORT 80 — Docker network only (no auth). Do not publish this port.
     # ------------------------------------------------------------------
