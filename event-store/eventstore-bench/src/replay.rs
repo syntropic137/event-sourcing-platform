@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use anyhow::Context as _;
 use serde::Serialize;
 
 use crate::sampler::{PgActivity, Resources};
@@ -20,17 +21,29 @@ pub struct ReadAllResult {
     pub history: u64,
     pub page_size: u32,
     pub reps: usize,
-    /// Best and median full-scan rate across reps.
+    /// Median of each scan's own rate (its events / its time).
     pub events_per_sec_median: f64,
     pub scan_secs: Vec<f64>,
+    pub scan_events: Vec<u64>,
     pub page_latency: Latency,
     pub pg: PgActivity,
     pub resources: Resources,
-    /// Committed history vs acknowledged preload appends.
+    /// Every scan checked against the acknowledged preload appends (merged).
     pub verify: Verify,
+    /// Scans whose global-nonce sequence differs from the first scan's.
+    pub scan_mismatches: u64,
 }
 
-/// Pages the tenant `reps` times. The first scan also verifies history.
+/// Median of `values` (upper median for even lengths); 0 when empty.
+pub fn median(values: &[f64]) -> f64 {
+    let mut v = values.to_vec();
+    v.sort_by(f64::total_cmp);
+    v.get(v.len() / 2).copied().unwrap_or(0.0)
+}
+
+/// Pages the tenant `reps` times. Every scan is verified against the
+/// acknowledged history and must return the same sequence as the first, so a
+/// truncated or empty scan fails the run instead of skewing the median.
 pub async fn read_all_scan(
     ctx: &Ctx,
     tenant: &str,
@@ -40,50 +53,42 @@ pub async fn read_all_scan(
     let mut client = ctx.client().await?;
     let mut hist = stats::new_hist();
     let mut scan_secs = Vec::with_capacity(reps);
-    let mut stored = Vec::new();
+    let mut scan_events = Vec::with_capacity(reps);
+    let mut rates = Vec::with_capacity(reps);
+    let mut first: Option<Vec<u64>> = None;
+    let mut v = Verify::empty_ok();
+    let mut scan_mismatches = 0;
     let mon = ctx.monitors(Instant::now());
-    for rep in 0..reps {
+    for _ in 0..reps {
         let t0 = Instant::now();
-        let mut from = 0u64;
-        loop {
-            let p0 = Instant::now();
-            let page = client
-                .read_all(pb::ReadAllRequest {
-                    tenant_id: tenant.to_owned(),
-                    from_global_nonce: from,
-                    max_count: READ_ALL_PAGE,
-                    forward: true,
-                })
-                .await?
-                .into_inner();
-            stats::record(&mut hist, p0.elapsed());
-            if rep == 0 {
-                stored.extend(page.events.iter().filter_map(verify::to_stored));
-            }
-            if page.is_end || page.events.is_empty() {
-                break;
-            }
-            from = page.next_from_global_nonce;
+        let stored = verify::read_tenant_timed(&mut client, tenant, Some(&mut hist)).await?;
+        let secs = t0.elapsed().as_secs_f64();
+        scan_secs.push(secs);
+        scan_events.push(stored.len() as u64);
+        rates.push(stored.len() as f64 / secs);
+        v.merge(&verify::check(&stored, acked, &HashSet::new()));
+        let seq: Vec<u64> = stored.iter().map(|s| s.global).collect();
+        match &first {
+            None => first = Some(seq),
+            Some(f) if *f != seq => scan_mismatches += 1,
+            Some(_) => {}
         }
-        scan_secs.push(t0.elapsed().as_secs_f64());
     }
     let (pg, resources) = mon.stop().await;
-    let v = verify::check(&stored, acked, &HashSet::new());
-    let mut sorted = scan_secs.clone();
-    sorted.sort_by(f64::total_cmp);
-    let median = sorted[sorted.len() / 2];
-    let seq = stored.iter().map(|s| s.global).collect();
+    let seq = first.unwrap_or_default();
     Ok((
         ReadAllResult {
-            history: stored.len() as u64,
+            history: seq.len() as u64,
             page_size: READ_ALL_PAGE,
             reps,
-            events_per_sec_median: stored.len() as f64 / median,
+            events_per_sec_median: median(&rates),
             scan_secs,
+            scan_events,
             page_latency: Latency::from_hist(&hist),
             pg,
             resources,
             verify: v,
+            scan_mismatches,
         },
         seq,
     ))
@@ -115,7 +120,7 @@ pub async fn read_stream_bench(
 ) -> anyhow::Result<ReadStreamResult> {
     anyhow::ensure!(!aggregates.is_empty(), "no complete aggregates to read");
     let w = Window::new(warmup_s, duration_s);
-    let mon = ctx.monitors(w.warm_end);
+    let mon = ctx.monitors(w.warm_end).stop_at(w.end);
     let mut handles = Vec::new();
     for r in 0..readers {
         let mut client = ctx.client().await?;
@@ -146,22 +151,21 @@ pub async fn read_stream_bench(
                     .await;
                 let t1 = Instant::now();
                 let valid = match &res {
-                    Ok(r) => {
-                        let ev = &r.get_ref().events;
-                        ev.len() as u64 == EVENTS_PER_AGGREGATE
-                            && ev.iter().enumerate().all(|(i, e)| {
-                                e.meta.as_ref().map(|m| m.aggregate_nonce) == Some(i as u64 + 1)
-                            })
-                    }
+                    Ok(r) => verify::valid_stream(
+                        &r.get_ref().events,
+                        &tenant,
+                        agg,
+                        EVENTS_PER_AGGREGATE,
+                    ),
                     Err(_) => false,
                 };
-                if t0 >= w.warm_end {
-                    if valid {
-                        stats::record(&mut h, t1 - t0);
-                        ok += 1;
-                    } else {
-                        invalid += 1;
-                    }
+                // Validity is checked for every read; throughput and latency
+                // only count reads that started and finished in the window.
+                if t0 >= w.warm_end && !valid {
+                    invalid += 1;
+                } else if w.contains(t0, t1) {
+                    stats::record(&mut h, t1 - t0);
+                    ok += 1;
                 }
             }
             (h, ok, invalid)
@@ -176,7 +180,7 @@ pub async fn read_stream_bench(
         ok += o;
         invalid += i;
     }
-    let (pg, resources) = mon.stop().await;
+    let (pg, resources) = mon.await?;
     Ok(ReadStreamResult {
         history,
         readers,
@@ -231,9 +235,10 @@ pub async fn catchup(
             Ok(Ok(Some(m))) => match m.event {
                 Some(ev) => {
                     first.get_or_insert_with(Instant::now);
-                    if let Some(meta) = ev.meta {
-                        seen.push(meta.global_nonce);
-                    }
+                    let meta = ev
+                        .meta
+                        .context("catch-up delivered an event without metadata")?;
+                    seen.push(meta.global_nonce);
                 }
                 None => break,
             },
@@ -256,4 +261,17 @@ pub async fn catchup(
         resources,
         pg,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn median_of_per_scan_rates() {
+        assert_eq!(median(&[3.0, 1.0, 2.0]), 2.0);
+        assert_eq!(median(&[]), 0.0);
+        // A truncated scan is a low outlier, not the reported rate.
+        assert_eq!(median(&[100.0, 1.0, 110.0]), 100.0);
+    }
 }

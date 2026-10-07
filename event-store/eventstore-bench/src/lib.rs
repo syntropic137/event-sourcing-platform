@@ -103,6 +103,13 @@ pub fn achieved_secs(warm_end: Instant, end: Instant, last_done: Option<Instant>
     stop.duration_since(warm_end).as_secs_f64().max(1e-9)
 }
 
+pub const AGGREGATE_TYPE: &str = "BenchAggregate";
+
+/// Deterministic event id, so readers can check event identity.
+pub fn event_id(aggregate_id: &str, nonce: u64) -> String {
+    format!("{aggregate_id}#{nonce}")
+}
+
 /// Builds a bench event. The first 8 payload bytes carry the intended send
 /// time (ns since `Ctx::epoch`) so subscribers can measure delivery latency.
 pub fn make_event(
@@ -111,14 +118,14 @@ pub fn make_event(
     payload_len: usize,
     stamp_ns: u64,
 ) -> (pb::EventData, String) {
-    let event_id = format!("{aggregate_id}#{nonce}");
+    let event_id = event_id(aggregate_id, nonce);
     let mut payload = vec![0x5A; payload_len.max(8)];
     payload[..8].copy_from_slice(&stamp_ns.to_le_bytes());
     let ev = pb::EventData {
         meta: Some(pb::EventMetadata {
             event_id: event_id.clone(),
             aggregate_id: aggregate_id.to_owned(),
-            aggregate_type: "BenchAggregate".into(),
+            aggregate_type: AGGREGATE_TYPE.into(),
             aggregate_nonce: nonce,
             event_type: "BenchEvent".into(),
             event_version: 1,

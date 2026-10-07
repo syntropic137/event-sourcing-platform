@@ -8,6 +8,12 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
+use std::time::Instant;
+
+use anyhow::Context as _;
+
+use crate::replay::READ_ALL_PAGE;
+use crate::stats::{self, Hist};
 use crate::{pb, Client};
 
 #[derive(Debug, Clone)]
@@ -106,6 +112,8 @@ pub struct SeqCheck {
     pub missing: u64,
     pub duplicates: u64,
     pub out_of_order: u64,
+    /// Deliveries of nonces the store does not hold for the tenant.
+    pub extra: u64,
     /// Delivered sequence equals the store's tenant order exactly.
     pub exact: bool,
 }
@@ -126,6 +134,8 @@ pub fn compare_sequences(store: &[u64], seen: &[u64]) -> SeqCheck {
         }
     }
     c.missing = store.iter().filter(|g| !uniq.contains(g)).count() as u64;
+    let in_store: HashSet<&u64> = store.iter().collect();
+    c.extra = seen.iter().filter(|g| !in_store.contains(g)).count() as u64;
     c.exact = store == seen;
     c
 }
@@ -142,25 +152,74 @@ pub fn to_stored(e: &pb::EventData) -> Option<Stored> {
 
 /// Reads one tenant's whole log in global order, 1000 events per page.
 pub async fn read_tenant(client: &mut Client, tenant: &str) -> anyhow::Result<Vec<Stored>> {
+    read_tenant_timed(client, tenant, None).await
+}
+
+/// Next forward `ReadAll` cursor after a non-empty page. Errors unless it
+/// moves strictly past both the request cursor and the page's last event, so
+/// a misbehaving server cannot loop the reader forever or re-serve events.
+pub fn next_cursor(from: u64, page: &[Stored], next: u64) -> anyhow::Result<u64> {
+    let last = page.last().map_or(0, |s| s.global);
+    anyhow::ensure!(
+        next > from && next > last,
+        "ReadAll cursor did not advance (from {from}, last event {last}, next {next})"
+    );
+    Ok(next)
+}
+
+/// Pages one tenant's whole log forward, 1000 events per page, recording
+/// each page's latency in `hist` when given.
+pub async fn read_tenant_timed(
+    client: &mut Client,
+    tenant: &str,
+    mut hist: Option<&mut Hist>,
+) -> anyhow::Result<Vec<Stored>> {
     let mut out = Vec::new();
     let mut from = 0u64;
     loop {
+        let t0 = Instant::now();
         let page = client
             .read_all(pb::ReadAllRequest {
                 tenant_id: tenant.to_owned(),
                 from_global_nonce: from,
-                max_count: 1000,
+                max_count: READ_ALL_PAGE,
                 forward: true,
             })
             .await?
             .into_inner();
-        out.extend(page.events.iter().filter_map(to_stored));
-        if page.is_end || page.events.is_empty() {
+        if let Some(h) = hist.as_deref_mut() {
+            stats::record(h, t0.elapsed());
+        }
+        let stored = page
+            .events
+            .iter()
+            .map(|e| to_stored(e).context("ReadAll returned an event without metadata"))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        if page.is_end || stored.is_empty() {
+            out.extend(stored);
             break;
         }
-        from = page.next_from_global_nonce;
+        from = next_cursor(from, &stored, page.next_from_global_nonce)?;
+        out.extend(stored);
     }
     Ok(out)
+}
+
+/// A full-aggregate `ReadStream` response is valid only if it holds exactly
+/// the events the bench wrote to that aggregate: right count, tenant,
+/// aggregate id/type, contiguous nonces and the matching event ids.
+pub fn valid_stream(events: &[pb::EventData], tenant: &str, aggregate_id: &str, n: u64) -> bool {
+    events.len() as u64 == n
+        && events.iter().enumerate().all(|(i, e)| {
+            let nonce = i as u64 + 1;
+            e.meta.as_ref().is_some_and(|m| {
+                m.aggregate_nonce == nonce
+                    && m.aggregate_id == aggregate_id
+                    && m.aggregate_type == crate::AGGREGATE_TYPE
+                    && m.tenant_id == tenant
+                    && m.event_id == crate::event_id(aggregate_id, nonce)
+            })
+        })
 }
 
 pub async fn verify_tenant(
@@ -215,6 +274,72 @@ mod tests {
         let v = check(&store, &HashSet::new(), &set(&["a#1"]));
         assert!(v.ok);
         assert_eq!(v.uncertain_committed, 1);
+    }
+
+    #[test]
+    fn cursor_must_advance_past_page() {
+        let page = vec![ev(10, "a", 1), ev(12, "a", 2)];
+        assert_eq!(next_cursor(0, &page, 13).unwrap(), 13);
+        assert!(next_cursor(13, &page, 13).is_err(), "unchanged cursor");
+        assert!(
+            next_cursor(0, &page, 12).is_err(),
+            "would re-serve last event"
+        );
+        assert!(next_cursor(20, &page, 15).is_err(), "moved backwards");
+    }
+
+    fn stream(tenant: &str, agg: &str, ty: &str, n: u64) -> Vec<pb::EventData> {
+        (1..=n)
+            .map(|i| pb::EventData {
+                meta: Some(pb::EventMetadata {
+                    event_id: crate::event_id(agg, i),
+                    aggregate_id: agg.into(),
+                    aggregate_type: ty.into(),
+                    aggregate_nonce: i,
+                    tenant_id: tenant.into(),
+                    ..Default::default()
+                }),
+                payload: vec![],
+            })
+            .collect()
+    }
+
+    #[test]
+    fn read_stream_validity_checks_identity() {
+        let ty = crate::AGGREGATE_TYPE;
+        assert!(valid_stream(&stream("t", "a", ty, 3), "t", "a", 3));
+        assert!(
+            !valid_stream(&stream("t", "a", ty, 2), "t", "a", 3),
+            "short"
+        );
+        assert!(
+            !valid_stream(&stream("t", "b", ty, 3), "t", "a", 3),
+            "wrong aggregate"
+        );
+        assert!(
+            !valid_stream(&stream("t", "a", "Other", 3), "t", "a", 3),
+            "wrong type"
+        );
+        assert!(
+            !valid_stream(&stream("u", "a", ty, 3), "t", "a", 3),
+            "wrong tenant"
+        );
+        let mut s = stream("t", "a", ty, 3);
+        s[1].meta.as_mut().unwrap().event_id = "someone-else#2".into();
+        assert!(!valid_stream(&s, "t", "a", 3), "wrong event identity");
+        let mut s = stream("t", "a", ty, 3);
+        s.swap(0, 1);
+        assert!(!valid_stream(&s, "t", "a", 3), "reordered");
+    }
+
+    #[test]
+    fn trailing_duplicates_and_extras_break_exactness() {
+        let c = compare_sequences(&[1, 2, 5], &[1, 2, 5, 5]);
+        assert!(!c.exact);
+        assert_eq!(c.duplicates, 1);
+        let c = compare_sequences(&[1, 2, 5], &[1, 2, 5, 9]);
+        assert!(!c.exact);
+        assert_eq!(c.extra, 1);
     }
 
     #[test]

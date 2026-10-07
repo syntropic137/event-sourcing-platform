@@ -36,7 +36,10 @@ impl Results {
             .iter()
             .all(|a| a.verify.ok && a.errors == 0 && a.latency.count > 0)
             && self.preloads.iter().all(|p| p.errors == 0)
-            && self.read_all.iter().all(|r| r.verify.ok && r.history > 0)
+            && self
+                .read_all
+                .iter()
+                .all(|r| r.verify.ok && r.history > 0 && r.scan_mismatches == 0)
             && self
                 .read_stream
                 .iter()

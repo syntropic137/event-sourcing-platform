@@ -159,8 +159,15 @@ After every loaded scenario the bench reads each touched tenant back through
 
 For catch-up and end-to-end runs, every subscriber's delivered `global_nonce`
 sequence must be **identical** to the store's committed sequence for the
-tenant (no gaps, duplicates or reordering). `ReadStream` responses must contain
-exactly 100 contiguous events. Any failure fails the run.
+tenant (no gaps, duplicates, extras or reordering). Subscribers keep listening
+for 1 s after receiving the expected count, so trailing duplicates are caught.
+Every `ReadAll` scan (not just the first) is verified and must return the same
+sequence; the reported rate is the median of each scan's own rate. A `ReadAll`
+page whose cursor does not advance is an error. `ReadStream` responses must
+contain exactly the 100 events written to that aggregate (tenant, aggregate
+id/type, contiguous nonces, event ids); `ReadStream` throughput counts only
+reads that started and finished inside the window, and sampling stops at the
+window end. Any failure fails the run.
 
 ## Run: profile `full`, durability `durable`, 931s, all checks: **pass**
 

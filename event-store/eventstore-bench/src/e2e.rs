@@ -59,6 +59,31 @@ pub struct E2eResult {
     pub resources: Resources,
 }
 
+/// How long a subscriber keeps listening after it has every committed event,
+/// so trailing duplicates or extra deliveries are caught, not cut off.
+pub const DRAIN_GRACE: Duration = Duration::from_secs(1);
+const POLL: Duration = Duration::from_millis(200);
+
+/// Subscriber loop control: returns the (possibly newly started) grace
+/// deadline and whether to stop now. Stops on give-up, or once the grace
+/// period that starts when `seen` reaches `expected` has elapsed.
+pub fn next_step(
+    seen: u64,
+    expected: u64,
+    give_up: bool,
+    grace_until: Option<Instant>,
+    now: Instant,
+) -> (Option<Instant>, bool) {
+    if give_up {
+        return (grace_until, true);
+    }
+    let g = match grace_until {
+        None if seen >= expected => Some(now + DRAIN_GRACE),
+        g => g,
+    };
+    (g, g.is_some_and(|g| now >= g))
+}
+
 struct SubOut {
     slow: bool,
     lat: Hist,
@@ -114,13 +139,22 @@ async fn subscriber(
         }
         let _ = ready.send(());
         let mut win: Option<Window> = None;
+        let mut grace_until: Option<Instant> = None;
         loop {
-            if out.seen.len() as u64 >= expected.load(Ordering::Acquire)
-                || give_up.load(Ordering::Relaxed)
-            {
+            let now = Instant::now();
+            let (g, stop) = next_step(
+                out.seen.len() as u64,
+                expected.load(Ordering::Acquire),
+                give_up.load(Ordering::Relaxed),
+                grace_until,
+                now,
+            );
+            grace_until = g;
+            if stop {
                 break;
             }
-            let msg = tokio::time::timeout(Duration::from_millis(200), stream.message()).await;
+            let wait = grace_until.map_or(POLL, |g| POLL.min(g.saturating_duration_since(now)));
+            let msg = tokio::time::timeout(wait, stream.message()).await;
             let m = match msg {
                 Err(_) => continue,
                 Ok(Ok(Some(m))) => m,
@@ -138,14 +172,17 @@ async fn subscriber(
             if win.is_none() {
                 win = *window.lock().expect("window lock");
             }
-            if let (Some(meta), Some(stamp), Some(w)) = (&ev.meta, payload_stamp(&ev.payload), win)
-            {
+            let Some(meta) = &ev.meta else {
+                out.error = Some("delivered event without metadata".into());
+                break;
+            };
+            out.seen.push(meta.global_nonce);
+            if let (Some(stamp), Some(w)) = (payload_stamp(&ev.payload), win) {
                 let intended = epoch + Duration::from_nanos(stamp);
                 if intended >= w.warm_end && intended < w.end {
                     stats::record(&mut out.lat, now.saturating_duration_since(intended));
                     out.in_window += 1;
                 }
-                out.seen.push(meta.global_nonce);
             }
             out.last_event = Some(now);
             received.fetch_add(1, Ordering::Relaxed);
@@ -296,4 +333,26 @@ pub async fn run_e2e(ctx: &Ctx, spec: E2eSpec) -> anyhow::Result<E2eResult> {
         resources,
         spec,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_draining_for_grace_after_expected() {
+        let t = Instant::now();
+        // Not all events yet: keep going, no grace.
+        assert_eq!(next_step(5, 10, false, None, t), (None, false));
+        // Reached expected: start grace, do not stop yet.
+        let (g, stop) = next_step(10, 10, false, None, t);
+        assert_eq!(g, Some(t + DRAIN_GRACE));
+        assert!(!stop);
+        // Extra deliveries during grace do not end it early.
+        assert_eq!(next_step(11, 10, false, g, t + DRAIN_GRACE / 2), (g, false));
+        // Grace elapsed: stop.
+        assert!(next_step(11, 10, false, g, t + DRAIN_GRACE).1);
+        // Give-up always stops.
+        assert!(next_step(0, 10, true, None, t).1);
+    }
 }

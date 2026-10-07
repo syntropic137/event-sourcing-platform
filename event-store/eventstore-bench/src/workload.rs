@@ -68,7 +68,7 @@ impl Writer {
         let req = pb::AppendRequest {
             tenant_id: self.tenant.clone(),
             aggregate_id: agg.clone(),
-            aggregate_type: "BenchAggregate".into(),
+            aggregate_type: crate::AGGREGATE_TYPE.into(),
             expected_aggregate_nonce: self.nonce,
             idempotency_key: String::new(),
             events,
@@ -181,6 +181,11 @@ impl Window {
             warm_end,
             end: warm_end + Duration::from_secs_f64(duration_s),
         }
+    }
+
+    /// A request that started after warmup and finished by the window end.
+    pub fn contains(&self, started: Instant, finished: Instant) -> bool {
+        started >= self.warm_end && finished <= self.end
     }
 }
 
@@ -503,4 +508,24 @@ pub async fn preload(
         },
         out,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_counts_only_requests_inside_it() {
+        let w = Window::new(1.0, 2.0);
+        let ms = Duration::from_millis;
+        assert!(w.contains(w.warm_end, w.end));
+        assert!(
+            !w.contains(w.start, w.warm_end + ms(1)),
+            "started in warmup"
+        );
+        assert!(
+            !w.contains(w.end - ms(1), w.end + ms(1)),
+            "finished after end"
+        );
+    }
 }
