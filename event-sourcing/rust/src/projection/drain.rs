@@ -152,12 +152,29 @@ impl Drain {
         }
     }
 
-    /// Let the current pass finish, then stop (graceful shutdown). Returns
-    /// the failure message if the processor died, so a failure racing with
-    /// shutdown is never lost.
-    pub(super) async fn stop(mut self) -> Option<String> {
+    /// Graceful shutdown: let the current pass finish for up to `grace`,
+    /// then cancel it. Returns the failure message if the processor died, so
+    /// a failure racing with shutdown is never lost.
+    pub(super) async fn stop(mut self, grace: Duration) -> Option<String> {
         self.stop.cancel();
-        self.join().await
+        let Some(handle) = self.handle.as_mut() else {
+            return self.report(Ok(()));
+        };
+        // Through a reference, so `Drop` still aborts the task if this
+        // future is dropped mid-wait.
+        let joined = match tokio::time::timeout(grace, &mut *handle).await {
+            Ok(joined) => joined,
+            Err(_) => {
+                tracing::warn!(
+                    grace = ?grace,
+                    "live processor pass still running at shutdown; cancelling it"
+                );
+                handle.abort();
+                handle.await
+            }
+        };
+        self.handle = None;
+        self.report(joined)
     }
 
     /// Stop now, cancelling an in-flight pass (the runner failed or halted:
@@ -181,6 +198,10 @@ impl Drain {
             None => Ok(()),
         };
         self.handle = None;
+        self.report(joined)
+    }
+
+    fn report(&self, joined: std::result::Result<(), tokio::task::JoinError>) -> Option<String> {
         if let Some(message) = self.panicked.borrow().clone() {
             return Some(message);
         }

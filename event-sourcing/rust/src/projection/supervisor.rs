@@ -216,15 +216,22 @@ pub(super) enum Failure {
 /// Transient: event store `UNAVAILABLE`, `RESOURCE_EXHAUSTED` (a lagging
 /// subscription), `DEADLINE_EXCEEDED`, transport failures (`UNKNOWN`,
 /// `INTERNAL`, `CANCELLED` as surfaced by HTTP/2), and connection-level
-/// failures of the Postgres projection store. Everything else is fatal:
-/// handler and upcast errors (`ProjectionFailed`), fencing, incompatibility,
-/// configuration, out-of-order delivery, processor panics, decode errors, and
-/// unrecognized store errors.
+/// failures of the Postgres projection store, including one a handler hit
+/// writing through the store transaction (wrapped in `ProjectionFailed`).
+/// Everything else is fatal: handler and upcast errors (`ProjectionFailed`),
+/// fencing, incompatibility, configuration, out-of-order delivery, processor
+/// panics, decode errors, and unrecognized store errors.
 pub(super) fn classify(err: &Error) -> Failure {
     if let Some(position) = err.data_loss_position() {
         return Failure::DataLoss(position);
     }
-    if err.is_transient() || is_transient_store_error(err) {
+    let transient = match err {
+        // The event was rolled back with its transaction; a lost database
+        // connection is an outage, not a bug in the handler.
+        Error::ProjectionFailed { source, .. } => is_transient_store_error(source),
+        _ => err.is_transient() || is_transient_store_error(err),
+    };
+    if transient {
         Failure::Transient
     } else {
         Failure::Fatal
@@ -236,7 +243,10 @@ fn is_transient_store_error(err: &Error) -> bool {
     let Error::Repository(inner) = err else {
         return false;
     };
-    let Some(sql) = inner.downcast_ref::<sqlx::Error>() else {
+    let Some(sql) = inner
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<sqlx::Error>())
+    else {
         return false;
     };
     match sql {
@@ -498,6 +508,29 @@ mod tests {
         assert_eq!(classify(&wrap(sqlx::Error::Io(io))), Failure::Transient);
         assert_eq!(classify(&wrap(sqlx::Error::RowNotFound)), Failure::Fatal);
         assert_eq!(classify(&wrap(sqlx::Error::PoolClosed)), Failure::Fatal);
+        // A handler that hit a lost connection through the store transaction.
+        let in_handler = |source: Error| Error::ProjectionFailed {
+            projection: "p".into(),
+            global_nonce: 1,
+            source: Box::new(source),
+        };
+        let reset = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");
+        assert_eq!(
+            classify(&in_handler(wrap(sqlx::Error::Io(reset)))),
+            Failure::Transient
+        );
+        let with_context = Error::Repository(
+            anyhow::Error::new(sqlx::Error::PoolTimedOut).context("upsert balance"),
+        );
+        assert_eq!(classify(&in_handler(with_context)), Failure::Transient);
+        assert_eq!(
+            classify(&in_handler(wrap(sqlx::Error::RowNotFound))),
+            Failure::Fatal
+        );
+        assert_eq!(
+            classify(&in_handler(Error::domain("business rule"))),
+            Failure::Fatal
+        );
     }
 
     #[test]

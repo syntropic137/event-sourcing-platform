@@ -886,6 +886,45 @@ impl LiveProcessor for BlockingProcessor {
 }
 
 #[tokio::test]
+async fn shutdown_cancels_a_stalled_pass_after_the_grace_period() {
+    let f = fixture().await;
+    append(&f.client, &f.tenant, "a", 1).await;
+    let processor = Arc::new(BlockingProcessor::default());
+    let runner = ProjectionRunner::new(
+        Arc::new(f.client.clone()),
+        Arc::new(Store::new()),
+        LedgerProjection::default(),
+        &f.tenant,
+    )
+    .with_live_processor(processor.clone())
+    .with_processor_shutdown_grace(Duration::from_millis(100));
+    let cancel = CancellationToken::new();
+    let task = spawn_supervised(runner, &cancel, fast());
+    eventually("pass started", || {
+        processor.started.load(Ordering::SeqCst) == 1
+    })
+    .await;
+    cancel.cancel();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(!task.is_finished(), "the pass gets its grace period");
+    let (result, _) = tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("a stalled pass must not block shutdown past the grace period")
+        .unwrap();
+    assert!(
+        matches!(result, Ok(RunExit::Cancelled { .. })),
+        "{result:?}"
+    );
+    processor.gate.notify_waiters();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        processor.completed.load(Ordering::SeqCst),
+        0,
+        "pass cancelled"
+    );
+}
+
+#[tokio::test]
 async fn data_loss_halts_promptly_and_cancels_an_in_flight_pass() {
     let f = fixture().await;
     let g1 = append(&f.client, &f.tenant, "a", 1).await;

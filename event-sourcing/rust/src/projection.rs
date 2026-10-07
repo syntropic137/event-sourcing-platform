@@ -576,6 +576,7 @@ pub struct ProjectionRunner<P, S: ProjectionStore> {
     processor: Option<Arc<dyn LiveProcessor>>,
     drain_on_live_start: bool,
     processor_retry: Duration,
+    processor_shutdown_grace: Duration,
     upcasters: Upcasters,
     position: u64,
     progress: watch::Sender<RunnerProgress>,
@@ -616,6 +617,7 @@ where
             processor: None,
             drain_on_live_start: true,
             processor_retry: Duration::from_secs(1),
+            processor_shutdown_grace: Duration::from_secs(10),
             upcasters: Upcasters::new(),
             position: 0,
             progress,
@@ -651,6 +653,16 @@ where
     /// failures and undecodable events can be hidden (ADR-026).
     pub fn without_capability_check(mut self) -> Self {
         self.required_capabilities.clear();
+        self
+    }
+
+    /// On cancellation, how long an in-flight [`LiveProcessor`] pass may run
+    /// before it is cancelled (default 10 s), so a stalled external call
+    /// cannot block shutdown. When the runner fails or halts, the pass is
+    /// cancelled at once. `process_pending` is idempotent, so the next live
+    /// pass redoes whatever was interrupted.
+    pub fn with_processor_shutdown_grace(mut self, grace: Duration) -> Self {
+        self.processor_shutdown_grace = grace;
         self
     }
 
@@ -927,7 +939,7 @@ where
             // effect running past it. A processor failure racing with either
             // is still surfaced: a dead processor never goes unnoticed.
             let died = match result {
-                Ok(_) => drain.stop().await,
+                Ok(_) => drain.stop(self.processor_shutdown_grace).await,
                 Err(_) => drain.abort().await,
             };
             if let Some(message) = died {
