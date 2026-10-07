@@ -108,6 +108,43 @@ class UndecodableEventError(EventStoreError):
         self.details["global_nonce"] = global_nonce
 
 
+ADR_026_PATH = "docs/adrs/ADR-026-subscription-failure-semantics.md"
+
+
+class SubscriptionHaltedError(EventSourcingError):
+    """A subscription stopped at an undecodable stored event and will not retry.
+
+    Raised by ``SubscriptionCoordinator.start()`` (and exposed as its
+    ``halted`` health state) when the event store reports gRPC DATA_LOSS for
+    the event at ``global_nonce``. Retrying reconnects from the same
+    checkpoint and fails at the same position, so the coordinator stops
+    instead. No checkpoint is moved past ``global_nonce``.
+
+    Operator recovery (ADR-026): repair the row, deploy an event store that
+    decodes it, or set the checkpoint of every projection that has not passed
+    ``global_nonce`` to ``global_nonce``. Then start the coordinator again.
+    The original ``UndecodableEventError`` is the ``__cause__``.
+    """
+
+    def __init__(self, global_nonce: int, recheck_interval: float | None = None) -> None:
+        resume = (
+            f"the coordinator re-checks every {recheck_interval:g}s"
+            if recheck_interval is not None
+            else "then start the coordinator again"
+        )
+        super().__init__(
+            f"Subscription halted at undecodable stored event global_nonce={global_nonce} "
+            "(gRPC DATA_LOSS); retrying cannot fix this, so it will not retry. "
+            "Operator recovery (ADR-026, "
+            f"{ADR_026_PATH}): repair the row or deploy an event store that decodes it, "
+            "or, if unrecoverable, set the checkpoint of every projection that has not "
+            f"passed {global_nonce} to {global_nonce} (it resumes at {global_nonce + 1}); "
+            f"{resume}.",
+            {"global_nonce": global_nonce},
+        )
+        self.global_nonce = global_nonce
+
+
 class SerializationError(EventSourcingError):
     """Raised when serialization/deserialization fails."""
 

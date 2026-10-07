@@ -263,6 +263,8 @@ __pycache__/
 # Generated SDK sources
 event-store/sdks/sdk-ts/src/gen/
 event-store/sdks/sdk-py/gen/
+event-store/sdks/sdk-py/build/
+event-store/sdks/sdk-py/*.egg-info/
 
 # SDK build outputs (should be in dist/, not src/)
 event-store/sdks/sdk-ts/src/*.js

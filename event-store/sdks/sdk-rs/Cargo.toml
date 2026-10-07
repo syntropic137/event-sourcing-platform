@@ -8,18 +8,20 @@ repository.workspace = true
 
 [dependencies]
 anyhow = "1"
-tonic = { version = "0.14", features = ["transport"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tonic = { version = "0.14", features = ["tls-native-roots", "tls-ring", "transport"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 eventstore-proto = { path = "../../eventstore-proto" }
+base64 = "0.22"
 
 [dev-dependencies]
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["net"] }
 tower-http = { version = "0.6", features = ["trace"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-tonic = { version = "0.14" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "io-util"] }
+tonic = { version = "0.14", features = ["server"] }
 eventstore-backend-memory = { path = "../../eventstore-backend-memory" }
 eventstore-bin = { path = "../../eventstore-bin" }
 portpicker = "0.1.1"
+rcgen = "0.14.10"
 
 [lib]
 name = "eventstore_sdk_rs"

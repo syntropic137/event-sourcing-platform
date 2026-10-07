@@ -14,7 +14,47 @@ The Rust event sourcing SDK (`event-sourcing/rust`, crate `event-sourcing-rust`)
 | Checkpointed projection runner (catch-up, live, resume, rebuild) | Supported |
 | Postgres projection store (`postgres` feature) | Supported |
 | Process-manager processor (live-only side effects) | Supported |
-| Snapshots, upcasting, authenticated clients | Planned |
+| TLS, timeouts, keepalive, Basic/Bearer credentials (`ClientConfig`) | Supported |
+| Snapshots, upcasting | Planned |
+
+## Connecting
+
+`EventStoreClient::connect(addr)` accepts `host:port` (plaintext), `http://host:port`, or `https://host:port` (TLS, verified against the OS trust store). Use `connect_with(ClientConfig)` for everything else:
+
+```rust
+use std::time::Duration;
+use event_sourcing_rust::client::{ClientConfig, EventStoreClient, TlsConfig, capabilities};
+
+let client = EventStoreClient::connect_with(
+    ClientConfig::new("https://events.internal:8443")
+        .tls(
+            TlsConfig::new()
+                .ca_certificate_pem(std::fs::read("ca.pem")?) // replaces OS roots unless .with_system_roots(true)
+                .domain_name("events.internal"),              // when connecting by IP or through a tunnel
+                // .client_identity_pem(cert_pem, key_pem)     // mutual TLS
+        )
+        .basic_auth("app", std::env::var("ESP_GATEWAY_PASSWORD")?)
+        .connect_timeout(Duration::from_secs(5))
+        .request_timeout(Duration::from_secs(10)),
+)
+.await?;
+
+// Fail fast if the server lacks a guarantee you rely on.
+client.require_capabilities(&[capabilities::COMMIT_ORDERED_GLOBAL_NONCE]).await?;
+```
+
+| Setting | Default | Notes |
+|---------|---------|-------|
+| `connect_timeout` | 10s | TCP + TLS + HTTP/2 handshake |
+| `request_timeout` | 30s | Each unary call (also sent as `grpc-timeout`) and *opening* a subscription. Never applied to an open subscription stream. Expiry is `DEADLINE_EXCEEDED` (`is_transient()`) |
+| `http2_keepalive(interval, timeout)` | 30s / 10s | Ends a subscription whose connection died with `UNAVAILABLE` |
+| `keepalive_while_idle` | true | Needed for subscriptions (hyper treats a connection carrying only an open stream as idle) |
+| `tcp_keepalive` | 60s | |
+| `lazy_connect` | false | Connect on first RPC |
+
+Credentials go in the `authorization` header: `basic_auth(user, pass)` is what the ADR-024 nginx gateway (HTTP Basic Auth on its external port) expects; `bearer_token(t)` and `token_provider(p)` send `Bearer <token>` (use `SharedToken` and call `set` from a refresh task to rotate without reconnecting). Credentials are refused over plaintext to non-loopback hosts unless you set `allow_insecure_credentials(true)`; the gateway has no TLS yet (#301), so only do that on a trusted network. `Debug` output never contains secrets.
+
+Configuration errors are `Error::Config`; failed capability/version checks are `Error::Incompatible`.
 
 ## Repository
 
