@@ -80,6 +80,7 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 | [ADR-021](./ADR-021-expected-version-and-set-based-validation.md) | ExpectedVersion & Set-Based Validation | ✅ Accepted | NoStream semantics, stream-per-unique-value pattern, StreamAlreadyExistsError |
 | [ADR-022](./ADR-022-strict-python-typing.md) | **Strict Python Typing Strategy** | ✅ Accepted | **Multi-layer type safety for Python SDK: pyright strict + ruff ANN401 + object ratchet** |
 | [ADR-023](./ADR-023-event-type-registry.md) | **Event Type Registry** | ✅ Accepted | **Global registry for resolving concrete event types from wire format — auto-populated by @event decorator** |
+| [ADR-024](./ADR-024-nginx-gateway-two-port-grpc-auth.md) | nginx Gateway Two-Port gRPC Auth | ✅ Accepted | eventstore-bin has no authn; nginx gateway enforces Basic auth on the public gRPC port, eventstore-bin stays on the internal network |
 | [ADR-026](./ADR-026-subscription-failure-semantics.md) | Subscription Failure Semantics | ✅ Accepted | Subscribe surfaces DB failures as `UNAVAILABLE` and undecodable events as `DATA_LOSS`, then ends; at-least-once reconnect; operator recovery path |
 
 ---
