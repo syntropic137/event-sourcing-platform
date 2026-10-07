@@ -42,6 +42,34 @@ pub enum Error {
     #[error("Invalid command: {message}")]
     InvalidCommand { message: String },
 
+    /// A projection handler failed; its checkpoint was not advanced.
+    #[error("Projection {projection} failed at global nonce {global_nonce}: {source}")]
+    ProjectionFailed {
+        /// Checkpoint key of the projection (`tenant/name@vN[feed]`).
+        projection: String,
+        /// Position of the event that failed.
+        global_nonce: u64,
+        /// Handler error.
+        source: Box<Error>,
+    },
+
+    /// A subscription delivered a live event below the last applied position
+    /// that cannot be proven to be a duplicate. The event store must deliver
+    /// live events in global-nonce commit order (`commit_ordered_global_nonce`,
+    /// see #366); skipping it could lose data, so the runner stops.
+    #[error(
+        "Projection {projection} received live event {received} after {last_applied}: \
+         out-of-order delivery"
+    )]
+    OutOfOrderDelivery {
+        /// Checkpoint key of the projection.
+        projection: String,
+        /// Last applied global nonce.
+        last_applied: u64,
+        /// Global nonce of the out-of-order event.
+        received: u64,
+    },
+
     /// Repository error
     #[error("Repository error: {0}")]
     Repository(#[from] anyhow::Error),

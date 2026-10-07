@@ -34,6 +34,10 @@ prost-types = "0.14"
 eventstore-proto = { path = "../../event-store/eventstore-proto" }
 eventstore-sdk-rs = { path = "../../event-store/sdks/sdk-rs" }
 tokio-stream = "0.1"
+tokio-util = "0.7"
+
+# Optional Postgres projection/checkpoint store (feature "postgres")
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"], optional = true }
 
 # Logging
 tracing = "0.1"
@@ -50,9 +54,11 @@ eventstore-backend-memory = { path = "../../event-store/eventstore-backend-memor
 eventstore-backend-postgres = { path = "../../event-store/eventstore-backend-postgres" }
 eventstore-bin = { path = "../../event-store/eventstore-bin" }
 portpicker = "0.1.1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
 
 [features]
 default = []
+postgres = ["dep:sqlx"]
 
 [[example]]
 name = "basic_aggregate"
