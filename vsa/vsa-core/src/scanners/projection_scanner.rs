@@ -173,22 +173,39 @@ impl<'a> ProjectionScanner<'a> {
             .map(|source| (source, class_name))
     }
 
-    /// Source of `class <class_name>` in a Python module: its header line and
-    /// every following line indented deeper than it (blank and comment-only
-    /// lines included). `None` when the module does not define the class.
+    /// Source of `class <class_name>` in a Python module: its header (which
+    /// may span lines inside its base-class brackets) and every following
+    /// line indented deeper than it (blank and comment-only lines included).
+    /// `None` when the module does not define the class.
     fn python_class_source(module: &str, class_name: &str) -> Option<String> {
         let header =
             Regex::new(&format!(r"(?m)^([ \t]*)class\s+{}\b", regex::escape(class_name))).unwrap();
         let cap = header.captures(module)?;
         let indent = cap.get(1)?.as_str().len();
         let start = cap.get(0)?.start();
+        // The header ends at the first newline outside brackets that is not
+        // escaped by a backslash continuation.
+        let mut depth = 0usize;
+        let mut prev = '\0';
+        let mut offset = module.len();
+        for (i, c) in module[start..].char_indices() {
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth = depth.saturating_sub(1),
+                '\n' if depth == 0 && prev != '\\' => {
+                    offset = start + i + 1;
+                    break;
+                }
+                _ => {}
+            }
+            prev = c;
+        }
         let mut end = module.len();
-        let mut offset = start;
-        for (i, line) in module[start..].split_inclusive('\n').enumerate() {
+        for line in module[offset..].split_inclusive('\n') {
             let code = line.trim_start();
             let is_body =
                 code.is_empty() || code.starts_with('#') || line.len() - code.len() > indent;
-            if i > 0 && !is_body {
+            if !is_body {
                 end = offset;
                 break;
             }
@@ -555,6 +572,50 @@ mod tests {
             vec!["org_created".to_string(), "org_renamed".to_string()]
         );
         assert_eq!(projections[0].read_model.as_deref(), Some("OrgSummary"));
+        assert!(projections[0].file_path.ends_with("slices/list_orgs/projection.py"));
+    }
+
+    #[test]
+    fn test_reexport_shim_reads_past_a_multiline_class_header() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        let shared = root.join("pkg/org/_shared");
+        let slice = root.join("pkg/org/slices/list_orgs");
+        fs::create_dir_all(&shared).unwrap();
+        fs::create_dir_all(&slice).unwrap();
+        fs::write(
+            shared.join("org_projection.py"),
+            concat!(
+                "class OrgProjection(\n",
+                "    AutoDispatchProjection,\n",
+                "):\n",
+                "    async def on_org_created(self, event):\n",
+                "        pass\n",
+                "\n",
+                "\n",
+                "class OtherProjection(\n",
+                "    AutoDispatchProjection,\n",
+                "):\n",
+                "    async def on_member_added(self, event):\n",
+                "        pass\n",
+                "\n",
+                "\n",
+                "async def on_unrelated_thing(event):\n",
+                "    pass\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            slice.join("projection.py"),
+            "from pkg.org._shared.org_projection import (\n    OrgProjection,\n)\n",
+        )
+        .unwrap();
+
+        let projections = ProjectionScanner::new(None, root).scan().unwrap();
+
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].name, "OrgProjection");
+        assert_eq!(projections[0].subscribed_events, vec!["org_created".to_string()]);
         assert!(projections[0].file_path.ends_with("slices/list_orgs/projection.py"));
     }
 
