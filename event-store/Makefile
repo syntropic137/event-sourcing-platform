@@ -13,11 +13,16 @@ COVERAGE_MIN ?= 75
 # Crates excluded from fast unit/doc tests (space-separated)
 FAST_TEST_EXCLUDES ?= eventstore-backend-postgres
 
-.PHONY: help build clean qa qa-full qa-fast fmt clippy check test run gen-ts gen-py smoke cov-setup coverage
+.PHONY: help build clean qa qa-full qa-fast fmt clippy check test run gen-ts gen-py test-sdk-py smoke-py-import smoke cov-setup coverage
 .PHONY: ps run-bg stop dev-init dev-start dev-stop dev-restart dev-clean dev-test dev-status dev-logs dev-shell
+.PHONY: bench-pg bench-pg-full
 
 help:
-	@echo "Targets: build, clean, qa, qa-full, fmt, clippy, check, test, run, smoke, gen-ts, gen-py"
+	@echo "Targets: build, clean, qa, qa-full, fmt, clippy, check, test, run, smoke, gen-ts, gen-py, test-sdk-py, smoke-py-import"
+	@echo ""
+	@echo "Performance (Docker; see docs/performance/POSTGRES-BASELINE.md):"
+	@echo "  bench-pg      - Postgres baseline, quick profile (~2 min)"
+	@echo "  bench-pg-full - Postgres baseline, full profile (~20 min)"
 	@echo ""
 	@echo "Development Infrastructure:"
 	@echo "  dev-init     - Initialize fast dev environment"
@@ -76,6 +81,30 @@ qa: qa-fast
 qa-full: fmt clippy check test-full coverage-text
 	@echo "✅ Full QA passed"
 
+# Recovery drills (#355, docs/operations/BACKUP-RESTORE.md): SIGKILL the
+# eventstore-bin process around appends, cut Postgres connectivity during
+# replay/live consumption, pg_dump/pg_restore into a fresh instance. Every
+# drill creates and removes its own Docker containers (label
+# esp-recovery-drill=<run id>). Slow (minutes), so not part of qa/qa-full.
+# Extra test-harness args: make recovery-drill DRILL_ARGS="--nocapture"
+DRILL_TESTS := --test drill_restart --test drill_connectivity --test drill_blackhole --test drill_backup
+.PHONY: recovery-drill recovery-drill-clean
+recovery-drill:
+	@command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 || { echo "Docker is required for recovery drills"; exit 2; }
+	@run_id="$${DRILL_RUN_ID:-drill-$$(date +%s)-$$$$}"; status=0; \
+	 echo "Recovery drill run id: $$run_id"; \
+	 DRILL_RUN_ID="$$run_id" cargo test -p eventstore-bin $(DRILL_TESTS) -- --ignored --test-threads=1 $(DRILL_ARGS) || status=$$?; \
+	 ids=$$(docker ps -aq --filter "label=esp-recovery-drill=$$run_id") || { echo "Could not list drill containers"; ids=""; [ $$status -ne 0 ] || status=3; }; \
+	 if [ -n "$$ids" ] && [ -n "$${DRILL_KEEP_CONTAINERS:-}" ]; then echo "DRILL_KEEP_CONTAINERS set: keeping $$ids (make recovery-drill-clean removes them)"; \
+	 elif [ -n "$$ids" ]; then echo "Removing leftover drill containers: $$ids"; \
+	   docker rm -f -v $$ids >/dev/null || { echo "Failed to remove drill containers: $$ids"; [ $$status -ne 0 ] || status=3; }; fi; \
+	 exit $$status
+
+# Remove containers left by any interrupted drill run (label-scoped).
+recovery-drill-clean:
+	@ids=$$(docker ps -aq --filter label=esp-recovery-drill); \
+	 if [ -n "$$ids" ]; then docker rm -f -v $$ids; else echo "No drill containers"; fi
+
 # Install helper for coverage tool
 cov-setup:
 	@if ! command -v cargo-llvm-cov >/dev/null 2>&1; then \
@@ -94,7 +123,7 @@ cov-setup:
 # TODO: Narrow these ignores once targeted tests land.
 # Note: Escape the trailing $ for Make with $$, and pass as a single CLI arg via double quotes.
 # Temporarily ignore backend store files while subscribe coverage is still expanding.
-COV_IGNORE ?= (.*/eventstore-bin/src/.*)$$|(.*/eventstore-core/src/errors\.rs)$$|(.*/eventstore-backend-postgres/src/store_postgres\.rs)$$|(.*/eventstore-backend-memory/src/store_memory\.rs)$$
+COV_IGNORE ?= (.*/eventstore-bin/src/.*)$$|(.*/eventstore-bench/src/.*)$$|(.*/eventstore-core/src/errors\.rs)$$|(.*/eventstore-backend-postgres/src/store_postgres\.rs)$$|(.*/eventstore-backend-memory/src/store_memory\.rs)$$
 coverage:
 	@if ! command -v cargo-llvm-cov >/dev/null 2>&1; then echo "cargo-llvm-cov not found. Run 'make cov-setup' first."; exit 2; fi
 	@mkdir -p coverage
@@ -144,6 +173,16 @@ coverage-text:
 	 fi; \
 	 rm -f "$$TMP"
 
+# Live-Postgres throughput / tail-latency baseline (issue #354). Starts a
+# pinned Postgres container, runs eventstore-bench against the release
+# eventstore-bin, removes the container. Not part of qa: needs Docker and
+# minutes of wall time. Env: PROFILE, DURABILITY, PG_CPUS, PG_MEM, OUT_DIR.
+bench-pg:
+	./scripts/bench-postgres.sh
+
+bench-pg-full:
+	PROFILE=full ./scripts/bench-postgres.sh
+
 # Placeholder run until server binary exists
 run:
 	BACKEND=$(BACKEND) BIND_ADDR=$(BIND_ADDR) cargo run -p eventstore-bin
@@ -186,18 +225,47 @@ gen-ts:
 	    -I ./eventstore-proto/proto \
 	    eventstore-proto/proto/eventstore/v1/eventstore.proto
 
-# Generate Python stubs using grpcio-tools (requires Python + grpcio-tools)
+# Generate Python stubs using grpcio-tools (requires uv).
+# Pinned to the grpcio-tools that generated event-sourcing/python's stubs
+# (protobuf gencode 6.31.1), so both Python packages accept the same runtime.
+PY_GRPC_TOOLS_VERSION := 1.76.0
+PY_GEN_DIR := sdks/sdk-py/sdk_py/gen
 gen-py:
 	@if [ ! -d sdks/sdk-py ]; then echo "sdk-py not present; skipping. Create sdks/sdk-py/ to enable"; exit 0; fi
-	@if ! command -v python >/dev/null 2>&1; then echo "python not found"; exit 2; fi
-	@echo "Generating Python stubs into sdks/sdk-py/sdk_py/gen ..."
-	@rm -rf sdks/sdk-py/sdk_py/gen
-	@mkdir -p sdks/sdk-py/sdk_py/gen
-	@python -m grpc_tools.protoc \
+	@if ! command -v uv >/dev/null 2>&1; then echo "uv not found"; exit 2; fi
+	@echo "Generating Python stubs into $(PY_GEN_DIR) ..."
+	@rm -rf $(PY_GEN_DIR)
+	@mkdir -p $(PY_GEN_DIR)/eventstore/v1
+	@uv run --isolated --no-project --with grpcio-tools==$(PY_GRPC_TOOLS_VERSION) \
+	  python -m grpc_tools.protoc \
 	  -I ./eventstore-proto/proto \
-	  --python_out=./sdks/sdk-py/sdk_py/gen \
-	  --grpc_python_out=./sdks/sdk-py/sdk_py/gen \
+	  --python_out=./$(PY_GEN_DIR) \
+	  --pyi_out=./$(PY_GEN_DIR) \
+	  --grpc_python_out=./$(PY_GEN_DIR) \
 	  eventstore-proto/proto/eventstore/v1/eventstore.proto
+	@# Regular packages, so the stubs install and import as sdk_py.gen.eventstore.v1.
+	@touch $(PY_GEN_DIR)/__init__.py $(PY_GEN_DIR)/eventstore/__init__.py $(PY_GEN_DIR)/eventstore/v1/__init__.py
+	@# grpc_tools imports the messages as top-level 'eventstore.v1', which does not
+	@# exist once installed (#367). Make it relative to the package instead.
+	@sed -i.bak 's/^from eventstore\.v1 import eventstore_pb2 as /from . import eventstore_pb2 as /' \
+	  $(PY_GEN_DIR)/eventstore/v1/eventstore_pb2_grpc.py
+	@rm $(PY_GEN_DIR)/eventstore/v1/eventstore_pb2_grpc.py.bak
+	@if grep -q '^from eventstore' $(PY_GEN_DIR)/eventstore/v1/eventstore_pb2_grpc.py; then \
+	  echo "absolute eventstore import left in generated stubs"; exit 1; fi
+
+# Install sdk-py into a throwaway environment and import it from there (#367).
+# sdk-py unit tests (credentials, TLS, plaintext guard) against in-process servers.
+test-sdk-py:
+	@if ! command -v uv >/dev/null 2>&1; then echo "uv not found"; exit 2; fi
+	@cd sdks/sdk-py && uv run --isolated --no-project --with 'grpcio>=1.76.0' --with 'protobuf>=6.31.1,<7' \
+	  --with pytest python -m pytest -q -p no:cacheprovider tests
+
+smoke-py-import:
+	@if ! command -v uv >/dev/null 2>&1; then echo "uv not found"; exit 2; fi
+	@# Built from a copy, so the build leaves no egg-info/build dirs in the tree.
+	@tmp="$$(mktemp -d)" && cp -R sdks/sdk-py "$$tmp/sdk-py" && rm -rf "$$tmp/sdk-py/build" "$$tmp"/sdk-py/*.egg-info && \
+	  cd "$$tmp" && uv run --isolated --no-project --reinstall-package eventstore-sdk-py --with ./sdk-py \
+	  python -I ./sdk-py/tests/smoke_import.py
 
 # Show process listening on BIND_ADDR's port
 ps:

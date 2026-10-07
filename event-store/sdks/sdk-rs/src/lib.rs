@@ -1,39 +1,116 @@
+//! Low-level Rust client for the event store gRPC API.
+//!
+//! Connect with [`EventStore::connect`] (`host:port`, `http://...`, or
+//! `https://...`) or, for TLS, credentials, timeouts and keepalive, with
+//! [`ClientConfig`].
+
+use std::future::Future;
+use std::time::Duration;
+
 use anyhow::Result;
 use eventstore_proto::gen::event_store_client::EventStoreClient;
 use eventstore_proto::gen::{AppendRequest, ReadAllRequest, ReadStreamRequest, SubscribeRequest};
+use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
+use tonic::{Request, Response, Status};
 
+mod auth;
+mod config;
+mod server_info;
+use auth::AuthInterceptor;
+pub use auth::{Credentials, InvalidCredentials, SharedToken, TokenProvider};
+pub use config::{
+    ClientConfig, ConfigError, TlsConfig, DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_HTTP2_KEEPALIVE_INTERVAL, DEFAULT_HTTP2_KEEPALIVE_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
+    DEFAULT_TCP_KEEPALIVE,
+};
+pub use server_info::{capabilities, CompatibilityError, ServerInfo, SERVER_INFO_MIN_VERSION};
+
+type Inner = EventStoreClient<InterceptedService<Channel, AuthInterceptor>>;
+
+/// Cloning is cheap: clones share the underlying gRPC channel.
+#[derive(Clone)]
 pub struct EventStore {
-    inner: EventStoreClient<Channel>,
+    inner: Inner,
+    request_timeout: Option<Duration>,
+}
+
+impl std::fmt::Debug for EventStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EventStore")
+            .field("request_timeout", &self.request_timeout)
+            .finish_non_exhaustive()
+    }
 }
 
 impl EventStore {
+    /// Connect with default settings. `addr` is `host:port` (plaintext),
+    /// `http://host:port`, or `https://host:port` (TLS, OS trust store).
     pub async fn connect(addr: &str) -> Result<Self> {
-        let inner = EventStoreClient::connect(format!("http://{addr}")).await?;
-        Ok(Self { inner })
+        Self::connect_with(ClientConfig::new(addr)).await
+    }
+
+    /// Connect with explicit settings. Same as [`ClientConfig::connect`].
+    pub async fn connect_with(config: ClientConfig) -> Result<Self> {
+        let endpoint = config.endpoint()?;
+        let auth = AuthInterceptor::new(config.credentials_value())?;
+        let channel = if config.is_lazy() {
+            endpoint.connect_lazy()
+        } else {
+            match config.connect_timeout_value() {
+                // tonic's connect timeout covers TCP and TLS; this outer bound
+                // also covers the HTTP/2 handshake.
+                Some(t) => tokio::time::timeout(t, endpoint.connect())
+                    .await
+                    .map_err(|_| Status::unavailable(format!("connect timed out after {t:?}")))??,
+                None => endpoint.connect().await?,
+            }
+        };
+        Ok(Self {
+            inner: EventStoreClient::with_interceptor(channel, auth),
+            request_timeout: config.request_timeout_value(),
+        })
+    }
+
+    /// Wrap a unary message, attaching the request deadline as
+    /// `grpc-timeout` so the server can give up too.
+    fn unary<T>(&self, msg: T) -> Request<T> {
+        let mut req = Request::new(msg);
+        if let Some(t) = self.request_timeout {
+            req.set_timeout(t);
+        }
+        req
     }
 
     pub async fn append(
         &mut self,
         req: AppendRequest,
     ) -> Result<eventstore_proto::gen::AppendResponse> {
-        let resp = self.inner.append(req).await?.into_inner();
-        Ok(resp)
+        let req = self.unary(req);
+        Ok(bounded(self.request_timeout, self.inner.append(req)).await?)
     }
 
     pub async fn read_stream(
         &mut self,
         req: ReadStreamRequest,
     ) -> Result<eventstore_proto::gen::ReadStreamResponse> {
-        let resp = self.inner.read_stream(req).await?.into_inner();
-        Ok(resp)
+        let req = self.unary(req);
+        Ok(bounded(self.request_timeout, self.inner.read_stream(req)).await?)
     }
 
+    /// Open a subscription. The request timeout bounds only opening the
+    /// stream (until response headers arrive); the stream itself has no
+    /// deadline (no `grpc-timeout` is sent) and ends with `UNAVAILABLE` when
+    /// HTTP/2 keepalive finds the connection dead.
     pub async fn subscribe(
         &mut self,
         req: SubscribeRequest,
     ) -> Result<tonic::Streaming<eventstore_proto::gen::SubscribeResponse>> {
-        let stream = self.inner.subscribe(req).await?.into_inner();
+        let stream = bounded(
+            self.request_timeout,
+            self.inner.subscribe(Request::new(req)),
+        )
+        .await?;
         Ok(stream)
     }
 
@@ -42,9 +119,52 @@ impl EventStore {
         &mut self,
         req: ReadAllRequest,
     ) -> Result<eventstore_proto::gen::ReadAllResponse> {
-        let resp = self.inner.read_all(req).await?.into_inner();
-        Ok(resp)
+        let req = self.unary(req);
+        Ok(bounded(self.request_timeout, self.inner.read_all(req)).await?)
     }
+}
+
+impl ClientConfig {
+    /// Connect using this configuration.
+    pub async fn connect(self) -> Result<EventStore> {
+        EventStore::connect_with(self).await
+    }
+}
+
+/// Await a call's response within `timeout`, mapping expiry to
+/// `DEADLINE_EXCEEDED`. For streaming calls the response is the headers, so
+/// this never bounds the stream body.
+async fn bounded<R>(
+    timeout: Option<Duration>,
+    call: impl Future<Output = std::result::Result<Response<R>, Status>>,
+) -> std::result::Result<R, Status> {
+    let expired = |t: Duration| {
+        Status::deadline_exceeded(format!("event store request timed out after {t:?}"))
+    };
+    let resp = match timeout {
+        Some(t) => match tokio::time::timeout(t, call).await {
+            Ok(Ok(resp)) => resp,
+            // tonic's own `grpc-timeout` enforcement can win the race; it
+            // reports CANCELLED, which callers must not mistake for a
+            // caller-side cancel.
+            Ok(Err(status)) if is_tonic_timeout(&status) => return Err(expired(t)),
+            Ok(Err(status)) => return Err(status),
+            Err(_) => return Err(expired(t)),
+        },
+        None => call.await?,
+    };
+    Ok(resp.into_inner())
+}
+
+fn is_tonic_timeout(status: &Status) -> bool {
+    let mut source = std::error::Error::source(status);
+    while let Some(err) = source {
+        if err.is::<tonic::TimeoutExpired>() {
+            return true;
+        }
+        source = err.source();
+    }
+    false
 }
 
 #[cfg(test)]

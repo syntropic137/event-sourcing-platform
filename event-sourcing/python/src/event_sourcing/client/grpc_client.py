@@ -8,27 +8,83 @@ adapter file. The public API (return types) is still fully typed — the "unknow
 types are confined to internal proto interactions.
 """
 
-import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 
 import grpc
 
+from event_sourcing.client.auth import (
+    Credentials,
+    ResolvedConnection,
+    TlsConfig,
+    resolve_connection,
+)
+from event_sourcing.client.server_info import (
+    LEGACY_SERVER_INFO,
+    ServerInfo,
+    assert_capabilities,
+    assert_min_version,
+)
+from event_sourcing.core.envelope import (
+    CONTENT_TYPE_JSON,
+    EventTypeFilter,
+    InvalidPayloadPolicy,
+    decode_event,
+    encode_payload,
+    event_type_of,
+    event_version_of,
+    skip_unless_wanted,
+)
 from event_sourcing.core.errors import (
     ConcurrencyConflictError,
+    EventStoreAuthenticationError,
     EventStoreError,
     StreamAlreadyExistsError,
+    UndecodableEventError,
 )
 from event_sourcing.core.event import (
     DomainEvent,
     EventEnvelope,
     EventMetadata,
-    GenericDomainEvent,
 )
-from event_sourcing.decorators.events import resolve_event_type
+from event_sourcing.core.upcast import Upcasters
 from event_sourcing.proto.eventstore.v1 import eventstore_pb2, eventstore_pb2_grpc
 
 logger = logging.getLogger(__name__)
+
+# Trailing-metadata key the event store sets on DATA_LOSS for an undecodable
+# stored event (eventstore-core UNDECODABLE_GLOBAL_NONCE_KEY).
+UNDECODABLE_GLOBAL_NONCE_KEY = "esp-undecodable-global-nonce"
+
+
+def _undecodable_global_nonce(error: grpc.RpcError) -> int | None:
+    """global_nonce of the undecodable stored event, if `error` reports one."""
+    try:
+        if error.code() != grpc.StatusCode.DATA_LOSS:
+            return None
+        for key, value in error.trailing_metadata() or ():
+            if key == UNDECODABLE_GLOBAL_NONCE_KEY:
+                return int(value)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return None
+
+
+def _raise_if_unauthenticated(error: grpc.RpcError, context: str) -> None:
+    """Raise EventStoreAuthenticationError for gRPC UNAUTHENTICATED (ADR-024 gateway)."""
+    try:
+        code = error.code()
+    except AttributeError:
+        return
+    if code == grpc.StatusCode.UNAUTHENTICATED:
+        raise EventStoreAuthenticationError(f"{context}: credentials rejected", error) from error
+
+
+def _raise_if_undecodable(error: grpc.RpcError, context: str) -> None:
+    """Raise UndecodableEventError when the store reports an undecodable event."""
+    nonce = _undecodable_global_nonce(error)
+    if nonce is not None:
+        raise UndecodableEventError(nonce, f"{context}: {error}", error) from error
 
 
 class GrpcEventStoreClient:
@@ -44,20 +100,57 @@ class GrpcEventStoreClient:
         address: str = "localhost:50051",
         tenant_id: str = "default",
         credentials: grpc.ChannelCredentials | None = None,
+        *,
+        auth: Credentials | None = None,
+        tls: TlsConfig | bool | None = None,
+        allow_insecure_credentials: bool = False,
+        upcasters: Upcasters | None = None,
+        on_invalid_payload: InvalidPayloadPolicy = "raise",
     ) -> None:
         """
         Initialize the gRPC client.
 
         Args:
-            address: The gRPC server address (host:port)
+            address: ``host:port``, ``http://host:port`` or ``https://host:port``
             tenant_id: The tenant ID for multi-tenancy support
-            credentials: Optional gRPC credentials for TLS/auth
+            credentials: Optional custom gRPC channel credentials (counts as TLS;
+                mutually exclusive with ``tls``)
+            auth: Credentials sent on every call, unary and streaming
+                (``BasicAuth`` for the ADR-024 gateway, ``BearerToken``,
+                ``TokenProviderAuth``)
+            tls: ``True`` or a ``TlsConfig`` for TLS; implied by ``https://``
+            allow_insecure_credentials: allow ``auth`` over plaintext to a
+                non-loopback host (default: refused)
+            upcasters: Steps that migrate stored events to registered
+                versions before decoding (ADR-007, ADR-027).
+            on_invalid_payload: ``"raise"`` (default): a payload the
+                registered class rejects is an ``EventPayloadError``.
+                ``"generic"``: return it as a ``GenericDomainEvent`` instead
+                (the pre-ADR-027 behaviour; a migration aid).
+
+        Raises:
+            ClientConfigError: invalid endpoint, TLS or credentials, or
+                credentials over plaintext to a non-loopback host.
         """
         self.address = address
         self.tenant_id = tenant_id
-        self._channel: grpc.Channel | None = None
+        self.upcasters = upcasters
+        self.on_invalid_payload: InvalidPayloadPolicy = on_invalid_payload
+        self._channel: grpc.aio.Channel | None = None
         self._stub: eventstore_pb2_grpc.EventStoreStub | None = None
-        self._credentials = credentials
+        self._connection: ResolvedConnection = resolve_connection(
+            address,
+            tls=tls,
+            channel_credentials=credentials,
+            auth=auth,
+            allow_insecure_credentials=allow_insecure_credentials,
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"GrpcEventStoreClient(address={self.address!r}, tenant_id={self.tenant_id!r}, "
+            f"tls={self._connection.tls}, auth={bool(self._connection.interceptors)})"
+        )
 
     async def connect(self) -> None:
         """Connect to the event store.
@@ -71,10 +164,18 @@ class GrpcEventStoreClient:
 
         logger.info(f"Connecting to event store at {self.address}")
 
-        if self._credentials:
-            self._channel = grpc.aio.secure_channel(self.address, self._credentials)
+        conn = self._connection
+        if conn.channel_credentials is not None:
+            self._channel = grpc.aio.secure_channel(
+                conn.target,
+                conn.channel_credentials,
+                options=conn.options,
+                interceptors=conn.interceptors,
+            )
         else:
-            self._channel = grpc.aio.insecure_channel(self.address)
+            self._channel = grpc.aio.insecure_channel(
+                conn.target, options=conn.options, interceptors=conn.interceptors
+            )
 
         self._stub = eventstore_pb2_grpc.EventStoreStub(self._channel)  # type: ignore[no-untyped-call]
         logger.info("Connected to event store")
@@ -86,6 +187,44 @@ class GrpcEventStoreClient:
             self._channel = None
             self._stub = None
             logger.info("Disconnected from event store")
+
+    async def server_info(self) -> ServerInfo:
+        """Ask the server for its version, backend, and capability flags.
+
+        A server older than v0.17.0 answers ``UNIMPLEMENTED``; that returns
+        :data:`LEGACY_SERVER_INFO` (no version, no capabilities) rather than
+        raising. Any other failure raises :class:`EventStoreError`.
+        """
+        if not self._stub:
+            raise EventStoreError("Client is not connected")
+        try:
+            resp = await self._stub.GetServerInfo(eventstore_pb2.GetServerInfoRequest())
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.UNIMPLEMENTED:
+                return LEGACY_SERVER_INFO
+            _raise_if_unauthenticated(e, "Failed to get server info")
+            raise EventStoreError(f"Failed to get server info: {e}", e) from e
+        return ServerInfo(
+            server_version=resp.server_version,
+            api_version=resp.api_version,
+            backend=resp.backend,
+            capabilities=tuple(resp.capabilities),
+        )
+
+    async def require_capabilities(self, required: Sequence[str]) -> ServerInfo:
+        """Raise :class:`CompatibilityError` unless the server advertises every
+        capability in ``required``. Legacy servers advertise none."""
+        info = await self.server_info()
+        assert_capabilities(info, required)
+        return info
+
+    async def require_min_version(self, minimum: str) -> ServerInfo:
+        """Raise :class:`CompatibilityError` unless the server version is
+        ``>= minimum``. Legacy servers always fail. Prefer
+        :meth:`require_capabilities`."""
+        info = await self.server_info()
+        assert_min_version(info, minimum)
+        return info
 
     async def read_events(
         self, stream_name: str, from_version: int | None = None
@@ -133,6 +272,9 @@ class GrpcEventStoreClient:
             return envelopes
 
         except grpc.RpcError as e:
+            # Typed and actionable: the caller logs it, not once per attempt here (#360).
+            _raise_if_unauthenticated(e, "Failed to read stream")
+            _raise_if_undecodable(e, "Failed to read stream")
             logger.error(f"gRPC error reading stream: {e}")
             raise EventStoreError(f"Failed to read stream: {e}") from e
 
@@ -201,6 +343,7 @@ class GrpcEventStoreClient:
                     raise StreamAlreadyExistsError(stream_name, actual_version) from e
                 raise ConcurrencyConflictError(expected_ver, actual_version) from e
 
+            _raise_if_unauthenticated(e, "Failed to append events")
             logger.error(f"gRPC error appending events: {e}")
             raise EventStoreError(f"Failed to append events: {e}") from e
 
@@ -264,27 +407,19 @@ class GrpcEventStoreClient:
     def _envelope_to_proto(
         self, envelope: EventEnvelope[DomainEvent], aggregate_id: str, aggregate_type: str
     ) -> eventstore_pb2.EventData:
-        """Convert an EventEnvelope to protobuf EventData."""
-        # Serialize event payload to JSON
-        payload_dict = envelope.event.model_dump(mode="json")
-        payload_bytes = json.dumps(payload_dict).encode("utf-8")
-
-        # Get event type from the event
-        event_type = (
-            envelope.event.event_type
-            if hasattr(envelope.event, "event_type")
-            else type(envelope.event).__name__
-        )
-
-        # Build metadata
+        """Convert an EventEnvelope to protobuf EventData (ADR-027 envelope)."""
+        try:
+            event_version = event_version_of(envelope.event)
+        except ValueError as e:
+            raise EventStoreError(str(e)) from e
         meta = eventstore_pb2.EventMetadata(
             event_id=envelope.metadata.event_id,
             aggregate_id=aggregate_id,
             aggregate_type=aggregate_type,
             aggregate_nonce=envelope.metadata.aggregate_nonce,
-            event_type=event_type,
-            event_version=1,  # Default schema version
-            content_type="application/json",
+            event_type=event_type_of(envelope.event),
+            event_version=event_version,
+            content_type=CONTENT_TYPE_JSON,
             tenant_id=self.tenant_id,
             correlation_id=envelope.metadata.correlation_id or "",
             causation_id=envelope.metadata.causation_id or "",
@@ -292,58 +427,55 @@ class GrpcEventStoreClient:
             timestamp_unix_ms=int(envelope.metadata.timestamp.timestamp() * 1000),
         )
 
-        return eventstore_pb2.EventData(meta=meta, payload=payload_bytes)
+        return eventstore_pb2.EventData(meta=meta, payload=encode_payload(envelope.event))
 
     def _proto_to_envelope(
-        self, event_data: eventstore_pb2.EventData
+        self,
+        event_data: eventstore_pb2.EventData,
+        event_types: EventTypeFilter | None = None,
     ) -> EventEnvelope[DomainEvent]:
-        """Convert protobuf EventData to an EventEnvelope."""
+        """Convert protobuf EventData to an EventEnvelope.
+
+        Decodes by ``(event_type, event_version)`` after upcasting (ADR-027).
+        Raises an ``EventDecodeError`` subclass (an ``UndecodableEventError``)
+        rather than handing the event to code written for another version.
+        An event whose type is not in ``event_types`` (when given) is not
+        decoded; see :func:`~event_sourcing.core.envelope.skip_unless_wanted`.
+        """
         meta = event_data.meta
-
-        # Deserialize payload from JSON
-        payload_dict = json.loads(event_data.payload.decode("utf-8"))
-
-        # Create metadata — event_type lives here, not in the payload.
-        # Injecting it into the payload caused ValidationError when downstream
-        # code called model_validate() on concrete DomainEvent subclasses
-        # (which use extra="forbid").
+        skipped = (
+            skip_unless_wanted(
+                meta.event_type, meta.event_version, event_types, upcasters=self.upcasters
+            )
+            if event_types is not None
+            else None
+        )
+        decoded = skipped or decode_event(
+            meta.event_type,
+            meta.event_version,
+            bytes(event_data.payload),
+            content_type=meta.content_type,
+            upcasters=self.upcasters,
+            global_nonce=meta.global_nonce,
+            on_invalid_payload=self.on_invalid_payload,
+        )
         metadata = EventMetadata(
             event_id=meta.event_id,
             aggregate_id=meta.aggregate_id,
             aggregate_type=meta.aggregate_type,
             aggregate_nonce=meta.aggregate_nonce,
+            tenant_id=meta.tenant_id or None,
+            content_type=meta.content_type or CONTENT_TYPE_JSON,
             correlation_id=meta.correlation_id if meta.correlation_id else None,
             causation_id=meta.causation_id if meta.causation_id else None,
             actor_id=meta.actor_id if meta.actor_id else None,
             global_nonce=meta.global_nonce if meta.global_nonce > 0 else None,
-            event_type=meta.event_type if meta.event_type else None,
+            event_type=decoded.event_type or None,
+            event_version=decoded.event_version,
+            stored_event_type=decoded.stored_event_type or None,
+            stored_event_version=decoded.stored_event_version,
         )
-
-        # ADR-023: Consult the event type registry to resolve concrete types.
-        # If the event type was registered via @event decorator, deserialize
-        # into the concrete class. Otherwise fall back to GenericDomainEvent
-        # with event_type preserved as an instance attribute so aggregate
-        # rehydration can still route to the correct handler.
-        event_type_str = meta.event_type if meta.event_type else ""
-        concrete_cls = resolve_event_type(event_type_str) if event_type_str else None
-
-        # Build GenericDomainEvent, removing any existing event_type key from the
-        # payload to avoid a duplicate-kwarg TypeError (older producers may include it).
-        cleaned = {k: v for k, v in payload_dict.items() if k != "event_type"}
-
-        if concrete_cls is not None:
-            try:
-                event: DomainEvent = concrete_cls.model_validate(cleaned)
-            except Exception:
-                logger.debug(
-                    "Failed to deserialize as %s, falling back to GenericDomainEvent",
-                    concrete_cls.__name__,
-                    exc_info=True,
-                )
-                event = GenericDomainEvent(**cleaned, event_type=event_type_str) if event_type_str else GenericDomainEvent(**cleaned)
-        else:
-            event = GenericDomainEvent(**cleaned, event_type=event_type_str) if event_type_str else GenericDomainEvent(**cleaned)
-
+        event = decoded.event
         return EventEnvelope(event=event, metadata=metadata)
 
     async def read_all(
@@ -394,6 +526,9 @@ class GrpcEventStoreClient:
             return envelopes, response.is_end, response.next_from_global_nonce
 
         except grpc.RpcError as e:
+            # Typed and actionable: the caller logs it, not once per attempt here (#360).
+            _raise_if_unauthenticated(e, "Failed to read all events")
+            _raise_if_undecodable(e, "Failed to read all events")
             logger.error(f"gRPC error in ReadAll: {e}")
             raise EventStoreError(f"Failed to read all events: {e}") from e
 
@@ -428,6 +563,7 @@ class GrpcEventStoreClient:
     async def subscribe(
         self,
         from_global_nonce: int = 0,
+        event_types: EventTypeFilter | None = None,
     ) -> AsyncIterator[EventEnvelope[DomainEvent]]:
         """
         Subscribe to events from a global nonce (live streaming).
@@ -437,6 +573,11 @@ class GrpcEventStoreClient:
 
         Args:
             from_global_nonce: global nonce to start from (inclusive)
+            event_types: The types the caller handles, after upcasting. Any
+                other event is yielded undecoded (a ``GenericDomainEvent``
+                with no payload fields, and its position and type), so an
+                event the caller would skip cannot fail decoding (ADR-027).
+                ``None`` (default) decodes every event.
 
         Yields:
             EventEnvelope objects as they arrive
@@ -461,12 +602,15 @@ class GrpcEventStoreClient:
                     logger.debug("Received keepalive from Subscribe stream")
                     continue
 
-                envelope = self._proto_to_envelope(response.event)
+                envelope = self._proto_to_envelope(response.event, event_types)
                 yield envelope
 
         except grpc.RpcError as e:
             if e.code() == grpc.StatusCode.CANCELLED:
                 logger.info("Subscription cancelled")
                 return
+            # Typed and actionable: the caller logs it, not once per attempt here (#360).
+            _raise_if_unauthenticated(e, "Subscription failed")
+            _raise_if_undecodable(e, "Subscription failed")
             logger.error(f"gRPC error in subscription: {e}")
             raise EventStoreError(f"Subscription failed: {e}") from e

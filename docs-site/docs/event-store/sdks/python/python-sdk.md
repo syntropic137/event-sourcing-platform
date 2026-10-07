@@ -56,24 +56,41 @@ if __name__ == "__main__":
 
 ### Client Configuration
 
-```python
-from eventstore import EventStoreClient
+The low-level client is `sdk_py.client_rt.EventStoreClientRT` (synchronous);
+the event sourcing SDK's `GrpcEventStoreClient` (asyncio) takes the same
+`auth`, `tls` and `allow_insecure_credentials` arguments.
 
-client = EventStoreClient(
-    endpoint="localhost:50051",
-    credentials={
-        "username": "user",
-        "password": "pass"
-    },
-    tls={
-        "ca_certificate": ca_cert_bytes,
-        "client_certificate": client_cert_bytes,
-        "client_key": client_key_bytes
-    },
-    connection_timeout=5.0,
-    request_timeout=30.0
+```python
+import os
+from pathlib import Path
+
+from sdk_py.auth import BasicAuth, SharedToken, TlsConfig, TokenProviderAuth, UnauthenticatedError
+from sdk_py.client_rt import EventStoreClientRT
+
+# host:port (plaintext), http://host:port, or https://host:port (TLS, default roots)
+local = EventStoreClientRT("localhost:50051")
+
+# ADR-024 gateway: `authorization: Basic ...` on every call, unary and subscribe
+client = EventStoreClientRT(
+    "https://events.example.com:443",
+    auth=BasicAuth("admin", os.environ["ESP_GATEWAY_PASSWORD"]),
+    tls=TlsConfig(root_certificates=Path("ca.pem").read_bytes()),
 )
+
+# Bearer token read per call, so it can rotate without reconnecting
+token = SharedToken(initial_token)
+rotating = EventStoreClientRT("https://events.example.com:443", auth=TokenProviderAuth(token))
+token.set(refreshed_token)  # takes effect on the next call
 ```
+
+- `auth`: `BasicAuth`, `BearerToken` or `TokenProviderAuth(callable)`.
+- `tls`: `True` or `TlsConfig(root_certificates, private_key, certificate_chain, server_name)`;
+  implied by `https://`. Certificates are always verified.
+- `allow_insecure_credentials=True`: send `auth` over plaintext to a
+  non-loopback host. Default: the constructor raises `ClientConfigError`.
+- Secrets never appear in `repr`/`str`. Rejected credentials raise
+  `UnauthenticatedError` (a `grpc.RpcError` with code `UNAUTHENTICATED`);
+  `GrpcEventStoreClient` raises `EventStoreAuthenticationError`.
 
 ### Event Definition
 

@@ -6,13 +6,14 @@ preserved when the type is unknown.
 """
 
 import json
-from unittest.mock import MagicMock
 
 import pytest
 
 from event_sourcing import DomainEvent, event
 from event_sourcing.client.grpc_client import GrpcEventStoreClient
+from event_sourcing.core.errors import EventPayloadError
 from event_sourcing.core.event import GenericDomainEvent
+from event_sourcing.proto.eventstore.v1 import eventstore_pb2
 
 # --- Test event classes (auto-registered via @event) ---
 
@@ -44,24 +45,20 @@ def _make_proto_event_data(
     aggregate_id: str = "test-123",
     aggregate_type: str = "TestAggregate",
     aggregate_nonce: int = 1,
-) -> MagicMock:
-    """Create a mock protobuf EventData with the given event type and payload."""
-    meta = MagicMock()
-    meta.event_id = "evt-001"
-    meta.aggregate_id = aggregate_id
-    meta.aggregate_type = aggregate_type
-    meta.aggregate_nonce = aggregate_nonce
-    meta.correlation_id = ""
-    meta.causation_id = ""
-    meta.actor_id = ""
-    meta.global_nonce = 1
-    meta.event_type = event_type
-
-    event_data = MagicMock()
-    event_data.meta = meta
-    event_data.payload = json.dumps(payload).encode("utf-8")
-
-    return event_data
+    event_version: int = 1,
+) -> eventstore_pb2.EventData:
+    """A real protobuf EventData with the given event type and payload."""
+    meta = eventstore_pb2.EventMetadata(
+        event_id="evt-001",
+        aggregate_id=aggregate_id,
+        aggregate_type=aggregate_type,
+        aggregate_nonce=aggregate_nonce,
+        global_nonce=1,
+        event_type=event_type,
+        event_version=event_version,
+        content_type="application/json",
+    )
+    return eventstore_pb2.EventData(meta=meta, payload=json.dumps(payload).encode("utf-8"))
 
 
 # --- Tests ---
@@ -175,17 +172,28 @@ class TestProtoToEnvelopeRegistryResolution:
         with pytest.raises((TypeError, AttributeError, ValueError)):
             envelope.event.order_id = "changed"  # type: ignore[attr-defined]
 
-    def test_malformed_payload_falls_back_to_generic(self) -> None:
-        """If concrete class rejects the payload, fall back to GenericDomainEvent."""
-        # TestOrderPlaced requires order_id (str) and amount (float)
-        # Sending wrong fields should trigger fallback
+    def test_malformed_payload_is_a_typed_error(self) -> None:
+        """A payload the registered class rejects is EventPayloadError (ADR-027)."""
         proto_event = _make_proto_event_data(
             event_type="TestOrderPlaced",
             payload={"wrong_field": "value"},  # Missing required fields
         )
 
-        envelope = self.client._proto_to_envelope(proto_event)
+        with pytest.raises(EventPayloadError) as exc:
+            self.client._proto_to_envelope(proto_event)
+        assert exc.value.event_type == "TestOrderPlaced"
+        assert exc.value.global_nonce == 1
 
-        # Should fall back to GenericDomainEvent since model_validate fails
+    def test_malformed_payload_falls_back_to_generic_when_opted_in(self) -> None:
+        """on_invalid_payload="generic" keeps the pre-ADR-027 fallback."""
+        client = GrpcEventStoreClient(address="localhost:50051", on_invalid_payload="generic")
+        proto_event = _make_proto_event_data(
+            event_type="TestOrderPlaced",
+            payload={"wrong_field": "value"},
+        )
+
+        envelope = client._proto_to_envelope(proto_event)
+
         assert isinstance(envelope.event, GenericDomainEvent)
         assert envelope.event.event_type == "TestOrderPlaced"
+        assert envelope.event.model_dump()["wrong_field"] == "value"

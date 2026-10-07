@@ -62,11 +62,7 @@ impl Scanner {
         // When a DomainConfig is present, the domain directory (e.g. "domain/")
         // contains organizational subdirectories (commands/, events/, aggregates/)
         // that are NOT vertical slice features and should not be scanned as such.
-        let domain_path = self
-            .config
-            .domain
-            .as_ref()
-            .map(|d| d.path.to_string_lossy().to_string());
+        let domain_path = self.config.domain.as_ref().map(|d| d.path.to_string_lossy().to_string());
 
         for entry in WalkDir::new(current_path)
             .min_depth(1)
@@ -258,7 +254,10 @@ mod tests {
         let feature_names: Vec<&str> = features.iter().map(|f| f.name.as_str()).collect();
 
         // Without DomainConfig, domain/ IS treated as a feature (legacy behavior)
-        assert!(feature_names.contains(&"domain"), "domain/ should be included without DomainConfig");
+        assert!(
+            feature_names.contains(&"domain"),
+            "domain/ should be included without DomainConfig"
+        );
         assert!(
             feature_names.contains(&"commands"),
             "domain/commands/ should be included without DomainConfig"

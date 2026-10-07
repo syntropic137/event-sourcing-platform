@@ -1,9 +1,14 @@
 """Event store client interface."""
 
 from collections.abc import AsyncIterator
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
+from event_sourcing.core.envelope import InvalidPayloadPolicy
 from event_sourcing.core.event import DomainEvent, EventEnvelope
+from event_sourcing.core.upcast import Upcasters
+
+if TYPE_CHECKING:
+    from event_sourcing.client.auth import Credentials, TlsConfig
 
 
 class EventStoreClient(Protocol):
@@ -172,6 +177,12 @@ class EventStoreClientFactory:
         host: str = "localhost",
         port: int = 50051,
         tenant_id: str = "default",
+        *,
+        auth: "Credentials | None" = None,
+        tls: "TlsConfig | bool | None" = None,
+        allow_insecure_credentials: bool = False,
+        upcasters: Upcasters | None = None,
+        on_invalid_payload: InvalidPayloadPolicy = "raise",
     ) -> EventStoreClient:
         """
         Create a gRPC event store client for production.
@@ -180,6 +191,13 @@ class EventStoreClientFactory:
             host: Event store server host
             port: Event store server port
             tenant_id: Tenant identifier for multi-tenancy
+            auth: Credentials sent on every call (e.g. ``BasicAuth`` for the
+                ADR-024 gateway)
+            tls: ``True`` or a ``TlsConfig`` to connect over TLS
+            allow_insecure_credentials: allow ``auth`` over plaintext to a
+                non-loopback host
+            upcasters: Steps that migrate stored events before decoding (ADR-027)
+            on_invalid_payload: See ``GrpcEventStoreClient``
 
         Returns:
             GrpcEventStoreClient instance
@@ -187,4 +205,12 @@ class EventStoreClientFactory:
         from event_sourcing.client.grpc_client import GrpcEventStoreClient
 
         address = f"{host}:{port}"
-        return GrpcEventStoreClient(address=address, tenant_id=tenant_id)
+        return GrpcEventStoreClient(
+            address=address,
+            tenant_id=tenant_id,
+            auth=auth,
+            tls=tls,
+            allow_insecure_credentials=allow_insecure_credentials,
+            upcasters=upcasters,
+            on_invalid_payload=on_invalid_payload,
+        )

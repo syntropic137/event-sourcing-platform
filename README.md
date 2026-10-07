@@ -296,7 +296,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 - ✅ **Event Store (Rust)** – Memory and Postgres backends with a production-ready gRPC surface.
 - ✅ **TypeScript SDK** – Drives all current examples; adding richer patterns iteratively.
-- 🔄 **Rust SDK** – Early alpha; core abstractions present, feature parity in progress.
+- 🔄 **Rust SDK** – Alpha. Aggregates, commands, an event-store repository (optimistic concurrency, idempotent retries), and a checkpointed projection runner; feature parity in progress.
 - 🔄 **Python SDK** – Beta. Core abstractions, repository pattern, projections, and gRPC integration implemented.
 - 🔄 **VSA Tool** – Beta. Core library, CLI, WASM bindings, and VSCode extension for vertical slice architecture management. See [vsa/README.md](vsa/README.md) for details.
 - ✅ **Examples** – TypeScript examples 002 (simple aggregate), 004 (CQRS patterns) are ready. Example 007 (e-commerce) is in progress.

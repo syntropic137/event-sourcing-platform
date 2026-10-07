@@ -35,25 +35,47 @@ jobs:
   release-notes:
     name: Release Notes Check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
 
     steps:
       - name: Check PR body has release notes
+        # Read the body live from the API, not from github.event.pull_request.body.
+        # The event payload is frozen at trigger time, so editing the body and
+        # re-running this job would replay the old text and never go green (#333).
+        #
         # The PR body is attacker-controlled text. It MUST reach the shell as
-        # environment DATA, never via ${{ }} interpolation into the script
-        # body, which substitutes it before bash parses and therefore executes
-        # any backticks or $(...) it contains on the runner.
+        # DATA: it is assigned from command substitution of a trusted command and
+        # never appears inside a ${{ }} expansion in the script body (#316).
+        # Only the PR number (an integer) comes from the event payload.
         env:
-          PR_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          PR_BODY=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.body // ""')
           if [ "${#PR_BODY}" -lt 20 ]; then
-            echo "❌ PR body must contain release notes (at least 20 characters)"
+            echo "PR body must contain release notes (at least 20 characters)"
             exit 1
           fi
-          echo "✅ Release notes present (${#PR_BODY} characters)"
+          echo "Release notes present (${#PR_BODY} characters)"
 
   ci-check:
     name: Full CI Suite
     uses: ./.github/workflows/ci.yml
+
+  # vsa-ci.yml is path-filtered on main, so a VSA break can land on main
+  # unnoticed. Run it unfiltered here so it blocks the release.
+  vsa-check:
+    name: VSA CI
+    uses: ./.github/workflows/vsa-ci.yml
+    permissions:
+      contents: read
+      checks: write  # rustsec/audit-check reports via a check run
+
+  security-check:
+    name: Security Scanning
+    uses: ./.github/workflows/security.yml
 
   docker-dry-run:
     name: Docker Build (dry run)
@@ -78,22 +100,17 @@ jobs:
   gate:
     name: Release Gate
     runs-on: ubuntu-latest
-    needs: [version-check, release-notes, ci-check, docker-dry-run]
+    needs: [version-check, release-notes, ci-check, vsa-check, security-check, docker-dry-run]
     if: always()
 
     steps:
       - name: Check all gates passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
         run: |
-          echo "Version Check: ${{ needs.version-check.result }}"
-          echo "Release Notes: ${{ needs.release-notes.result }}"
-          echo "CI Check: ${{ needs.ci-check.result }}"
-          echo "Docker Dry Run: ${{ needs.docker-dry-run.result }}"
-
-          if [ "${{ needs.version-check.result }}" != "success" ] || \
-             [ "${{ needs.release-notes.result }}" != "success" ] || \
-             [ "${{ needs.ci-check.result }}" != "success" ] || \
-             [ "${{ needs.docker-dry-run.result }}" != "success" ]; then
-            echo "❌ Release gate failed — one or more checks did not pass"
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if echo "$NEEDS" | jq -e 'any(.[]; .result != "success")' > /dev/null; then
+            echo "Release gate failed: one or more checks did not pass"
             exit 1
           fi
-          echo "✅ All release gates passed"
+          echo "All release gates passed"

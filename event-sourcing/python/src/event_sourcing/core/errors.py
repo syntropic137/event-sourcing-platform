@@ -93,6 +93,102 @@ class EventStoreError(EventSourcingError):
         self.original_error = original_error
 
 
+class EventStoreAuthenticationError(EventStoreError):
+    """The event store, or the ADR-024 gateway in front of it, rejected the
+    client's credentials (gRPC ``UNAUTHENTICATED``), or a token provider failed.
+
+    Retrying without new credentials will not help. Never contains the
+    credentials.
+    """
+
+
+class ClientConfigError(EventSourcingError, ValueError):
+    """Invalid client connection config: endpoint, TLS or credentials (for
+    example credentials over plaintext to a non-loopback host). Never contains
+    a secret."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(f"invalid event store client config: {message}")
+
+
+class UndecodableEventError(EventStoreError):
+    """A stored event cannot be decoded by the event store (gRPC DATA_LOSS).
+
+    Retrying does not help: an operator must repair the row or explicitly move
+    consumer checkpoints past ``global_nonce`` (see ADR-026).
+    """
+
+    def __init__(
+        self, global_nonce: int, message: str, original_error: Exception | None = None
+    ) -> None:
+        super().__init__(message, original_error)
+        self.global_nonce = global_nonce
+        self.details["global_nonce"] = global_nonce
+
+
+class ProjectionHandlerFailedError(EventSourcingError):
+    """A projection did not apply an event it is subscribed to.
+
+    Raised inside ``SubscriptionCoordinator`` when ``handle_event`` returns
+    FAILURE or raises (the original exception is the ``__cause__``). The
+    projection is not allowed to move on: its next successful event would
+    checkpoint past this one, and nothing re-reads below a checkpoint. Under
+    ``start()`` the projection alone is held below the event and fed it again
+    with backoff (``held_projections``); the others keep consuming.
+    ``dispatch_event()`` raises it to its caller.
+    """
+
+    def __init__(self, projection_name: str, event_type: str, global_nonce: int) -> None:
+        super().__init__(
+            f"Projection {projection_name!r} failed to apply {event_type} at "
+            f"global_nonce={global_nonce}; its checkpoint is held below it and the "
+            "event will be delivered again"
+        )
+        self.projection_name = projection_name
+        self.event_type = event_type
+        self.global_nonce = global_nonce
+        self.details["projection_name"] = projection_name
+        self.details["event_type"] = event_type
+        self.details["global_nonce"] = global_nonce
+
+
+ADR_026_PATH = "docs/adrs/ADR-026-subscription-failure-semantics.md"
+
+
+class SubscriptionHaltedError(EventSourcingError):
+    """A subscription stopped at an undecodable stored event and will not retry.
+
+    Raised by ``SubscriptionCoordinator.start()`` (and exposed as its
+    ``halted`` health state) when the event store reports gRPC DATA_LOSS for
+    the event at ``global_nonce``. Retrying reconnects from the same
+    checkpoint and fails at the same position, so the coordinator stops
+    instead. No checkpoint is moved past ``global_nonce``.
+
+    Operator recovery (ADR-026): repair the row, deploy an event store that
+    decodes it, or set the checkpoint of every projection that has not passed
+    ``global_nonce`` to ``global_nonce``. Then start the coordinator again.
+    The original ``UndecodableEventError`` is the ``__cause__``.
+    """
+
+    def __init__(self, global_nonce: int, recheck_interval: float | None = None) -> None:
+        resume = (
+            f"the coordinator re-checks every {recheck_interval:g}s"
+            if recheck_interval is not None
+            else "then start the coordinator again"
+        )
+        super().__init__(
+            f"Subscription halted at undecodable stored event global_nonce={global_nonce} "
+            "(gRPC DATA_LOSS); retrying cannot fix this, so it will not retry. "
+            "Operator recovery (ADR-026, "
+            f"{ADR_026_PATH}): repair the row or deploy an event store that decodes it, "
+            "or, if unrecoverable, set the checkpoint of every projection that has not "
+            f"passed {global_nonce} to {global_nonce} (it resumes at {global_nonce + 1}); "
+            f"{resume}.",
+            {"global_nonce": global_nonce},
+        )
+        self.global_nonce = global_nonce
+
+
 class SerializationError(EventSourcingError):
     """Raised when serialization/deserialization fails."""
 
@@ -106,3 +202,63 @@ class SerializationError(EventSourcingError):
         self.operation = operation
         self.data_type = data_type
         self.original_error = original_error
+
+
+class EventDecodeError(UndecodableEventError):
+    """A stored event cannot be decoded by this reader (ADR-027).
+
+    Raised on read (``read_events``, ``read_all``, ``subscribe``) instead of
+    handing the event to code written for another schema. It is an
+    ``UndecodableEventError``: retrying does not help, so a
+    ``SubscriptionCoordinator`` halts at ``global_nonce`` rather than retrying
+    or moving a checkpoint past the event. Fix it in code (register the event
+    class or an upcaster), then restart.
+
+    ``event_type`` and ``event_version`` are as stored (version 0 read as 1),
+    or as produced by the upcaster chain when a later stage failed.
+    """
+
+    def __init__(
+        self,
+        event_type: str,
+        event_version: int,
+        reason: str,
+        global_nonce: int = 0,
+        original_error: Exception | None = None,
+    ) -> None:
+        super().__init__(
+            global_nonce,
+            f"Cannot decode event '{event_type}' v{event_version}: {reason}",
+            original_error,
+        )
+        self.event_type = event_type
+        self.event_version = event_version
+        self.reason = reason
+        self.details["event_type"] = event_type
+        self.details["event_version"] = event_version
+
+
+class UnknownEventTypeError(EventDecodeError):
+    """No event class is registered for ``event_type`` (strict decode only).
+
+    The gRPC client does not raise this: it returns an unregistered type as a
+    ``GenericDomainEvent`` (ADR-023) so projections can filter by type.
+    """
+
+
+class UnknownEventVersionError(EventDecodeError):
+    """``event_type`` is registered, but not at this version, and no upcaster
+    maps the stored version to a registered one."""
+
+
+class EventPayloadError(EventDecodeError):
+    """The payload is not a JSON object (or not JSON), or the class registered
+    for its ``(event_type, event_version)`` rejects it."""
+
+
+class UnsupportedContentTypeError(EventDecodeError):
+    """The stored ``content_type`` is neither empty nor ``application/json``."""
+
+
+class UpcastError(EventDecodeError):
+    """An upcaster step raised or did not return a dict, or the chain cycled."""

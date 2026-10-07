@@ -54,7 +54,17 @@ message AppendRequest {
 
   uint64 expected_aggregate_nonce = 4;  // optimistic concurrency check; 0 => expect stream does not yet exist
 
-  string idempotency_key          = 5;  // whole-batch idempotency
+  // Whole-batch idempotency, scoped to (tenant_id, aggregate_id). Checked
+  // BEFORE expected_aggregate_nonce (ADR-028):
+  //   key committed, identical batch  => original AppendResponse, nothing
+  //                                      written (even if the stream has since
+  //                                      advanced past expected_aggregate_nonce)
+  //   key committed, different batch  => ALREADY_EXISTS, nothing written
+  //   key unused (or empty)           => normal concurrency check (ABORTED on a
+  //                                      stale expected_aggregate_nonce)
+  // "Identical" compares event metadata (header order ignored, server-set
+  // fields excluded) and payloads.
+  string idempotency_key          = 5;
   repeated EventData events       = 6;  // client provides strictly consecutive aggregate_nonces
 }
 
@@ -110,10 +120,33 @@ message ConcurrencyErrorDetail {
   uint64 actual_last_global_nonce    = 4;  // optional: last committed in global log
 }
 
+// Request for GetServerInfo. Intentionally empty; reserved for future filters.
+message GetServerInfoRequest {}
+
+// Identifies the running store so a client can assert a correctness floor at
+// connect time. Added in v0.17.0. Servers older than that answer GetServerInfo
+// with gRPC status UNIMPLEMENTED; clients must treat that as "older than
+// v0.17.0, advertises no capabilities".
+message GetServerInfoResponse {
+  // Semver of the store binary (Cargo package version), e.g. "0.17.0".
+  string server_version           = 1;
+  // Wire API the server speaks, e.g. "eventstore.v1".
+  string api_version              = 2;
+  // Storage backend kind: "memory", "postgres", or "unknown".
+  string backend                  = 3;
+  // Named behavioral guarantees this server provides. Clients should check
+  // these rather than parse versions. Unknown names must be ignored.
+  // See docs: event-store compatibility page for the registry of names.
+  repeated string capabilities    = 4;
+}
+
 service EventStore {
   rpc Append     (AppendRequest)      returns (AppendResponse);
   rpc ReadStream (ReadStreamRequest)  returns (ReadStreamResponse);
   rpc Subscribe  (SubscribeRequest)   returns (stream SubscribeResponse);
   // Read all events from global position (for projections/catch-up)
   rpc ReadAll    (ReadAllRequest)     returns (ReadAllResponse);
+  // Server version, backend, and capability flags (added in v0.17.0;
+  // older servers return UNIMPLEMENTED)
+  rpc GetServerInfo (GetServerInfoRequest) returns (GetServerInfoResponse);
 }
