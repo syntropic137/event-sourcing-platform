@@ -104,6 +104,15 @@ payload (`GrpcEventStoreClient(on_invalid_payload="generic")` restores the
 pre-#382 fallback as a migration aid); TypeScript classes have no schema, so
 for TS a payload mismatch is only a payload that is not a JSON object.
 
+Python filters before decoding on subscriptions: `subscribe(event_types=...)`
+yields an event whose type after upcasting (known from the upcaster chain
+without running it) is not in the set undecoded, as a `GenericDomainEvent`
+with no payload fields, carrying its position and type. `SubscriptionCoordinator`
+passes each track the types its projections subscribe to (none when one of
+them subscribes to every type), so an event no projection on the track handles
+is skipped and checkpointed past like any other skipped type, and cannot halt
+the track. An event a projection handles still raises, and halts (ADR-026).
+
 ### Golden fixtures
 
 `event-sourcing/rust/tests/fixtures/xlang/` holds protobuf `AppendRequest`

@@ -9,7 +9,7 @@ types are confined to internal proto interactions.
 """
 
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Collection, Sequence
 
 import grpc
 
@@ -32,6 +32,7 @@ from event_sourcing.core.envelope import (
     encode_payload,
     event_type_of,
     event_version_of,
+    skip_unless_wanted,
 )
 from event_sourcing.core.errors import (
     ConcurrencyConflictError,
@@ -428,16 +429,27 @@ class GrpcEventStoreClient:
         return eventstore_pb2.EventData(meta=meta, payload=encode_payload(envelope.event))
 
     def _proto_to_envelope(
-        self, event_data: eventstore_pb2.EventData
+        self,
+        event_data: eventstore_pb2.EventData,
+        event_types: Collection[str] | None = None,
     ) -> EventEnvelope[DomainEvent]:
         """Convert protobuf EventData to an EventEnvelope.
 
         Decodes by ``(event_type, event_version)`` after upcasting (ADR-027).
         Raises an ``EventDecodeError`` subclass (an ``UndecodableEventError``)
         rather than handing the event to code written for another version.
+        An event whose type is not in ``event_types`` (when given) is not
+        decoded; see :func:`~event_sourcing.core.envelope.skip_unless_wanted`.
         """
         meta = event_data.meta
-        decoded = decode_event(
+        skipped = (
+            skip_unless_wanted(
+                meta.event_type, meta.event_version, event_types, upcasters=self.upcasters
+            )
+            if event_types is not None
+            else None
+        )
+        decoded = skipped or decode_event(
             meta.event_type,
             meta.event_version,
             bytes(event_data.payload),
@@ -550,6 +562,7 @@ class GrpcEventStoreClient:
     async def subscribe(
         self,
         from_global_nonce: int = 0,
+        event_types: Collection[str] | None = None,
     ) -> AsyncIterator[EventEnvelope[DomainEvent]]:
         """
         Subscribe to events from a global nonce (live streaming).
@@ -559,6 +572,11 @@ class GrpcEventStoreClient:
 
         Args:
             from_global_nonce: global nonce to start from (inclusive)
+            event_types: The types the caller handles, after upcasting. Any
+                other event is yielded undecoded (a ``GenericDomainEvent``
+                with no payload fields, and its position and type), so an
+                event the caller would skip cannot fail decoding (ADR-027).
+                ``None`` (default) decodes every event.
 
         Yields:
             EventEnvelope objects as they arrive
@@ -583,7 +601,7 @@ class GrpcEventStoreClient:
                     logger.debug("Received keepalive from Subscribe stream")
                     continue
 
-                envelope = self._proto_to_envelope(response.event)
+                envelope = self._proto_to_envelope(response.event, event_types)
                 yield envelope
 
         except grpc.RpcError as e:

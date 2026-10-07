@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (v0.17.0 release review, #349)
+
+- Filter before decode (ADR-027): `GrpcEventStoreClient.subscribe` takes
+  `event_types`; events of other types (after upcasting) are yielded
+  undecoded. `SubscriptionCoordinator` passes each track its projections'
+  subscribed types, so an evolved type with no upcaster no longer halts
+  projections that do not handle it. New `Upcasters.target()`.
+- A ProcessManager that failed live event N and recovered it after a
+  re-plan with head N (a reconnect) stayed catching up until N+1, so its
+  `process_pending()` never ran. Recovering at or past the head now takes the
+  track live and wakes its drains (#391).
+
 ### Fixed (projection failures are never stepped over, syntropic137#1696)
 
 - `SubscriptionCoordinator` no longer checkpoints past an event a projection

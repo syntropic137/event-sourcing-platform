@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import ValidationError
 
@@ -25,6 +25,9 @@ from event_sourcing.core.errors import (
 from event_sourcing.core.event import DomainEvent, GenericDomainEvent
 from event_sourcing.core.upcast import Upcasters, normalize_version
 from event_sourcing.decorators.events import registered_event_versions, resolve_event_class
+
+if TYPE_CHECKING:
+    from collections.abc import Collection
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +213,34 @@ def decode_event(
             global_nonce,
             e,
         ) from e
+
+
+def skip_unless_wanted(
+    event_type: str,
+    event_version: int,
+    wanted: Collection[str],
+    *,
+    upcasters: Upcasters | None = None,
+) -> DecodedEvent | None:
+    """Filter before decoding (ADR-027 reading step 5).
+
+    ``None`` when the event decodes to a type in ``wanted`` (the caller
+    decodes it, and its errors are raised). Otherwise the event undecoded:
+    a ``GenericDomainEvent`` with no payload fields, carrying the type and
+    version it would decode as, so a consumer can skip it and move on. The
+    type is the one after upcasting, which needs no payload: steps are keyed
+    by type and version. A looping chain is decoded, so it raises.
+    """
+    stored_version = normalize_version(event_version)
+    target = (
+        upcasters.target(event_type, stored_version)
+        if upcasters is not None
+        else (event_type, stored_version)
+    )
+    if target is None or target[0] in wanted:
+        return None
+    ty, version = target
+    return DecodedEvent(_generic(ty, version, {}), ty, version, event_type, stored_version)
 
 
 def _generic(event_type: str, event_version: int, body: dict[str, Any]) -> GenericDomainEvent:

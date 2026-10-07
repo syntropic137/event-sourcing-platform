@@ -15,6 +15,7 @@ See ADR-014 for architectural rationale.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import math
 import sys
@@ -38,7 +39,7 @@ from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.subscriptions.drain import ProcessManagerDrain
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Collection
 
     from event_sourcing.core.event import DomainEvent, EventEnvelope
 
@@ -234,6 +235,31 @@ class EventStoreSubscriber(Protocol):
         ...
 
 
+class TypeFilteringSubscriber(Protocol):
+    """A subscriber that can leave events of unwanted types undecoded.
+
+    ``GrpcEventStoreClient`` is one. Events whose type (after upcasting) is
+    not in ``event_types`` are yielded without decoding, so one the track's
+    projections would skip cannot fail decoding and halt them (ADR-027).
+    The coordinator passes ``event_types`` only to a ``subscribe`` that
+    declares it.
+    """
+
+    def subscribe(
+        self, from_global_nonce: int, event_types: Collection[str] | None = None
+    ) -> AsyncIterator[EventEnvelope[DomainEvent]]: ...
+
+
+def _accepts_event_types(subscriber: EventStoreSubscriber) -> bool:
+    subscribe = getattr(subscriber, "subscribe", None)
+    if subscribe is None:
+        return False
+    try:
+        return "event_types" in inspect.signature(subscribe).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 class SubscriptionCoordinator:
     """
     Coordinates event subscription across multiple projections.
@@ -328,6 +354,7 @@ class SubscriptionCoordinator:
             )
 
         self._event_store = event_store
+        self._filters_types = _accepts_event_types(event_store)
         self._checkpoint_store = checkpoint_store
         self._replay_concurrency = replay_concurrency
         self._near_head_window = near_head_window
@@ -650,7 +677,7 @@ class SubscriptionCoordinator:
 
     async def _run_track(self, track: _SubscriptionTrack) -> None:
         """Feed one track from its own subscription until stopped."""
-        async for envelope in self._event_store.subscribe(from_global_nonce=track.from_position):
+        async for envelope in self._subscribe(track):
             if not self._running:
                 break
             self._last_error = None
@@ -670,6 +697,31 @@ class SubscriptionCoordinator:
                 # on would feed nobody. The live track stays, so the
                 # coordinator always holds a subscription on the live tail.
                 return
+
+    def _subscribe(self, track: _SubscriptionTrack) -> AsyncIterator[EventEnvelope[DomainEvent]]:
+        """Subscribe for ``track``, decoding only the types its projections handle.
+
+        Filter before decode (ADR-027): an event no projection on the track
+        handles is skipped, so it must not be decoded either. An evolved type
+        with no upcaster would otherwise raise an ``UndecodableEventError``
+        and halt every track for projections that never asked for it. The
+        set is fixed when the track starts; members only ever leave a track.
+        """
+        event_types: set[str] | None = set() if self._filters_types else None
+        for projection in track.projections.values():
+            if event_types is None:
+                break
+            subscribed = projection.get_subscribed_event_types()
+            if subscribed is None:
+                event_types = None  # one handles every type: decode them all
+            else:
+                event_types |= subscribed
+        if event_types is None:
+            return self._event_store.subscribe(from_global_nonce=track.from_position)
+        store = cast("TypeFilteringSubscriber", self._event_store)
+        return store.subscribe(
+            from_global_nonce=track.from_position, event_types=frozenset(event_types)
+        )
 
     def _hold(self, track: _SubscriptionTrack, failure: ProjectionHandlerFailedError) -> None:
         """Take the projection that failed off ``track`` and retry it alone.
