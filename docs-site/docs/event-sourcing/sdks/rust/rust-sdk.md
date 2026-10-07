@@ -15,7 +15,72 @@ The Rust event sourcing SDK (`event-sourcing/rust`, crate `event-sourcing-rust`)
 | Postgres projection store (`postgres` feature) | Supported |
 | Process-manager processor (live-only side effects) | Supported |
 | TLS, timeouts, keepalive, Basic/Bearer credentials (`ClientConfig`) | Supported |
-| Snapshots, upcasting | Planned |
+| Cross-language wire format (reads and writes TypeScript/Python streams) | Supported |
+| Upcasters (on load and in projections) | Supported |
+| Snapshots | Planned |
+
+## Events and aggregates
+
+Events use the cross-language envelope (ADR-027): the stored payload is a JSON object with only the event's fields, and `event_type` and `event_version` are event metadata. The TypeScript and Python SDKs use the same envelope, so any SDK can read any stream.
+
+```rust
+use event_sourcing_rust::prelude::*;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderPlaced { pub order_id: String, pub total: i64 }
+impl EventSchema for OrderPlaced {
+    const EVENT_TYPE: &'static str = "OrderPlaced"; // stable name, shared with TS/Python
+    const EVENT_VERSION: u32 = 1;                   // default 1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderShipped {} // an event without data: empty struct, payload `{}`
+impl EventSchema for OrderShipped {
+    const EVENT_TYPE: &'static str = "OrderShipped";
+}
+
+// Generates the enum, `DomainEvent` (encode flat body, decode by dispatching on
+// type and version) and `From<OrderPlaced>` etc. Duplicate (type, version)
+// pairs and invalid names are compile errors.
+event_sourcing_rust::event_enum! {
+    #[derive(Debug, Clone)]
+    pub enum OrderEvent {
+        Placed(OrderPlaced),
+        Shipped(OrderShipped),
+    }
+}
+
+impl Aggregate for Order {
+    type Event = OrderEvent;
+    type Error = Error;
+    const AGGREGATE_TYPE: &'static str = "Order"; // required; never a Rust type path
+    // aggregate_id, version, apply_event ...
+}
+```
+
+- `AGGREGATE_TYPE` is required and is part of the stream identity shared with TypeScript (`@Aggregate('Order')`) and Python (`get_aggregate_type()`). It must be an ASCII letter followed by letters, digits, `_` or `.`; no `-` (the other SDKs split stream names on it). Checked at compile time.
+- Field names are the JSON keys. Use `#[serde(rename_all = "camelCase")]` when the stream is shared with code using other names. Don't use `deny_unknown_fields` on events read from TypeScript streams (the TS SDK also writes `eventType`/`schemaVersion` into the payload).
+- Decoding never guesses: an unknown type is `Error::UnknownEventType`, a known type at an unknown version is `Error::UnknownEventVersion`, a payload that does not match is `Error::EventDecode`, a non-JSON `content_type` is `Error::UnsupportedContentType`. A failed decode fails the load; it is never skipped.
+
+### Upcasting
+
+Bump `EVENT_VERSION` when a schema changes and register a step from the old version. Steps run on the raw JSON before decoding and chain (v1 to v2 to v3); `rename` maps an old event type to a new one.
+
+```rust
+let upcasters = Upcasters::new()
+    .register("OrderPlaced", 1, 2, |mut body| {
+        body["currency"] = "EUR".into();
+        Ok(body)
+    })
+    .rename("OrderSent", 1, "OrderShipped", 1, Ok);
+
+let repo = EventStoreRepository::<Order>::new(store.clone(), "tenant-a")
+    .with_upcasters(upcasters.clone());
+let runner = ProjectionRunner::new(store, projection_store, OrderSummary, "tenant-a")
+    .with_upcasters(upcasters); // applied before `handles()` and `handle()`
+```
+
+In a projection handler, decode with `event.decode::<OrderEvent>()` (or a single schema, `event.decode::<OrderPlaced>()`).
 
 ## Connecting
 
@@ -76,7 +141,7 @@ order.execute(OrderCommand::Ship).await?;
 repo.save(&mut order).await?;
 ```
 
-Events are stored as JSON, so `Aggregate::Event` must implement `Serialize` and `DeserializeOwned`. Override `Aggregate::aggregate_type` (or call `with_aggregate_type`) to record a stable type name. Streams are addressed by `(tenant, aggregate_id)`, so aggregate IDs must be unique within a tenant. `AggregateInstance::execute` applies a command's events to a clone of the aggregate and commits them only if all apply, so aggregates must be `Clone`. Saving to an existing stream verifies its stored aggregate type.
+Events carry `Aggregate::AGGREGATE_TYPE`; loading a stream whose stored aggregate type differs is an error. Streams are addressed by `(tenant, aggregate_id)`, so aggregate IDs must be unique within a tenant. `AggregateInstance::execute` applies a command's events to a clone of the aggregate and commits them only if all apply, so aggregates must be `Clone`. Saving to an existing stream verifies its stored aggregate type.
 
 ### Save semantics
 
