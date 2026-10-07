@@ -31,6 +31,25 @@ the checkpoint.
    status channel the protocol does not have. Ending the stream with a
    retryable status is explicit and works with every client.
 
+## Paged replay (#369)
+
+Postgres replay and live delivery read keyset pages (`global_nonce > cursor
+ORDER BY global_nonce LIMIT page`, default 1000 rows), fetching the next page
+only after the consumer has taken the previous one. The rules above apply per
+page query:
+
+1. A page query failure mid-replay yields `UNAVAILABLE` with the last
+   delivered position plus one; events already fetched in the previous page
+   are delivered first, and no caught-up marker follows.
+2. The caught-up marker is sent once, after the first page shorter than the
+   page size (an empty page when the history ends on a page boundary).
+3. While live, a full page is followed by another query right away, not by a
+   wait for NOTIFY or the fallback poll.
+4. Each page reads its own snapshot. That cannot skip a nonce because a
+   tenant's appends commit in `global_nonce` order (#337): every snapshot
+   holds a gap-free prefix of the tenant's log, the guarantee live polling
+   already relies on.
+
 ## Undecodable stored events (#351)
 
 Before #351, a row that could not be decoded was logged and skipped; later

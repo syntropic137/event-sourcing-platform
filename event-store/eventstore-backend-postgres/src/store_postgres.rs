@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -17,6 +18,10 @@ const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 const NOTIFY_CHANNEL: &str = "eventstore_events";
 const NOTIFY_BROADCAST_CAPACITY: usize = 256;
 const FALLBACK_POLL_SECS: u64 = 5;
+
+/// Default rows per subscription page (#369). Bounds what one subscriber
+/// holds in memory; large enough that paging costs little throughput.
+pub const DEFAULT_SUBSCRIBE_PAGE_SIZE: usize = 1000;
 
 /// First key of the two-key advisory lock that orders appends per tenant, so
 /// it cannot collide with any other advisory lock in the database. Arbitrary,
@@ -181,6 +186,10 @@ pub struct PostgresStore {
     pool: PgPool,
     notify_tx: broadcast::Sender<NotifyPayload>,
     listener_handle: tokio::task::JoinHandle<()>,
+    /// Rows per subscription page; see [`PostgresStore::set_subscribe_page_size`].
+    subscribe_page_size: AtomicUsize,
+    /// Subscription page queries issued (all subscriptions of this store).
+    subscribe_page_queries: Arc<AtomicU64>,
 }
 
 impl Drop for PostgresStore {
@@ -197,6 +206,8 @@ impl PostgresStore {
             pool,
             notify_tx,
             listener_handle,
+            subscribe_page_size: AtomicUsize::new(DEFAULT_SUBSCRIBE_PAGE_SIZE),
+            subscribe_page_queries: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -233,6 +244,25 @@ impl PostgresStore {
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// Rows per subscription page (#369). Each subscriber holds at most one
+    /// page of decoded events.
+    pub fn subscribe_page_size(&self) -> usize {
+        self.subscribe_page_size.load(Ordering::Relaxed)
+    }
+
+    /// Set the rows per subscription page for subscriptions started after
+    /// this call. Values below 1 are treated as 1.
+    pub fn set_subscribe_page_size(&self, rows: usize) {
+        self.subscribe_page_size
+            .store(rows.max(1), Ordering::Relaxed);
+    }
+
+    /// Subscription page queries issued so far by all subscriptions of this
+    /// store. For tests and diagnostics.
+    pub fn subscribe_page_queries(&self) -> u64 {
+        self.subscribe_page_queries.load(Ordering::Relaxed)
     }
 }
 
@@ -783,6 +813,11 @@ impl EventStoreTrait for PostgresStore {
     /// `aggregate_id_prefix` is matched literally: `\`, `%` and `_` in it
     /// are not wildcards (#361).
     ///
+    /// Replay and live delivery read in keyset pages of at most
+    /// [`PostgresStore::subscribe_page_size`] rows (#369), fetched only when
+    /// the consumer has taken the previous page, so a subscriber holds at
+    /// most one page however long the history is.
+    ///
     /// Failures are never hidden. If a replay or live query fails, the stream
     /// yields one [`StoreError::Unavailable`] (gRPC `UNAVAILABLE`) and ends;
     /// no caught-up marker is sent for a replay that failed, and the internal
@@ -792,313 +827,230 @@ impl EventStoreTrait for PostgresStore {
     /// checkpoint was not saved yet, re-delivers events; consumers must be
     /// idempotent. See ADR-026.
     fn subscribe(&self, req: proto::SubscribeRequest) -> StoreStream<proto::SubscribeResponse> {
-        let pool = self.pool.clone();
-        let tenant_id = req.tenant_id.clone();
-        let prefix = req.aggregate_id_prefix.clone();
-        let from_global = req.from_global_nonce as i64;
-        let notify_rx = self.notify_tx.subscribe();
-
-        #[derive(Debug)]
-        enum Phase {
-            Replay {
-                items: Vec<proto::EventData>,
-                idx: usize,
-                cursor: i64,
-                /// Yielded (and the stream ended) once `items` are delivered:
-                /// the row after the last item could not be decoded.
-                then_fail: Option<StoreError>,
-            },
-            Live {
-                cursor: i64,
-                interval: Interval,
-            },
-            /// A query failed and the error was yielded; the stream ends.
-            Failed,
-        }
-
-        // State includes the broadcast receiver for LISTEN/NOTIFY wake-ups.
-        // notify_rx is moved through the unfold (not Clone), which is correct
-        // since broadcast::Receiver is !Clone.
-        type State = (
-            PgPool,
-            String,
-            String,
-            i64,
-            Option<Phase>,
-            broadcast::Receiver<NotifyPayload>,
-        );
-
-        Box::pin(stream::unfold(
-            (
-                pool,
-                tenant_id,
-                prefix,
-                from_global,
-                None::<Phase>,
-                notify_rx,
-            ),
-            |(pool, tenant, prefix, cursor, phase, mut notify_rx): State| async move {
-                let mut phase = phase;
-                if phase.is_none() {
-                    // Replay is inclusive of from_global_nonce (`cursor` here).
-                    let rows =
-                        match fetch_events_after(&pool, &tenant, &prefix, cursor.saturating_sub(1))
-                            .await
-                        {
-                            Ok(rows) => rows,
-                            Err(e) => {
-                                // Never report catch-up while replay is failing:
-                                // surface the error and end the stream.
-                                let err =
-                                    subscription_unavailable("replay", &tenant, &prefix, cursor, e);
-                                return Some((
-                                    Err(err),
-                                    (pool, tenant, prefix, cursor, Some(Phase::Failed), notify_rx),
-                                ));
-                            }
-                        };
-
-                    // FIX (ADR-013): the cursor advances only as events are
-                    // yielded. Decoding stops at the first undecodable row
-                    // (#351): the events before it are delivered, then its
-                    // error, and nothing after it.
-                    let (items, then_fail) = decode_until_invalid(&rows, &tenant);
-                    phase = Some(Phase::Replay {
-                        items,
-                        idx: 0,
-                        cursor,
-                        then_fail,
-                    });
-                }
-
-                match phase.take() {
-                    Some(Phase::Replay {
-                        items,
-                        mut idx,
-                        cursor: _replay_cursor,
-                        mut then_fail,
-                    }) => {
-                        if idx < items.len() {
-                            let event = items[idx].clone();
-                            idx += 1;
-
-                            // FIX (ADR-013): Update cursor to the position of the event we're yielding
-                            let yielded_cursor = event
-                                .meta
-                                .as_ref()
-                                .map(|m| m.global_nonce as i64)
-                                .unwrap_or(cursor);
-
-                            let next_state = (
-                                pool,
-                                tenant,
-                                prefix,
-                                yielded_cursor,
-                                Some(Phase::Replay {
-                                    items,
-                                    idx,
-                                    cursor: yielded_cursor,
-                                    then_fail,
-                                }),
-                                notify_rx,
-                            );
-                            Some((
-                                Ok(proto::SubscribeResponse { event: Some(event) }),
-                                next_state,
-                            ))
-                        } else if let Some(err) = then_fail.take() {
-                            // Stop at the undecodable row: no caught-up marker,
-                            // no later positions, cursor stays at the last
-                            // delivered event.
-                            Some((
-                                Err(err),
-                                (pool, tenant, prefix, cursor, Some(Phase::Failed), notify_rx),
-                            ))
-                        } else {
-                            // All replay items yielded, transition to Live phase.
-                            // FIX: If replay was empty (no events existed yet at from_global_nonce),
-                            // we need to subtract 1 from cursor so that Live polling with
-                            // `global_nonce > (cursor-1)` effectively catches events at the
-                            // original from_global_nonce position. This handles the race condition
-                            // where subscription starts before an event is created at that position.
-                            let live_cursor = if items.is_empty() {
-                                cursor.saturating_sub(1)
-                            } else {
-                                cursor
-                            };
-                            let next_state = (
-                                pool,
-                                tenant,
-                                prefix,
-                                live_cursor,
-                                Some(Phase::Live {
-                                    cursor: live_cursor,
-                                    interval: interval(Duration::from_secs(FALLBACK_POLL_SECS)),
-                                }),
-                                notify_rx,
-                            );
-                            Some((Ok(proto::SubscribeResponse { event: None }), next_state))
-                        }
-                    }
-                    Some(Phase::Live {
-                        cursor,
-                        mut interval,
-                    }) => {
-                        // Wait for either a LISTEN/NOTIFY wake-up or the fallback poll timer.
-                        // The broadcast is a hint — the DB query below is the source of truth.
-                        loop {
-                            tokio::select! {
-                                result = notify_rx.recv() => {
-                                    match result {
-                                        Ok(payload) if payload.tenant_id == tenant
-                                            && payload.last_global_nonce > cursor => break,
-                                        Ok(_) => continue, // different tenant or already past cursor
-                                        Err(broadcast::error::RecvError::Lagged(_)) => break, // missed some, poll DB
-                                        Err(broadcast::error::RecvError::Closed) => {
-                                            // Listener shut down — fall back to pure polling
-                                            interval.tick().await;
-                                            break;
-                                        }
-                                    }
-                                }
-                                _ = interval.tick() => break, // safety-net fallback
-                            }
-                        }
-
-                        let rows = match fetch_events_after(&pool, &tenant, &prefix, cursor).await {
-                            Ok(rows) => rows,
-                            Err(e) => {
-                                // `cursor` is the last delivered position; it is
-                                // reported, never advanced, on failure.
-                                let err = subscription_unavailable(
-                                    "live",
-                                    &tenant,
-                                    &prefix,
-                                    cursor.saturating_add(1),
-                                    e,
-                                );
-                                return Some((
-                                    Err(err),
-                                    (pool, tenant, prefix, cursor, Some(Phase::Failed), notify_rx),
-                                ));
-                            }
-                        };
-
-                        if !rows.is_empty() {
-                            let (items, mut then_fail) = decode_until_invalid(&rows, &tenant);
-
-                            if !items.is_empty() {
-                                // FIX (ADR-013): Only advance cursor to the event we're yielding
-                                let first_event = items[0].clone();
-                                let yielded_cursor = first_event
-                                    .meta
-                                    .as_ref()
-                                    .map(|m| m.global_nonce as i64)
-                                    .unwrap_or(cursor);
-
-                                let remaining = if items.len() > 1 {
-                                    items[1..].to_vec()
-                                } else {
-                                    Vec::new()
-                                };
-
-                                let next_phase = if remaining.is_empty() && then_fail.is_none() {
-                                    Phase::Live {
-                                        cursor: yielded_cursor,
-                                        interval,
-                                    }
-                                } else {
-                                    // Store remaining items (and a pending decode
-                                    // error) with cursor at last yielded position
-                                    Phase::Replay {
-                                        items: remaining,
-                                        idx: 0,
-                                        cursor: yielded_cursor,
-                                        then_fail: then_fail.take(),
-                                    }
-                                };
-
-                                let next_state = (
-                                    pool,
-                                    tenant,
-                                    prefix,
-                                    yielded_cursor,
-                                    Some(next_phase),
-                                    notify_rx,
-                                );
-                                Some((
-                                    Ok(proto::SubscribeResponse {
-                                        event: Some(first_event),
-                                    }),
-                                    next_state,
-                                ))
-                            } else {
-                                // The first new row is undecodable. Never advance
-                                // past it: surface the error and end the stream.
-                                let err = then_fail
-                                    .take()
-                                    .expect("non-empty rows decode to an event or an error");
-                                Some((
-                                    Err(err),
-                                    (pool, tenant, prefix, cursor, Some(Phase::Failed), notify_rx),
-                                ))
-                            }
-                        } else {
-                            // No new events — loop back to wait for next notification/poll
-                            let next_state = (
-                                pool,
-                                tenant,
-                                prefix,
-                                cursor,
-                                Some(Phase::Live { cursor, interval }),
-                                notify_rx,
-                            );
-                            Some((Ok(proto::SubscribeResponse { event: None }), next_state))
-                        }
-                    }
-                    // The error was already yielded; end the stream.
-                    Some(Phase::Failed) | None => None,
-                }
-            },
-        ))
+        let sub = Subscription {
+            pool: self.pool.clone(),
+            like_pattern: (!req.aggregate_id_prefix.is_empty())
+                .then(|| like_prefix_pattern(&req.aggregate_id_prefix)),
+            tenant: req.tenant_id,
+            prefix: req.aggregate_id_prefix,
+            page_size: self.subscribe_page_size() as i64,
+            page_queries: self.subscribe_page_queries.clone(),
+            // Replay is inclusive of from_global_nonce.
+            cursor: (req.from_global_nonce as i64).saturating_sub(1),
+            buf: VecDeque::new(),
+            pending_error: None,
+            more: true,
+            mode: Mode::Replay,
+            // Subscribed before the first query, so no append committed
+            // after it can go unnoticed.
+            notify_rx: self.notify_tx.subscribe(),
+            interval: None,
+        };
+        Box::pin(stream::unfold(sub, |mut sub| async move {
+            let item = sub.next_item().await?;
+            Some((item, sub))
+        }))
     }
 }
 
-/// Events of `tenant` (optionally restricted to ids starting with `prefix`,
-/// literally) with `global_nonce > after`, in global order.
-async fn fetch_events_after(
+/// Phase of a [`Subscription`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Catching up: pages are fetched back to back until one is short, then
+    /// the caught-up marker is sent.
+    Replay,
+    /// Caught up: fetch when NOTIFY or the fallback poll says there may be
+    /// more, or right away while the last page was full.
+    Live,
+    /// The error was yielded; the stream ends.
+    Failed,
+}
+
+/// State of one Postgres subscription stream.
+///
+/// Invariants (ADR-026, #369):
+/// - `cursor` is the `global_nonce` of the last event yielded (or
+///   `from_global_nonce - 1` before the first). Every query reads
+///   `global_nonce > cursor`, so a page boundary can neither skip nor repeat
+///   a row. It only moves when an event is yielded, never on failure.
+/// - `buf` holds the decoded, not yet yielded rest of the last page (at most
+///   `page_size` events). The next page is fetched only once it is empty.
+/// - Per-tenant appends commit in `global_nonce` order (#337), so every
+///   page's snapshot holds a gap-free prefix of the tenant's log. Reading the
+///   history in several snapshots therefore cannot skip a nonce that commits
+///   later; it is the same guarantee live polling already relies on.
+/// - `pending_error` (an undecodable row) is yielded after the events before
+///   it, and nothing after it is ever decoded or delivered (#351).
+struct Subscription {
+    pool: PgPool,
+    tenant: String,
+    prefix: String,
+    /// Escaped LIKE pattern for `prefix`; `None` for the whole tenant log.
+    like_pattern: Option<String>,
+    page_size: i64,
+    page_queries: Arc<AtomicU64>,
+    cursor: i64,
+    buf: VecDeque<proto::EventData>,
+    pending_error: Option<StoreError>,
+    /// The last page was full: more rows may already be visible.
+    more: bool,
+    mode: Mode,
+    notify_rx: broadcast::Receiver<NotifyPayload>,
+    /// Fallback poll timer, created on entering live.
+    interval: Option<Interval>,
+}
+
+impl Subscription {
+    /// The next stream item, or `None` once the stream has ended.
+    async fn next_item(&mut self) -> Option<Result<proto::SubscribeResponse, StoreError>> {
+        loop {
+            if let Some(event) = self.buf.pop_front() {
+                if let Some(meta) = event.meta.as_ref() {
+                    self.cursor = meta.global_nonce as i64;
+                }
+                return Some(Ok(proto::SubscribeResponse { event: Some(event) }));
+            }
+            if let Some(err) = self.pending_error.take() {
+                // Stop at the undecodable row: no caught-up marker, no later
+                // positions, cursor stays at the last delivered event.
+                self.mode = Mode::Failed;
+                return Some(Err(err));
+            }
+            match self.mode {
+                Mode::Failed => return None,
+                Mode::Replay => {
+                    if !self.more {
+                        // Everything visible in the last page's snapshot was
+                        // delivered.
+                        self.mode = Mode::Live;
+                        self.interval = Some(interval(Duration::from_secs(FALLBACK_POLL_SECS)));
+                        return Some(Ok(proto::SubscribeResponse { event: None }));
+                    }
+                    if let Err(e) = self.fetch_page("replay").await {
+                        return Some(Err(e));
+                    }
+                }
+                Mode::Live => {
+                    if !self.more {
+                        self.wait_for_wake().await;
+                    }
+                    if let Err(e) = self.fetch_page("live").await {
+                        return Some(Err(e));
+                    }
+                    if self.buf.is_empty() && self.pending_error.is_none() {
+                        // No new events: keep-alive, then wait again.
+                        return Some(Ok(proto::SubscribeResponse { event: None }));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Wait for a LISTEN/NOTIFY wake-up or the fallback poll timer. The
+    /// broadcast is a hint; the query that follows is the source of truth.
+    async fn wait_for_wake(&mut self) {
+        let interval = self
+            .interval
+            .get_or_insert_with(|| interval(Duration::from_secs(FALLBACK_POLL_SECS)));
+        loop {
+            tokio::select! {
+                result = self.notify_rx.recv() => match result {
+                    Ok(payload) if payload.tenant_id == self.tenant
+                        && payload.last_global_nonce > self.cursor => return,
+                    Ok(_) => continue, // different tenant or already past cursor
+                    Err(broadcast::error::RecvError::Lagged(_)) => return, // missed some, poll DB
+                    Err(broadcast::error::RecvError::Closed) => {
+                        // Listener shut down: fall back to pure polling.
+                        interval.tick().await;
+                        return;
+                    }
+                },
+                _ = interval.tick() => return, // safety-net fallback
+            }
+        }
+    }
+
+    /// Fetch the next page after `cursor` into `buf`. On a query failure the
+    /// stream is marked failed and the error (naming the resume position)
+    /// is returned for the caller to yield.
+    async fn fetch_page(&mut self, phase: &str) -> Result<(), StoreError> {
+        debug_assert!(self.buf.is_empty() && self.pending_error.is_none());
+        self.page_queries.fetch_add(1, Ordering::Relaxed);
+        let rows = match fetch_page_after(
+            &self.pool,
+            &self.tenant,
+            self.like_pattern.as_deref(),
+            self.cursor,
+            self.page_size,
+        )
+        .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                // Never report catch-up while a query is failing. `cursor` is
+                // the last delivered position; it is reported, never advanced.
+                self.mode = Mode::Failed;
+                return Err(subscription_unavailable(
+                    phase,
+                    &self.tenant,
+                    &self.prefix,
+                    self.cursor.saturating_add(1),
+                    e,
+                ));
+            }
+        };
+        self.more = rows.len() as i64 >= self.page_size;
+        let (items, then_fail) = decode_until_invalid(&rows, &self.tenant);
+        self.buf = items.into();
+        self.pending_error = then_fail;
+        Ok(())
+    }
+}
+
+/// One keyset page: events of `tenant` (optionally restricted to the escaped
+/// LIKE `pattern`) with `global_nonce > after`, in global order, at most
+/// `limit` rows.
+async fn fetch_page_after(
     pool: &PgPool,
     tenant: &str,
-    prefix: &str,
+    pattern: Option<&str>,
     after: i64,
+    limit: i64,
 ) -> Result<Vec<sqlx::postgres::PgRow>, sqlx::Error> {
-    if prefix.is_empty() {
-        sqlx::query(
-            r#"
-            SELECT * FROM events
-            WHERE tenant_id = $1 AND global_nonce > $2
-            ORDER BY global_nonce ASC
-            "#,
-        )
-        .bind(tenant)
-        .bind(after)
-        .fetch_all(pool)
-        .await
-    } else {
-        // E'\\' is one backslash whatever standard_conforming_strings is.
-        sqlx::query(
-            r#"
-            SELECT * FROM events
-            WHERE tenant_id = $1 AND global_nonce > $2
-              AND aggregate_id LIKE $3 ESCAPE E'\\'
-            ORDER BY global_nonce ASC
-            "#,
-        )
-        .bind(tenant)
-        .bind(after)
-        .bind(like_prefix_pattern(prefix))
-        .fetch_all(pool)
-        .await
+    match pattern {
+        None => {
+            sqlx::query(
+                r#"
+                SELECT * FROM events
+                WHERE tenant_id = $1 AND global_nonce > $2
+                ORDER BY global_nonce ASC
+                LIMIT $3
+                "#,
+            )
+            .bind(tenant)
+            .bind(after)
+            .bind(limit)
+            .fetch_all(pool)
+            .await
+        }
+        Some(pattern) => {
+            // E'\\' is one backslash whatever standard_conforming_strings is.
+            sqlx::query(
+                r#"
+                SELECT * FROM events
+                WHERE tenant_id = $1 AND global_nonce > $2
+                  AND aggregate_id LIKE $3 ESCAPE E'\\'
+                ORDER BY global_nonce ASC
+                LIMIT $4
+                "#,
+            )
+            .bind(tenant)
+            .bind(after)
+            .bind(pattern)
+            .bind(limit)
+            .fetch_all(pool)
+            .await
+        }
     }
 }
 
@@ -1266,6 +1218,8 @@ mod tests {
                 .expect("lazy connect should not attempt network"),
             notify_tx,
             listener_handle: tokio::spawn(async {}),
+            subscribe_page_size: AtomicUsize::new(DEFAULT_SUBSCRIBE_PAGE_SIZE),
+            subscribe_page_queries: Arc::new(AtomicU64::new(0)),
         };
         let _stream = store.subscribe(proto::SubscribeRequest {
             tenant_id: "tenant".into(),
@@ -1285,6 +1239,8 @@ mod tests {
                 .expect("lazy connect should not attempt network"),
             notify_tx,
             listener_handle: tokio::spawn(async {}),
+            subscribe_page_size: AtomicUsize::new(DEFAULT_SUBSCRIBE_PAGE_SIZE),
+            subscribe_page_queries: Arc::new(AtomicU64::new(0)),
         }
     }
 
