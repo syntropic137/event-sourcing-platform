@@ -167,7 +167,9 @@ def resolve_connection(
         raise ClientConfigError("endpoint must not contain user:password@; use auth=BasicAuth(...)")
     if tls and channel_credentials is not None:
         raise ClientConfigError("set either tls or channel_credentials, not both")
-    tls_requested = bool(tls) or channel_credentials is not None
+    tls_requested = bool(tls) or (
+        channel_credentials is not None and _is_secure(channel_credentials)
+    )
 
     target = raw
     use_tls = tls_requested
@@ -181,6 +183,10 @@ def resolve_connection(
                 )
             use_tls = False
         elif scheme == "https":
+            if channel_credentials is not None and not tls_requested:
+                raise ClientConfigError(
+                    "endpoint uses https:// but the channel credentials are not TLS"
+                )
             use_tls = True
         else:
             raise ClientConfigError(f"unsupported endpoint scheme '{scheme}' (use http or https)")
@@ -224,7 +230,7 @@ def _header_value(scheme: str, credential: str) -> str:
     # Values come from user code (providers) at runtime: check the type too.
     if not isinstance(credential, str) or not credential:  # pyright: ignore[reportUnnecessaryIsInstance]
         raise ClientConfigError("credential must be a non-empty string")
-    if not _HEADER_SAFE.match(credential):
+    if not _HEADER_SAFE.fullmatch(credential):
         raise ClientConfigError("credential contains characters not allowed in a header")
     return f"{scheme} {credential}"
 
@@ -380,6 +386,18 @@ def auth_interceptors(auth: Credentials) -> list[grpc.aio.ClientInterceptor]:
     """
     source = _header_source(auth)
     return [_UnaryUnary(source), _UnaryStream(source), _StreamUnary(source), _StreamStream(source)]
+
+
+# Channel credential kinds that encrypt the connection. Anything else
+# (insecure, local, unknown) does not count as TLS for the plaintext guard.
+_SECURE_CREDENTIAL_KINDS = frozenset(
+    {"SSLChannelCredentials", "CompositeChannelCredentials", "ALTSChannelCredentials"}
+)
+
+
+def _is_secure(creds: grpc.ChannelCredentials) -> bool:
+    inner = getattr(creds, "_credentials", None)
+    return type(inner).__name__ in _SECURE_CREDENTIAL_KINDS
 
 
 def _has_userinfo(endpoint: str) -> bool:

@@ -352,6 +352,7 @@ export function authInterceptor(auth: AuthOption): Interceptor {
     // must not let it start later, and must still deliver a status.
     let pending: InterceptingListener | undefined;
     let cancelled = false;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (listener: InterceptingListener, code: status, details: string) => {
       const st: StatusObject = { code, details, metadata: new Metadata() };
       listener.onReceiveStatus(st);
@@ -361,6 +362,7 @@ export function authInterceptor(auth: AuthOption): Interceptor {
         const fail = (cause: unknown) => {
           if (cancelled) return;
           pending = undefined;
+          clearTimeout(deadlineTimer);
           // Provider errors may contain anything; only our own (secret-free)
           // validation messages are surfaced.
           finish(listener, status.UNAUTHENTICATED, cause instanceof ConfigError ? cause.message : "token provider failed");
@@ -376,15 +378,28 @@ export function authInterceptor(auth: AuthOption): Interceptor {
           return next(metadata, listener);
         }
         pending = listener;
+        // The call's deadline timer only starts with the underlying call, so
+        // enforce the deadline ourselves while the token is pending.
+        const deadline = options.deadline === undefined ? Infinity : new Date(options.deadline).getTime();
+        if (Number.isFinite(deadline)) {
+          deadlineTimer = setTimeout(() => {
+            if (cancelled || !pending) return;
+            cancelled = true;
+            pending = undefined;
+            finish(listener, status.DEADLINE_EXCEEDED, "Deadline exceeded while waiting for the token provider");
+          }, Math.max(0, deadline - Date.now()));
+        }
         value.then((v) => {
           if (cancelled) return;
           pending = undefined;
+          clearTimeout(deadlineTimer);
           metadata.set(AUTHORIZATION, v);
           next(metadata, listener);
         }, fail);
       },
       cancel(next) {
         cancelled = true;
+        clearTimeout(deadlineTimer);
         if (pending) {
           const l = pending;
           pending = undefined;

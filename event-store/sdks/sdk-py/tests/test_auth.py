@@ -174,7 +174,7 @@ def test_endpoint_forms_and_validation():
     with pytest.raises(ClientConfigError) as info:
         r("https://admin:hunter2@es:443")
     assert "hunter2" not in str(info.value)
-    for bad_auth in [BasicAuth("a:b", "p"), BearerToken(""), BearerToken("sec\nret")]:
+    for bad_auth in [BasicAuth("a:b", "p"), BearerToken(""), BearerToken("sec\nret"), BearerToken("secret\n")]:
         with pytest.raises(ClientConfigError) as info:
             EventStoreClientRT("localhost:1", auth=bad_auth)
         assert "sec" not in str(info.value)
@@ -225,3 +225,17 @@ def test_tls_with_custom_ca(tmp_path):
         assert info.value.code() == grpc.StatusCode.UNAVAILABLE
     finally:
         server.stop(None)
+
+
+def test_insecure_channel_credentials_do_not_count_as_tls() -> None:
+    import grpc.experimental
+
+    insecure = grpc.experimental.insecure_channel_credentials()
+    for address in ["es.example.com:8081", "https://es.example.com:443"]:
+        with pytest.raises(ClientConfigError):
+            EventStoreClientRT(address, auth=BasicAuth("u", "p"), channel_credentials=insecure)
+    EventStoreClientRT(
+        "es.example.com:443",
+        auth=BasicAuth("u", "p"),
+        channel_credentials=grpc.ssl_channel_credentials(),
+    )

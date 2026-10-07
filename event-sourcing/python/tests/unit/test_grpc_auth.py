@@ -298,7 +298,12 @@ def test_endpoint_forms() -> None:
     with pytest.raises(ClientConfigError) as info:
         r("https://admin:hunter2@es:443")
     assert "hunter2" not in str(info.value)
-    for bad_auth in [BasicAuth("a:b", "p"), BearerToken(""), BearerToken("sec\nret")]:
+    for bad_auth in [
+        BasicAuth("a:b", "p"),
+        BearerToken(""),
+        BearerToken("sec\nret"),
+        BearerToken("secret\n"),
+    ]:
         with pytest.raises(ClientConfigError) as info:
             GrpcEventStoreClient("localhost:1", auth=bad_auth)
         assert "sec" not in str(info.value)
@@ -360,3 +365,17 @@ async def test_tls_with_custom_ca_and_server_name(tmp_path: Path) -> None:
         await ok.disconnect()
         await untrusted.disconnect()
         await server.stop(None)
+
+
+def test_insecure_channel_credentials_do_not_count_as_tls() -> None:
+    import grpc.experimental
+
+    insecure = grpc.experimental.insecure_channel_credentials()
+    for address in ["es.example.com:8081", "https://es.example.com:443"]:
+        with pytest.raises(ClientConfigError):
+            GrpcEventStoreClient(address, auth=BasicAuth("u", "p"), credentials=insecure)
+    GrpcEventStoreClient(
+        "es.example.com:443",
+        auth=BasicAuth("u", "p"),
+        credentials=grpc.ssl_channel_credentials(),
+    )

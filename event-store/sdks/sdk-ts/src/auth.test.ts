@@ -5,8 +5,15 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { inspect } from "node:util";
-import { Server, ServerCredentials, status, type Metadata, type ServerWritableStream } from "@grpc/grpc-js";
-import { EventStoreService } from "./gen/eventstore/v1/eventstore.js";
+import {
+  Metadata,
+  Server,
+  ServerCredentials,
+  credentials as grpcCredentials,
+  status,
+  type ServerWritableStream,
+} from "@grpc/grpc-js";
+import { EventStoreClient as GeneratedClient, EventStoreService } from "./gen/eventstore/v1/eventstore.js";
 import { EventStoreClientTS } from "./client.js";
 import { EventStoreClientRT } from "./runtime-client.js";
 import {
@@ -14,6 +21,7 @@ import {
   Credentials,
   SharedToken,
   UnauthenticatedError,
+  authInterceptor,
   resolveConnection,
 } from "./auth.js";
 
@@ -278,6 +286,49 @@ test("secrets never appear in string forms", () => {
     assert.ok(!s.includes(secret), s);
   }
   (values[3] as EventStoreClientTS).close();
+});
+
+test("an inspected client with calls in flight does not expose the header", async () => {
+  let release: (t: string) => void = () => {};
+  const srv = await authServer(() => true);
+  const a = new EventStoreClientTS(srv.addr, { auth: Credentials.basic("user", "hunter2") });
+  const b = new EventStoreClientTS(srv.addr, {
+    auth: Credentials.tokenProvider(() => new Promise<string>((r) => (release = r))),
+  });
+  const rt = new EventStoreClientRT(srv.addr, { auth: Credentials.bearer("tok-secret") });
+  try {
+    const calls = [a.serverInfo(), b.serverInfo(), rt.readStream({ tenant_id: "t", aggregate_id: "a" })];
+    const sub = a.subscribe({ tenantId: "t", aggregateIdPrefix: "", fromGlobalNonce: 0 })[Symbol.asyncIterator]();
+    const first = sub.next();
+    const s = [a, b, rt].map((c) => `${inspect(c, { depth: 20, showHidden: true })} ${JSON.stringify(c)}`).join(" ");
+    for (const secret of ["hunter2", "tok-secret", Buffer.from("user:hunter2").toString("base64")]) {
+      assert.ok(!s.includes(secret), s);
+    }
+    release("late");
+    await Promise.all([...calls, first]);
+    await sub.return!();
+  } finally {
+    a.close();
+    b.close();
+    await srv.stop();
+  }
+});
+
+test("a call deadline is enforced while the token provider is pending", async () => {
+  const srv = await authServer(() => true);
+  const client = new GeneratedClient(srv.addr, grpcCredentials.createInsecure(), {
+    interceptors: [authInterceptor(Credentials.tokenProvider(() => new Promise<string>(() => {})))],
+  });
+  try {
+    const err = await new Promise<{ code?: number } | null>((resolve) =>
+      client.getServerInfo({}, new Metadata(), { deadline: Date.now() + 50 }, (e) => resolve(e)),
+    );
+    assert.equal(err?.code, status.DEADLINE_EXCEEDED);
+    assert.equal(srv.seen.length, 0);
+  } finally {
+    client.close();
+    await srv.stop();
+  }
 });
 
 function openssl(): string | undefined {
