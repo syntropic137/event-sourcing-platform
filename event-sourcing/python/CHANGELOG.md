@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raises is held below the event and fed it again on a track of its own, with
   backoff (1s doubling to 30s); every other projection keeps consuming
   (ADR-026). Before, the failure was logged and the projection's next event
-  checkpointed past it, losing the event silently.
+  checkpointed past it, losing the event silently. A held ProcessManager runs
+  no `process_pending()` until it has applied the event.
 - New `ProjectionHandlerFailedError` (exported from `event_sourcing` and
   `event_sourcing.subscriptions`). `dispatch_event()` now raises it (an
   `ExceptionGroup` of them when several projections fail one event) after

@@ -177,8 +177,11 @@ Now:
    read side, including ProcessManagers that drive work.
 3. **It is retried alone, with backoff.** After 1s, doubling per consecutive
    failure of the same event up to 30s, a track of its own resumes it from its
-   checkpoint, which delivers the event again. A ProcessManager that is held
-   runs no `process_pending()` (it is on no live track).
+   checkpoint, which delivers the event again. The exponent is capped, so the
+   delay never overflows however long an event stays poison. A held
+   ProcessManager runs no `process_pending()`, even when its retry track
+   starts live: its to-do list is missing the event. It is woken once it has
+   applied it.
 4. **Visible.** `held_projections` names each held projection and the event,
    `is_healthy` is False while any is held, and each failure logs an `ERROR`
    plus a `WARNING` with the retry delay. A handler that keeps failing holds

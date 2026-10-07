@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -95,6 +96,9 @@ CATCH_UP_SKIP_CHECKPOINT_INTERVAL = 500
 # Only the failing projection waits: the others keep consuming (#1696).
 HELD_RETRY_INITIAL_DELAY = 1.0
 HELD_RETRY_MAX_DELAY = 30.0
+# The doubling stops at the cap. The exponent is bounded before it is used:
+# 2.0 ** 1024 overflows a float, which a poison event reaches after ~8.5h.
+_HELD_RETRY_MAX_EXPONENT = math.ceil(math.log2(HELD_RETRY_MAX_DELAY / HELD_RETRY_INITIAL_DELAY))
 
 # The always-present track at head; see ``_plan_tracks``.
 LIVE_TRACK = "live"
@@ -178,6 +182,12 @@ class _HeldProjection:
 
     failure: ProjectionHandlerFailedError
     attempts: int
+
+
+def _held_retry_delay(attempts: int) -> float:
+    """Seconds before retrying a projection held for ``attempts`` consecutive failures."""
+    exponent = min(max(attempts - 1, 0), _HELD_RETRY_MAX_EXPONENT)
+    return min(HELD_RETRY_INITIAL_DELAY * 2**exponent, HELD_RETRY_MAX_DELAY)
 
 
 class _BehindProjection(NamedTuple):
@@ -677,7 +687,7 @@ class SubscriptionCoordinator:
         if projection is None:
             return
         attempts = self._held[name].attempts if name in self._held else 1
-        delay = min(HELD_RETRY_INITIAL_DELAY * 2 ** (attempts - 1), HELD_RETRY_MAX_DELAY)
+        delay = _held_retry_delay(attempts)
         logger.warning(
             "Projection held below an event it failed to apply; retrying it alone",
             extra={
@@ -807,10 +817,12 @@ class SubscriptionCoordinator:
 
         Never while halted at an undecodable event: re-check attempts re-plan
         and would otherwise run side effects between failures (#360).
-        ``_clear_halt`` wakes the live drains once the halt is over.
+        ``_clear_halt`` wakes the live drains once the halt is over. Nor while
+        ``name`` is held below an event it failed (#1696): its to-do list is
+        missing that event. Recovery wakes it.
         """
         drain = self._drains.get(name)
-        if drain is not None and self._wakes_open and self._halt is None:
+        if drain is not None and self._wakes_open and self._halt is None and name not in self._held:
             drain.wake()
 
     def _drain_for(self, name: str, process_manager: ProcessManager) -> ProcessManagerDrain:
@@ -826,7 +838,12 @@ class SubscriptionCoordinator:
         must not unlock side effects for a replay still in history. A
         projection on no track is not being fed, so it is not live either,
         and nor is one whose only track was planned before it was rebuilt.
+        Nor is one held below an event it failed (#1696): a retry track can
+        start live, but its to-do list is missing that event until it applies
+        it.
         """
+        if name in self._held:
+            return False
         return any(
             name in track.projections
             and self._is_current(track, name)
@@ -1083,6 +1100,9 @@ class SubscriptionCoordinator:
                     "Held projection applied the event it was held below",
                     extra={"projection_name": name, "global_nonce": held.failure.global_nonce},
                 )
+                # Recovered: a live ProcessManager's to-do list is complete again.
+                if not track.is_catching_up:
+                    self._wake(name)
 
         # Save the held-back skips periodically, and all of them once the
         # track has delivered the last historical event, so a projection that
