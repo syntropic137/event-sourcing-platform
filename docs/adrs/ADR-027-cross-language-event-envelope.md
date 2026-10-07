@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-06
 **Deciders:** NeuralEmpowerment
-**Relates to:** ADR-007 (Event Versioning and Upcasters), ADR-023 (Event Type Registry), #371
+**Relates to:** ADR-007 (Event Versioning and Upcasters), ADR-023 (Event Type Registry), #371, #382
 
 ## Context
 
@@ -32,7 +32,7 @@ Every SDK writes and reads exactly this envelope. Field names are
 |-------|------|
 | `payload` | UTF-8 JSON **object** containing only the event's own fields: `{"amount":125,"note":"..."}`. Never wrapped in a type tag, never a scalar, array or `null`. Formatting (whitespace, key order, `\u` escapes) is not significant; readers compare JSON values, not bytes. |
 | `event_type` | Stable event name, e.g. `MoneyDeposited`. Non-empty printable ASCII without spaces. PascalCase past tense is the convention (TS `@Event('MoneyDeposited', 'v1')`, Python `event_type: ClassVar[str]`, Rust `EventSchema::EVENT_TYPE`). |
-| `event_version` | Schema version of `event_type`, starting at 1 (TS `schemaVersion`, Rust `EVENT_VERSION`). `0` is proto3 "unset" and readers MUST treat it as 1. |
+| `event_version` | Schema version of `event_type`, starting at 1 (TS `schemaVersion`, Python `schema_version: ClassVar[int]`, Rust `EVENT_VERSION`). The `@Event`/`@event` version string is descriptive metadata, not this value. `0` is proto3 "unset": readers MUST treat it as 1, and writers write 1 for an event without a version. |
 | `content_type` | `application/json`. Readers treat empty as JSON and MUST fail with a typed error on anything else. |
 | `content_schema` | Empty (reserved). |
 | `aggregate_type` | Stable aggregate name, e.g. `Account`: an ASCII letter followed by letters, digits, `_` or `.`. Never derived from a language type path. Must not contain `-`: the TS and Python repositories build stream names as `{aggregate_type}-{aggregate_id}` and split on the first `-`. Same value in `AppendRequest.aggregate_type`. |
@@ -59,45 +59,80 @@ Every SDK writes and reads exactly this envelope. Field names are
    that does not care about a type filters it by `event_type` before
    decoding.
 
-Readers ignore unknown payload fields. In particular they MUST tolerate
-`eventType` and `schemaVersion` keys in the payload (see Known deviations).
+Readers ignore unknown payload fields, unless the application opts into
+strict models (Python's `DomainEvent` defaults to `extra="forbid"`): there an
+unknown field is a payload-mismatch error, so a field that strict readers must
+tolerate needs a version bump and an upcaster.
+
+Readers MUST tolerate the keys `eventType` and `schemaVersion` (written into
+every payload by TypeScript SDK <= 0.17) and `event_type` (older Python
+producers) even in strict models: they duplicate metadata and are dropped
+before upcasting and decoding, unless the target schema declares a field of
+that name. Streams written before #382 stay readable without migration.
+
+### SDK mapping
+
+| | Rust | TypeScript | Python |
+|---|---|---|---|
+| Version written | `EVENT_VERSION` | `schemaVersion` (missing or 0 written as 1) | `schema_version` ClassVar (default 1) |
+| Decoder | `event_enum!` / `RecordedEvent::decode` | `EventSerializer` registry keyed by `(eventType, schemaVersion)`, filled by `@Event` | registry keyed by `(event_type, schema_version)`, filled by `@event` |
+| Upcasters | `Upcasters::new().register(..).rename(..)`; `with_upcasters` on repository and projection runner | `new Upcasters().register(..).rename(..)`; `upcasters` option of `GrpcEventStoreAdapter` / `EventStoreClientFactory.createGrpcClient` | `Upcasters().register(..).rename(..)`; `GrpcEventStoreClient(upcasters=...)` |
+| Typed errors | `Error::UnknownEventType`, `UnknownEventVersion`, `EventDecode`, `UnsupportedContentType`, `Upcast` | `UnknownEventTypeError`, `UnknownEventVersionError`, `EventPayloadError`, `UnsupportedContentTypeError`, `UpcastError` (all `EventDecodeError`) | same names (all `EventDecodeError`, an `UndecodableEventError`, so a `SubscriptionCoordinator` halts instead of retrying) |
+| Stored type/version exposed | `RecordedEvent::event_type`/`event_version` | `metadata.storedEventType`/`storedEventVersion`; `event.eventType`/`schemaVersion` are the decoded ones | `metadata.stored_event_type`/`stored_event_version`; `metadata.event_type`/`event_version` are the decoded ones |
+
+The TypeScript and Python clients decode eagerly on every read
+(`readEvents`/`read_events`, `readAll`/`read_all`, `subscribe`), where Rust
+hands projections a raw `RecordedEvent`. Their equivalent of "not decoded" is
+the generic event of ADR-023: a type with **no** registered class at any
+version is returned as a generic event carrying the decoded type, version and
+every payload field, never dropped, so a projection can filter it by type
+(strict decode: `requireRegistered` / `require_registered`). A type that is
+registered, but not at the event's version after upcasting, is always
+`UnknownEventVersionError`, never handed to a class of another version.
+Python raises `EventPayloadError` when the registered model rejects the
+payload (`GrpcEventStoreClient(on_invalid_payload="generic")` restores the
+pre-#382 fallback as a migration aid); TypeScript classes have no schema, so
+for TS a payload mismatch is only a payload that is not a JSON object.
 
 ### Golden fixtures
 
-`event-sourcing/rust/tests/fixtures/xlang/{typescript,python}.json` hold
-protobuf `AppendRequest` bytes captured from the real SDK encoders
-(`tests/xlang/ts_peer.cjs`, `tests/xlang/py_peer.py`). The Rust tests decode
-them, re-encode the same events, and require byte-identical metadata and
-JSON-equal payloads. `make -C event-sourcing/rust test-xlang` additionally
-runs both directions against a live event store (TS/Python write, Rust
-reads; Rust writes, TS/Python read).
+`event-sourcing/rust/tests/fixtures/xlang/` holds protobuf `AppendRequest`
+bytes from the real encoders: `typescript.json` (`tests/xlang/ts_peer.cjs`),
+`python.json` (`tests/xlang/py_peer.py`), `rust.json` (the Rust repository),
+regenerated deterministically by `make -C event-sourcing/rust
+test-xlang-fixtures`, and the frozen `typescript-legacy.json` (TypeScript SDK
+0.17, payloads echo `eventType`/`schemaVersion`). Each holds a v1, v1, v2
+stream.
+
+- The Rust tests require byte-identical metadata and JSON-equal payloads
+  between the Rust encoder and the TS and Python fixtures, check that the
+  current encoders' payloads hold exactly the event's fields, and decode all
+  four fixtures.
+- The TypeScript (`tests/xlang-golden.test.ts`) and Python
+  (`tests/unit/test_xlang_golden.py`, strict models) suites decode all four,
+  upcast the v1 event to a v2 class, and check their own fixture is what
+  their encoder writes today.
+- `make -C event-sourcing/rust test-xlang` runs all six directions (TS, Python
+  and Rust each writing, each other SDK reading) against a live event store,
+  asserting the decoded class, the reported and stored version, and the
+  payload.
+
+Python payloads use `json.dumps` defaults (`", "` separators, `\u` escapes);
+that is valid and only differs in formatting.
 
 ## Known deviations in existing SDKs
 
-Recorded so they can be fixed without changing the canonical envelope.
-Tracked in #382 (TS/Python envelope deviations).
+The TypeScript and Python deviations recorded with the first version of this
+ADR (payload echoing `eventType`/`schemaVersion`, Python always writing
+`event_version = 1`, TS writing `0`, readers not dispatching on
+`event_version`) were fixed in #382. Remaining:
 
-- **TypeScript payload echoes class fields.** `BaseDomainEvent.toJson()`
-  serializes the instance, so `eventType` and `schemaVersion` (class fields)
-  appear in the payload: `{"eventType":"MoneyDeposited","schemaVersion":1,"amount":125}`.
-  They duplicate metadata. Readers ignore them; the Python reader's
-  `extra="forbid"` models currently reject them and fall back to
-  `GenericDomainEvent`. Rust events must not use `deny_unknown_fields` when
-  reading TS streams.
-- **Python always writes `event_version = 1`.** `GrpcEventStoreClient`
-  ignores `DomainEvent.schema_version`, so Python cannot yet write a v2
-  event. Python payloads use `json.dumps` defaults (`", "` separators,
-  `\u` escapes), which is valid and only differs in formatting.
-- **TypeScript writes `event_version = 0`** for an event without
-  `schemaVersion`; readers read it as 1.
-- **TS and Python readers do not dispatch on `event_version`.** The TS
-  adapter reports the registered class's `schemaVersion` and Python's
-  `EventMetadata` has no version field, so a stored v1 event is handed to v2
-  code without upcasting (and vice versa). Rust does dispatch and upcast.
-  The live cross-language tests therefore assert the stored metadata
-  version, not what those readers report.
 - **Neither TS nor Python checks `aggregate_type` on load.** Rust does: a
   stream whose first event has another aggregate type is an error.
+- **A Python event already stored at `event_version = 1` by a class whose
+  `schema_version` was later bumped** (Python ignored `schema_version` on
+  write before #382) is read as v1: register the old shape at v1 or an
+  upcaster from v1. Only the version label was wrong; the payload is intact.
 
 ## Consequences
 
