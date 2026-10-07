@@ -32,6 +32,21 @@ Demonstrates:
 
 **Commands:** 7 (CreateOrder, AddItem, RemoveItem, ConfirmOrder, ShipOrder, DeliverOrder, CancelOrder)
 
+### 3. repository.rs ⭐⭐ Intermediate
+**Complexity:** Persistence against a live event store
+**Focus:** `EventStoreClient` + `EventStoreRepository`
+
+Demonstrates:
+- Connecting the high-level SDK to the gRPC event store (`EventStoreClient::connect`)
+- `AggregateInstance::execute` to run a command and record pending events
+- `Repository::save` with optimistic concurrency (expected stream revision)
+- `Repository::load` replaying a stream
+- A stale writer receiving a typed `Error::ConcurrencyConflict`
+
+Starts an in-memory event store in-process unless `EVENT_STORE_ADDR` is set.
+See the `repository` module docs for retry, idempotency, and pending-event
+semantics (including unknown-outcome saves).
+
 ## ADR-004 Pattern in Rust
 
 Unlike TypeScript and Python which use decorators, Rust implements ADR-004 using traits:
@@ -133,6 +148,9 @@ cargo run --example basic_aggregate
 
 # Run order processing
 cargo run --example order_processing
+
+# Run the repository example (live gRPC event store, in-process by default)
+cargo run --example repository
 ```
 
 Expected output shows:

@@ -45,6 +45,9 @@ Now the same "stop, never skip" rule applies:
    and ends. No caught-up marker, no later position, no cursor advance.
 2. The error names the position and the column only. Decoder messages are
    dropped because they can quote stored values; payloads are never logged.
+   The position is also sent as gRPC trailing metadata
+   `esp-undecodable-global-nonce` so clients need not parse the message; the
+   Python client raises `UndecodableEventError(global_nonce)`.
 3. `read_all` / `read_stream` return the same error instead of panicking.
 4. `DATA_LOSS` is not fixed by retrying. A consumer that reconnects from its
    checkpoint hits the same error at the same position. Alert on it.
@@ -71,6 +74,11 @@ Now the same "stop, never skip" rule applies:
      only skip path: deliberate, per consumer, and auditable through the
      checkpoint write. Record the skipped position; the consumer's read model
      lacks that event and may need a rebuild or a compensating event.
+     With the Python `SubscriptionCoordinator`, move the checkpoint of every
+     projection it runs that has not passed `N`: one failing track cancels
+     the whole plan. This works even when `N` is the tenant head: the head
+     probe maps `DATA_LOSS` on the head event to its position (via
+     `UndecodableEventError.global_nonce`) instead of failing.
 3. **Verify.** Reconnect; the subscription passes `N` (or resumes at `N + 1`).
 
 ## Consumer contract (at-least-once)
@@ -94,9 +102,9 @@ Now the same "stop, never skip" rule applies:
 | Client | On subscription error |
 |--------|-----------------------|
 | gRPC server (`eventstore-bin`) | Logs the error, maps it with `StoreError::to_status()`, ends the response stream with that status. |
-| Rust SDK (`sdk-rs`) | `tonic::Streaming` yields `Err(Status)` with `Code::Unavailable`. |
-| TypeScript SDK (`sdk-ts`) | The async iterator rejects with the gRPC error (`code` 14). |
-| Python (`event_sourcing` `GrpcEventStoreClient.subscribe`) | Raises `EventStoreError`. `SubscriptionCoordinator` retries with exponential backoff and resumes each projection from its saved checkpoint. |
+| Rust SDK (`sdk-rs`) | `tonic::Streaming` yields `Err(Status)` with `Code::Unavailable`, or `Code::DataLoss` for an undecodable event (position in trailing metadata `esp-undecodable-global-nonce`). |
+| TypeScript SDK (`sdk-ts`) | The async iterator rejects with the gRPC error (`code` 14 `UNAVAILABLE`, or 15 `DATA_LOSS`). Messages and a terminal error/end that arrive while the consumer is busy are buffered and delivered on later `next()` calls (`streamToAsyncIterator`), so a failure is never lost between reads. |
+| Python (`event_sourcing` `GrpcEventStoreClient.subscribe`) | Raises `EventStoreError`; for `DATA_LOSS` with a position, the subclass `UndecodableEventError` (`.global_nonce`). `SubscriptionCoordinator` retries with exponential backoff and resumes each projection from its saved checkpoint. |
 
 ## Consequences
 
@@ -108,7 +116,8 @@ Now the same "stop, never skip" rule applies:
 - An undecodable row halts every consumer that reaches it until an operator
   acts. That is intended: a visible stop beats a silently incomplete
   projection. The Python coordinator retries `DATA_LOSS` with backoff like any
-  other error, so it stays stopped at the position and logs each attempt.
+  other error, so it stays stopped at the position and logs each attempt,
+  until an operator repairs the row or moves checkpoints past it.
 - `it_subscribe_undecodable.rs` stores a decoder-invalid row between valid rows
   (replay and live) and an all-invalid batch, and checks that nothing is
   delivered past it and reconnecting fails at the same position.

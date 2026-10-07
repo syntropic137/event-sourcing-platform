@@ -15,9 +15,14 @@ FAST_TEST_EXCLUDES ?= eventstore-backend-postgres
 
 .PHONY: help build clean qa qa-full qa-fast fmt clippy check test run gen-ts gen-py smoke cov-setup coverage
 .PHONY: ps run-bg stop dev-init dev-start dev-stop dev-restart dev-clean dev-test dev-status dev-logs dev-shell
+.PHONY: bench-pg bench-pg-full
 
 help:
 	@echo "Targets: build, clean, qa, qa-full, fmt, clippy, check, test, run, smoke, gen-ts, gen-py"
+	@echo ""
+	@echo "Performance (Docker; see docs/performance/POSTGRES-BASELINE.md):"
+	@echo "  bench-pg      - Postgres baseline, quick profile (~2 min)"
+	@echo "  bench-pg-full - Postgres baseline, full profile (~20 min)"
 	@echo ""
 	@echo "Development Infrastructure:"
 	@echo "  dev-init     - Initialize fast dev environment"
@@ -118,7 +123,7 @@ cov-setup:
 # TODO: Narrow these ignores once targeted tests land.
 # Note: Escape the trailing $ for Make with $$, and pass as a single CLI arg via double quotes.
 # Temporarily ignore backend store files while subscribe coverage is still expanding.
-COV_IGNORE ?= (.*/eventstore-bin/src/.*)$$|(.*/eventstore-core/src/errors\.rs)$$|(.*/eventstore-backend-postgres/src/store_postgres\.rs)$$|(.*/eventstore-backend-memory/src/store_memory\.rs)$$
+COV_IGNORE ?= (.*/eventstore-bin/src/.*)$$|(.*/eventstore-bench/src/.*)$$|(.*/eventstore-core/src/errors\.rs)$$|(.*/eventstore-backend-postgres/src/store_postgres\.rs)$$|(.*/eventstore-backend-memory/src/store_memory\.rs)$$
 coverage:
 	@if ! command -v cargo-llvm-cov >/dev/null 2>&1; then echo "cargo-llvm-cov not found. Run 'make cov-setup' first."; exit 2; fi
 	@mkdir -p coverage
@@ -167,6 +172,16 @@ coverage-text:
 		 exit 1; \
 	 fi; \
 	 rm -f "$$TMP"
+
+# Live-Postgres throughput / tail-latency baseline (issue #354). Starts a
+# pinned Postgres container, runs eventstore-bench against the release
+# eventstore-bin, removes the container. Not part of qa: needs Docker and
+# minutes of wall time. Env: PROFILE, DURABILITY, PG_CPUS, PG_MEM, OUT_DIR.
+bench-pg:
+	./scripts/bench-postgres.sh
+
+bench-pg-full:
+	PROFILE=full ./scripts/bench-postgres.sh
 
 # Placeholder run until server binary exists
 run:

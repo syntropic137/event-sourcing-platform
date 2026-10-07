@@ -1,105 +1,91 @@
-# Rust SDK (Coming Soon)
+# Rust SDK (Alpha)
 
-The Rust SDK for Event Sourcing is currently in development.
+The Rust event sourcing SDK (`event-sourcing/rust`, crate `event-sourcing-rust`) is in alpha. APIs may change between minor versions.
 
-## 🚧 Status
+## Status
 
-**Planned Features:**
-- Zero-cost abstractions
-- Type-safe event handling
-- Async/await support with Tokio
-- Macro-based event handlers
-- Full Rust idioms and patterns
-- Integration with Event Store Rust SDK
+| Area | Status |
+|------|--------|
+| `Aggregate` / `AggregateRoot` traits, commands, events | Supported |
+| `EventStoreClient` (gRPC, layered on the low-level `eventstore-sdk-rs` client) | Supported |
+| `EventStoreRepository`: `load`, `save`, `exists` | Supported |
+| Optimistic concurrency with typed `Error::ConcurrencyConflict` | Supported |
+| Idempotent retry of saves with unknown outcome | Supported |
+| Checkpointed projection runner (catch-up, live, resume, rebuild) | Supported |
+| Postgres projection store (`postgres` feature) | Supported |
+| Process-manager processor (live-only side effects) | Supported |
+| Snapshots, upcasting, authenticated clients | Planned |
 
-## 📋 Planned API
+## Repository
 
 ```rust
-use neurale_event_sourcing::{BaseAggregate, EventHandler, DomainEvent};
-use serde::{Serialize, Deserialize};
+use std::sync::Arc;
+use event_sourcing_rust::prelude::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OrderPlaced {
-    order_id: String,
-    customer_id: String,
-    items: Vec<LineItem>,
-}
+let client = EventStoreClient::connect("127.0.0.1:50051").await?;
+let repo = EventStoreRepository::<Order>::new(Arc::new(client), "tenant-a");
 
-impl DomainEvent for OrderPlaced {
-    fn event_type(&self) -> &str {
-        "OrderPlaced"
-    }
-}
+// Create
+let mut order = AggregateInstance::new("order-1".into(), Order::default());
+order.execute(OrderCommand::Place { /* ... */ }).await?;
+repo.save(&mut order).await?;
 
-struct OrderAggregate {
-    id: Option<String>,
-    version: u64,
-    status: String,
-    customer_id: String,
-    items: Vec<LineItem>,
-}
-
-impl BaseAggregate for OrderAggregate {
-    type Event = OrderEvent;
-    
-    fn aggregate_type(&self) -> &str {
-        "Order"
-    }
-    
-    fn apply_event(&mut self, event: &Self::Event) {
-        match event {
-            OrderEvent::Placed(e) => self.on_order_placed(e),
-            OrderEvent::Shipped(e) => self.on_order_shipped(e),
-            OrderEvent::Cancelled(e) => self.on_order_cancelled(e),
-        }
-    }
-}
-
-impl OrderAggregate {
-    // Command
-    pub fn place(&mut self, order_id: String, customer_id: String, items: Vec<LineItem>) -> Result<()> {
-        if items.is_empty() {
-            return Err(Error::InvalidCommand("Order must have at least one item".into()));
-        }
-        self.initialize(order_id.clone());
-        self.raise_event(OrderEvent::Placed(OrderPlaced {
-            order_id,
-            customer_id,
-            items,
-        }));
-        Ok(())
-    }
-    
-    // Event handler
-    fn on_order_placed(&mut self, event: &OrderPlaced) {
-        self.status = "placed".to_string();
-        self.customer_id = event.customer_id.clone();
-        self.items = event.items.clone();
-    }
-}
+// Load, change, save
+let mut order = repo.load("order-1").await?.expect("exists");
+order.execute(OrderCommand::Ship).await?;
+repo.save(&mut order).await?;
 ```
 
-## 📦 Installation (Future)
+Events are stored as JSON, so `Aggregate::Event` must implement `Serialize` and `DeserializeOwned`. Override `Aggregate::aggregate_type` (or call `with_aggregate_type`) to record a stable type name. Streams are addressed by `(tenant, aggregate_id)`, so aggregate IDs must be unique within a tenant. `AggregateInstance::execute` applies a command's events to a clone of the aggregate and commits them only if all apply, so aggregates must be `Clone`. Saving to an existing stream verifies its stored aggregate type.
 
-```toml
-[dependencies]
-neurale-event-sourcing = "0.1"
+### Save semantics
+
+`save` appends all pending events as one atomic batch, with the instance's `committed_version()` as the expected stream revision.
+
+| Outcome | Result | Pending events |
+|---------|--------|----------------|
+| Acknowledged | `Ok(())`, `committed_version()` advances | Cleared |
+| Stale writer | `Err(Error::ConcurrencyConflict { expected, actual })` | Kept. Discard the instance, reload, re-run the command |
+| Unknown outcome (transport failure, timeout, lost ack; `Error::is_transient()`) | Retried per `RetryPolicy` (default 3 attempts); error returned if exhausted | Kept. Calling `save` again is safe |
+
+Retries never duplicate events. A pending batch is immutable once recorded (event IDs, timestamps, nonces), every attempt sends the same idempotency key, and if a retry is rejected because the stream already moved, the repository compares event IDs at the expected position and treats its own committed batch as success. Conflicts are never retried automatically: the events were decided against stale state.
+
+Use `RetryPolicy::none()` to handle retries yourself.
+
+## Projections
+
+`ProjectionRunner` drives one `CheckpointedProjection` over one tenant's global log (ADR-014):
+
+```rust
+let store = Arc::new(PostgresProjectionStore::new(pool)); // `postgres` feature
+store.migrate().await?;
+let mut runner = ProjectionRunner::new(Arc::new(client), store, OrderSummary, "tenant-a");
+let cancel = CancellationToken::new();
+runner.run(cancel.clone()).await?; // catch-up, then live, until cancelled or an error
 ```
 
-## 🎯 Design Goals
+- **Checkpoint identity**: tenant + projection name + projection version + feed (aggregate-id prefix). Tenants, projections, and versions never share a position.
+- **Catch-up then live**: history up to the head observed at start is replayed with `DispatchContext::is_catching_up = true`, then the runner subscribes for live events.
+- **Resume and duplicates**: the committed position is loaded on start; anything at or below it is skipped, so duplicate delivery is harmless.
+- **Atomic commit**: per event the runner calls `begin`, `handle(&mut tx, ..)`, then `commit(tx, key, position)`. `PostgresProjectionStore` (and `InMemoryProjectionStore`) commit read-model writes and the checkpoint in one transaction; a handler error rolls both back. Commits that do not advance the checkpoint are rejected, fencing off a second runner on the same key.
+- **External read models** (search, vector stores): use `ExternalCheckpoints`. The checkpoint is saved after the handler; a crash in between redelivers the event, so handlers must be idempotent (upsert by event id).
+- **Ordering requirement**: the event store must deliver live events in global-nonce commit order (`commit_ordered_global_nonce`, #366). A live event below the last applied position that is not provably a duplicate stops the runner with `Error::OutOfOrderDelivery` instead of being skipped.
+- **Feed prefixes** may not contain `\`, `%` or `_` until subscription prefixes are escaped by the backend (#361); `run` rejects them.
+- **Errors propagate**: handler failures (`Error::ProjectionFailed`), commit failures, and subscription stream errors or end-of-stream stop the runner with an error. The checkpoint stays at the last committed event.
+- **Rebuild**: `runner.rebuild()` resets that key's data and checkpoint only (in one transaction for transactional stores; checkpoint first for external ones). Stop other runners on the key first. Bump `version()` to build a new read model next to the old one.
+- **Side effects**: projections must be pure. Write to-do records in `handle` and attach a `LiveProcessor` with `with_live_processor`; it runs on its own task and is woken only by committed live events, never during replay (process-manager pattern, ADR-025). Failed passes retry with backoff, and one pass runs when going live (after replay) to resume items stranded by a crash; disable with `drain_pending_on_live_start(false)`. `process_pending` must be idempotent.
 
-- **Performance**: Zero-cost abstractions with minimal runtime overhead
-- **Safety**: Leverage Rust's type system for compile-time guarantees
-- **Ergonomics**: Idiomatic Rust with macros for reducing boilerplate
-- **Async**: First-class async/await support
-- **Testing**: Built-in test utilities and mocking
+## Examples
 
-## 🔗 Related
+```bash
+cd event-sourcing/rust
+cargo run --example basic_aggregate
+cargo run --example order_processing
+cargo run --example repository   # live gRPC event store (in-process unless EVENT_STORE_ADDR is set)
+```
 
-- **[TypeScript SDK](../typescript/typescript-sdk.md)** - Currently available
-- **[API Reference](../api-reference.md)** - Common API surface
+## Related
+
+- **[TypeScript SDK](../typescript/typescript-sdk.md)**
+- **[API Reference](../api-reference.md)**
 - **[Event Store Rust SDK](/docs/event-store/sdks/rust/rust-sdk.md)** - Low-level event store client
-
----
-
-**Interested in contributing?** Check out our [GitHub repository](https://github.com/neurale/event-sourcing-platform) for contribution guidelines.

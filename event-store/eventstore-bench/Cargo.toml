@@ -1,0 +1,27 @@
+[package]
+name = "eventstore-bench"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Live-Postgres throughput and tail-latency baseline for the event store (issue #354)"
+publish = false
+
+[dependencies]
+anyhow = "1"
+hdrhistogram = { version = "7.5", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process"] }
+tonic = { version = "0.14", features = ["transport"] }
+eventstore-proto = { path = "../eventstore-proto" }
+
+[lib]
+name = "eventstore_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "eventstore-bench"
+path = "src/main.rs"

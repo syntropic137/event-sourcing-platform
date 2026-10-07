@@ -1,0 +1,64 @@
+# Postgres throughput / tail-latency baseline (issue #354).
+#
+# Manual only: shared CI runners are noisy, so numbers from here are for
+# smoke-checking the harness and spotting gross regressions, not for the
+# published baseline (see docs/performance/POSTGRES-BASELINE.md).
+name: Bench • Postgres baseline
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Scenario matrix"
+        type: choice
+        options: [quick, full]
+        default: quick
+      durability:
+        description: "durable = Postgres defaults; relaxed = synchronous_commit=off"
+        type: choice
+        options: [durable, relaxed]
+        default: durable
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-postgres
+  cancel-in-progress: false
+
+jobs:
+  bench:
+    name: event-store • postgres bench (${{ inputs.profile }}, ${{ inputs.durability }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: "event-store -> target"
+          shared-key: "event-store-bench"
+
+      - name: Run bench
+        env:
+          PROFILE: ${{ inputs.profile }}
+          DURABILITY: ${{ inputs.durability }}
+          OUT_DIR: bench-results/ci
+        run: make -C event-store bench-pg
+
+      - name: Job summary
+        if: always()
+        run: cat event-store/bench-results/ci/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bench-postgres-${{ inputs.profile }}-${{ inputs.durability }}
+          path: event-store/bench-results/ci/
+          if-no-files-found: warn

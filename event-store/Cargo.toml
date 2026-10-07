@@ -7,6 +7,7 @@ members = [
   "eventstore-backend-postgres",
   "eventstore-bin",
   "sdks/sdk-rs",
+  "eventstore-bench",
 ]
 
 [workspace.package]

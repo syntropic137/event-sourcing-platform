@@ -106,6 +106,20 @@ jobs:
   rust_sdk_fast:
     name: SDK (Rust) • qa-fast
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+        env:
+          POSTGRES_USER: eventstore
+          POSTGRES_PASSWORD: eventstore-ci
+          POSTGRES_DB: eventstore
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U eventstore"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
@@ -125,6 +139,14 @@ jobs:
 
       - name: QA fast
         run: make -C event-sourcing/rust qa-fast
+
+      # Same live-server tests against the Postgres event store backend, plus
+      # the Postgres projection store (feature "postgres"). The Postgres tests
+      # fail rather than skip under CI when TEST_DATABASE_URL is missing.
+      - name: Tests (Postgres backend + postgres feature)
+        run: make -C event-sourcing/rust test-postgres
+        env:
+          TEST_DATABASE_URL: postgres://eventstore:eventstore-ci@localhost:5432/eventstore
 
   ts_sdk:
     name: SDK (TypeScript) • qa + tests (Node ${{ matrix.node-version }})
@@ -187,6 +209,9 @@ jobs:
 
       - name: TypeScript SDK tests
         run: pnpm --filter "@syntropic137/event-sourcing-typescript" run test
+
+      - name: Event store TS client tests
+        run: pnpm --filter "@eventstore/sdk-ts" run test
 
   python_sdk_fast:
     name: SDK (Python) • qa-fast
