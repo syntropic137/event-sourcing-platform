@@ -17,6 +17,17 @@ use tonic::{Request, Response, Status};
 
 const TENANT: &str = "tenant-service";
 
+/// Every capability both built-in backends advertise. Each is tied to a
+/// behavior test: commit order (memory `live_order.rs`, postgres
+/// `it_commit_order.rs`), subscription errors (`subscribe_errors.rs`,
+/// `it_subscribe_faults.rs`, memory lag test), undecodable events
+/// (`subscribe_errors.rs`, `it_subscribe_undecodable.rs`).
+const ALL_CAPABILITIES: [&str; 3] = [
+    eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE,
+    eventstore_core::capabilities::SUBSCRIPTION_ERRORS_SURFACED,
+    eventstore_core::capabilities::UNDECODABLE_EVENTS_SURFACED,
+];
+
 struct Service {
     store: Arc<dyn EventStoreTrait>,
 }
@@ -97,10 +108,13 @@ async fn service_append_and_read_with_postgres_backend() {
         .unwrap()
         .into_inner();
     assert_eq!(info.backend, "postgres");
-    assert!(info
-        .capabilities
-        .iter()
-        .any(|c| c == eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE));
+    for cap in ALL_CAPABILITIES {
+        assert!(
+            info.capabilities.iter().any(|c| c == cap),
+            "postgres must advertise {cap}: {:?}",
+            info.capabilities
+        );
+    }
 }
 
 #[tonic::async_trait]
@@ -231,10 +245,13 @@ async fn service_get_server_info_memory_backend() {
     assert_eq!(info.server_version, eventstore_bin::SERVER_VERSION);
     assert_eq!(info.api_version, eventstore_core::API_VERSION);
     assert_eq!(info.backend, "memory");
-    assert!(info
-        .capabilities
-        .iter()
-        .any(|c| c == eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE));
+    for cap in ALL_CAPABILITIES {
+        assert!(
+            info.capabilities.iter().any(|c| c == cap),
+            "memory must advertise {cap}: {:?}",
+            info.capabilities
+        );
+    }
 }
 
 #[tokio::test]

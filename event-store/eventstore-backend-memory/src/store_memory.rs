@@ -177,9 +177,19 @@ impl EventStore for InMemoryStore {
     }
 
     fn capabilities(&self) -> Vec<&'static str> {
-        // Appends allocate global nonces and publish them under the same
-        // write lock, so visibility order equals allocation order.
-        vec![eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE]
+        // commit_ordered_global_nonce: appends allocate global nonces and
+        // publish them under the same write lock, so visibility order equals
+        // allocation order.
+        // subscription_errors_surfaced: the only way a memory subscription
+        // can stop delivering is a lagged receiver, which ends the stream with
+        // RESOURCE_EXHAUSTED (see `subscribe`); there are no backend queries.
+        // undecodable_events_surfaced: events are held as decoded protobuf
+        // messages, so there is no decode step that could fail or skip one.
+        vec![
+            eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE,
+            eventstore_core::capabilities::SUBSCRIPTION_ERRORS_SURFACED,
+            eventstore_core::capabilities::UNDECODABLE_EVENTS_SURFACED,
+        ]
     }
 
     async fn append(&self, req: AppendRequest) -> Result<AppendResponse, StoreError> {

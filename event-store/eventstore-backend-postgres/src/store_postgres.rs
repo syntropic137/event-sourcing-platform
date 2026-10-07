@@ -271,7 +271,13 @@ impl EventStoreTrait for PostgresStore {
         // #337: appends take a per-tenant transaction-scoped advisory lock
         // before allocating global nonces, so within a tenant they become
         // visible in commit order.
-        vec![eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE]
+        // #350: failed subscription queries end the stream with UNAVAILABLE.
+        // #351: undecodable rows end subscriptions/reads with DATA_LOSS.
+        vec![
+            eventstore_core::capabilities::COMMIT_ORDERED_GLOBAL_NONCE,
+            eventstore_core::capabilities::SUBSCRIPTION_ERRORS_SURFACED,
+            eventstore_core::capabilities::UNDECODABLE_EVENTS_SURFACED,
+        ]
     }
 
     async fn append(&self, req: proto::AppendRequest) -> Result<proto::AppendResponse, StoreError> {

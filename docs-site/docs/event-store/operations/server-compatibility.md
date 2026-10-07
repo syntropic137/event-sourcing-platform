@@ -40,30 +40,34 @@ be ignored by clients.
 | Capability | Guarantee | Fix | Server version that has the fix | Advertised from |
 |---|---|---|---|---|
 | `commit_ordered_global_nonce` | Global nonces become visible in commit order (per tenant), so a cursor that has moved past nonce N never misses a nonce below N that commits later. | #337 | v0.16.0 | v0.17.0 |
+| `subscription_errors_surfaced` | A subscription that cannot keep delivering ends with an error status (Postgres query failure: `UNAVAILABLE`, naming `resume from global_nonce N`) instead of an empty result or a silently ended stream. The cursor is never advanced past undelivered events. | #350 / #356 | v0.17.0 | v0.17.0 |
+| `undecodable_events_surfaced` | A stored event the server cannot decode ends the subscription or read with `DATA_LOSS` at its position (also in trailing metadata). Earlier events are delivered, later ones are not, and the bad event is never skipped. | #351 / #359 | v0.17.0 | v0.17.0 |
 
 Notes:
 
 - A v0.16.x server has the #337 fix but predates `GetServerInfo`, so it reads
   as legacy. If you must accept v0.16.x, verify the deployment some other way
   (image digest pin) and document why; the helpers cannot prove it.
-- Both built-in backends (memory, postgres) advertise
-  `commit_ordered_global_nonce`. A custom backend advertises nothing unless it
-  overrides `EventStore::capabilities()`.
-- Memory backend: live events are published under the append lock, so
-  subscribers see them in global nonce order, and the replay/live handoff has
-  no gap or duplicate. A live subscriber that falls more than the broadcast
-  buffer behind gets `RESOURCE_EXHAUSTED` and the stream ends (resubscribe from
-  your checkpoint) instead of silently skipping events.
-
-### Planned flags (not yet advertised)
-
-These are reserved names for fixes that are in review but not yet on `main`.
-Each fix's PR adds its flag to the backend's `capabilities()` when it lands.
-
-| Capability (planned) | Guarantee | Issue / PR | Expected version |
-|---|---|---|---|
-| `subscription_errors_surfaced` | A failed Postgres subscription query ends the stream with `UNAVAILABLE` instead of yielding an empty result. | #350 / #356 | v0.17.0 |
-| `undecodable_events_surfaced` | An undecodable stored event ends the stream / read with `DATA_LOSS` at its position instead of being skipped. | #351 / #359 | v0.17.0 |
+- Both built-in backends advertise all three flags. A custom backend
+  advertises nothing unless it overrides `EventStore::capabilities()`.
+- **Postgres** provides each guarantee through the fixes listed above.
+- **Memory** provides them as follows:
+  - `commit_ordered_global_nonce`: live events are published under the append
+    lock, so subscribers see them in global nonce order, and the replay/live
+    handoff has no gap or duplicate.
+  - `subscription_errors_surfaced`: memory runs no backend queries; the only
+    way a subscription can stop delivering is a lagged receiver (more than the
+    broadcast buffer behind). That ends the stream with `RESOURCE_EXHAUSTED`
+    (resubscribe from your checkpoint) instead of silently skipping events.
+  - `undecodable_events_surfaced`: events are held as decoded protobuf
+    messages, so there is no decode step that could fail or skip an event.
+    The guarantee holds by construction.
+- Each flag is checked against behavior in tests, not only as a string:
+  commit order (`eventstore-backend-memory/tests/live_order.rs`,
+  `eventstore-backend-postgres/tests/it_commit_order.rs`), subscription errors
+  (`it_subscribe_faults.rs`, `eventstore-bin/tests/subscribe_errors.rs`,
+  memory lag test), undecodable events (`it_subscribe_undecodable.rs`,
+  `subscribe_errors.rs`).
 
 ## Who is exposed by #337
 

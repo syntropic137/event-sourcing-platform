@@ -213,6 +213,11 @@ async fn filtered_live_subscriber_sees_only_its_events_in_order() {
 #[tokio::test]
 async fn lagging_subscriber_gets_an_error_then_resubscribes_from_checkpoint() {
     let store = InMemoryStore::with_broadcast_capacity(4);
+    // Lag is the memory backend's only way to stop delivering; surfacing it
+    // is what backs its subscription_errors_surfaced flag.
+    assert!(store
+        .capabilities()
+        .contains(&capabilities::SUBSCRIPTION_ERRORS_SURFACED));
     let mut sub = subscribe(&store, TENANT, "");
 
     // Write more than the buffer holds before the subscriber reads anything.

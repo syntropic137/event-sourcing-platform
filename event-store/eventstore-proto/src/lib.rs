@@ -21,4 +21,14 @@ pub mod capabilities {
     /// paging `ReadAll` or subscribing by global nonce never skips a nonce
     /// that commits after the cursor has passed it (#337, v0.16.0).
     pub const COMMIT_ORDERED_GLOBAL_NONCE: &str = "commit_ordered_global_nonce";
+
+    /// A subscription that cannot keep delivering (for example a failed
+    /// backend query) ends with an error status naming the resume position,
+    /// never with an empty result or a silently ended stream (#350, v0.17.0).
+    pub const SUBSCRIPTION_ERRORS_SURFACED: &str = "subscription_errors_surfaced";
+
+    /// A stored event the server cannot decode ends the subscription or read
+    /// with `DATA_LOSS` at its position; later events are never delivered past
+    /// it and it is never skipped (#351, v0.17.0).
+    pub const UNDECODABLE_EVENTS_SURFACED: &str = "undecodable_events_surfaced";
 }

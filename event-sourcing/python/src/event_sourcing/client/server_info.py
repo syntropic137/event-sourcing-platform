@@ -31,6 +31,15 @@ class Capabilities:
     ``ReadAll`` or subscribing by global nonce never skips a nonce that commits
     after the cursor has passed it (#337, v0.16.0)."""
 
+    SUBSCRIPTION_ERRORS_SURFACED = "subscription_errors_surfaced"
+    """A subscription that cannot keep delivering ends with an error status
+    naming the resume position, never an empty result or silent end
+    (#350, v0.17.0)."""
+
+    UNDECODABLE_EVENTS_SURFACED = "undecodable_events_surfaced"
+    """An undecodable stored event ends the subscription or read with
+    ``DATA_LOSS`` at its position; it is never skipped (#351, v0.17.0)."""
+
 
 @dataclass(frozen=True)
 class ServerInfo:
