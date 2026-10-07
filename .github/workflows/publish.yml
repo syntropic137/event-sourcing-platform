@@ -2,11 +2,12 @@ name: Publish to GitHub Packages
 
 # Releases created by release-tag.yml use GITHUB_TOKEN, which does not fire
 # `release` events, so that workflow dispatches this one with `tag` set and
-# `--ref <tag>`. Manually created releases still trigger it via `created`.
-# Publishing skips a version that already exists, so both paths are safe.
+# `--ref <tag>`. Manually created releases still trigger it via `published`
+# (not `created`, which misses drafts published later). Publishing skips a
+# version that already exists and runs serialized, so both paths are safe.
 on:
   release:
-    types: [created]
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -21,6 +22,11 @@ on:
 # Least-privilege default — jobs declare write access explicitly.
 permissions:
   contents: read
+
+# One publish at a time so the "already published?" check cannot race.
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
 
 jobs:
   validate:
@@ -44,6 +50,11 @@ jobs:
           if [ "$EVENT_NAME" = "release" ]; then
             TAG_NAME="$RELEASE_TAG"
           elif [ -n "$INPUT_TAG" ]; then
+            # The build comes from the checked-out ref, so it must be the tag.
+            if [ "$GITHUB_REF" != "refs/tags/${INPUT_TAG}" ]; then
+              echo "Dispatch with --ref ${INPUT_TAG} (got ${GITHUB_REF})"
+              exit 1
+            fi
             TAG_NAME="$INPUT_TAG"
           else
             TAG_NAME=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")

@@ -79,6 +79,11 @@ jobs:
             VERSION="$RELEASE_TAG"
           else
             VERSION="$INPUT_VERSION"
+            # A release version must be built from its own tag.
+            if [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "$GITHUB_REF" != "refs/tags/${VERSION}" ]]; then
+              echo "Dispatch with --ref ${VERSION} (got ${GITHUB_REF})"
+              exit 1
+            fi
           fi
           # Strip 'v' prefix for semver-only contexts
           SEMVER="${VERSION#v}"
