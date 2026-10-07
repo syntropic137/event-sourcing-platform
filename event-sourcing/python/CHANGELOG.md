@@ -15,9 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subscribed types, so an evolved type with no upcaster no longer halts
   projections that do not handle it. New `Upcasters.target()`.
 - A ProcessManager that failed live event N and recovered it after a
-  re-plan with head N (a reconnect) stayed catching up until N+1, so its
-  `process_pending()` never ran. Recovering at or past the head now takes the
-  track live and wakes its drains (#391).
+  re-plan with head H >= N (a reconnect) stayed catching up until H+1, so its
+  `process_pending()` never ran. Its track now goes live, and wakes its
+  drains, once it has delivered H (#391).
+- A projection rebuilt while its old track runs no longer widens that
+  track's type filter. One membership test now gates dispatch, filtering and
+  drain eligibility.
 
 ### Fixed (projection failures are never stepped over, syntropic137#1696)
 

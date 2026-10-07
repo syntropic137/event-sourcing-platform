@@ -76,9 +76,16 @@ def _event(nonce: int, event_type: str, version: int = 1) -> eventstore_pb2.Even
 HISTORY = [_event(1, "FbdWanted"), _event(2, "FbdEvolved", version=2), _event(3, "FbdWanted")]
 
 
+#: Subscriptions deliver events up to this nonce, then wait for the event.
+GATE = tuple[int, asyncio.Event]
+
+
 class _Store(eventstore_pb2_grpc.EventStoreServicer):
-    def __init__(self, events: list[eventstore_pb2.EventData]) -> None:
+    def __init__(
+        self, events: list[eventstore_pb2.EventData], gate: GATE | None = None
+    ) -> None:
         self.events = events
+        self.gate = gate
 
     async def ReadAll(  # noqa: N802 - generated gRPC method name
         self,
@@ -98,6 +105,8 @@ class _Store(eventstore_pb2_grpc.EventStoreServicer):
         ],
     ) -> AsyncIterator[eventstore_pb2.SubscribeResponse]:
         for data in self.events:
+            if self.gate is not None and data.meta.global_nonce > self.gate[0]:
+                await self.gate[1].wait()
             if data.meta.global_nonce >= request.from_global_nonce:
                 yield eventstore_pb2.SubscribeResponse(event=data)
         await asyncio.Event().wait()  # a live subscription stays open
@@ -105,10 +114,12 @@ class _Store(eventstore_pb2_grpc.EventStoreServicer):
 
 @contextlib.asynccontextmanager
 async def _serving(
-    events: list[eventstore_pb2.EventData], upcasters: Upcasters | None = None
+    events: list[eventstore_pb2.EventData],
+    upcasters: Upcasters | None = None,
+    gate: GATE | None = None,
 ) -> AsyncIterator[GrpcEventStoreClient]:
     server = grpc.aio.server()
-    eventstore_pb2_grpc.add_EventStoreServicer_to_server(_Store(events), server)
+    eventstore_pb2_grpc.add_EventStoreServicer_to_server(_Store(events, gate), server)
     port = server.add_insecure_port("127.0.0.1:0")
     await server.start()
     grpc_client = GrpcEventStoreClient(f"127.0.0.1:{port}", upcasters=upcasters)
@@ -276,3 +287,35 @@ async def test_a_projection_held_off_the_track_no_longer_widens_its_filter(
         await asyncio.gather(running, return_exceptions=True)
 
     assert wanted.applied == [1, 3]
+
+
+async def test_a_rebuilt_member_no_longer_widens_its_old_tracks_filter() -> None:
+    """Rebuilt mid-track, a member is stale there: its types stop being decoded there."""
+    released = asyncio.Event()
+    evolved, wanted = EvolvedProjection(), WantedProjection()
+    async with _serving(HISTORY, gate=(1, released)) as client:
+        coordinator = SubscriptionCoordinator(
+            event_store=client,
+            checkpoint_store=MemoryCheckpointStore(),
+            projections=[evolved, wanted],
+            replay_concurrency=1,  # both replay on one track
+        )
+        running = asyncio.create_task(coordinator.start())
+        try:
+            async with asyncio.timeout(TIMEOUT_S):
+                while 1 not in wanted.applied or 1 not in evolved.applied:
+                    await asyncio.sleep(0.01)
+                # Stale on the running track from here; fed by the next plan.
+                await coordinator.rebuild_projection("evolved")
+                released.set()
+                while 3 not in wanted.applied:
+                    assert not running.done(), running
+                    await asyncio.sleep(0.01)
+            assert coordinator.halted is None
+        finally:
+            await coordinator.stop()
+            running.cancel()
+            await asyncio.gather(running, return_exceptions=True)
+
+    assert wanted.applied == [1, 3]
+    assert evolved.applied == []  # cleared by the rebuild, not fed since
