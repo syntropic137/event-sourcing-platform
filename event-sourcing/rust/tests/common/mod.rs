@@ -107,10 +107,19 @@ impl FaultyPort {
     }
 }
 
-fn take(counter: &AtomicU32) -> bool {
-    counter
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-        .is_ok()
+/// Decrement `counter` if it is positive; true if it was decremented.
+///
+/// Explicit CAS loop rather than `fetch_update`, which newer toolchains
+/// deprecate in favor of `try_update` (absent on older ones).
+pub fn take(counter: &AtomicU32) -> bool {
+    let mut current = counter.load(Ordering::SeqCst);
+    while current > 0 {
+        match counter.compare_exchange(current, current - 1, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
+    false
 }
 
 #[async_trait]
