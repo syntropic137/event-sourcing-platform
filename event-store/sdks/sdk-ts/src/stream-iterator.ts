@@ -10,6 +10,8 @@ export interface ReadableCall {
   cancel(): void;
   pause?(): unknown;
   resume?(): unknown;
+  /** Messages still queued inside the Readable (not yet emitted as `data`). */
+  readonly readableLength?: number;
 }
 
 /** Pause the call when this many messages are buffered and unread. */
@@ -53,7 +55,11 @@ export function streamToAsyncIterator<T>(call: ReadableCall): AsyncIterableItera
       waiters.shift()!.resolve({ value: buffer.shift() as T, done: false });
     }
     maybeResume();
-    if (waiters.length > 0 && terminal && buffer.length === 0) {
+    // grpc-js emits `error` as soon as the status arrives, while messages may
+    // still sit in the Readable's own buffer (e.g. while paused). Deliver the
+    // terminal outcome only once those have been emitted too.
+    const drained = buffer.length === 0 && (call.readableLength ?? 0) === 0;
+    if (waiters.length > 0 && terminal && drained) {
       finished = true;
       const first = waiters.shift()!;
       if (terminal.kind === "error") first.reject(terminal.error);
@@ -74,11 +80,18 @@ export function streamToAsyncIterator<T>(call: ReadableCall): AsyncIterableItera
   call.on("error", (error: unknown) => {
     if (finished || terminal) return;
     terminal = { kind: "error", error };
+    // Let anything still queued in the Readable flow out before the error.
+    if (paused) {
+      paused = false;
+      call.resume?.();
+    }
     settle();
   });
   call.on("end", () => {
-    if (finished || terminal) return;
-    terminal = { kind: "end" };
+    if (finished) return;
+    // After an error, `end` still marks the Readable as drained: keep the
+    // error as the outcome, but settle now that nothing more can arrive.
+    if (!terminal) terminal = { kind: "end" };
     settle();
   });
 
