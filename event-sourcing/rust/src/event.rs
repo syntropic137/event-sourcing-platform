@@ -2,7 +2,7 @@
 //!
 //! # Wire format
 //!
-//! Events are stored in the cross-language envelope of ADR-026 (see
+//! Events are stored in the cross-language envelope of ADR-027 (see
 //! [`crate::wire`]): the payload is a JSON object holding only the event's
 //! fields, and the event type and schema version live in metadata. This is
 //! what the TypeScript and Python SDKs write, so any SDK can read any stream.
@@ -106,7 +106,7 @@ pub trait DomainEvent: Debug + Clone + Send + Sync + Sized {
 /// stream is shared with code that uses other field names. Do not use
 /// `#[serde(deny_unknown_fields)]` on events read from TypeScript streams:
 /// the TypeScript SDK currently also writes its `eventType` and
-/// `schemaVersion` class fields into the payload (ADR-026).
+/// `schemaVersion` class fields into the payload (ADR-027).
 ///
 /// Every `EventSchema` is a [`DomainEvent`] on its own, which is handy in
 /// projections (`recorded.decode::<MoneyDeposited>()`).

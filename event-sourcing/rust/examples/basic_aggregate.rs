@@ -20,7 +20,7 @@ struct User {
 }
 
 // Events that can happen to a user. Each event is a struct whose fields are
-// the stored JSON payload; event type and version are metadata (ADR-026).
+// the stored JSON payload; event type and version are metadata (ADR-027).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UserCreated {
     id: String,

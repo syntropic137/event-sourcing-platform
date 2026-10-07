@@ -17,7 +17,7 @@ The SDK is alpha: breaking changes may land in minor versions and are listed und
 
 - Checkpointed `ProjectionRunner` (#353): catch-up then live, persisted resume per `CheckpointKey` (tenant, projection name, version, feed), atomic read model + checkpoint commits via `ProjectionStore` (`InMemoryProjectionStore`, `PostgresProjectionStore` behind the `postgres` feature), `ExternalCheckpoints` for idempotent external read models, per-key `rebuild`, `LiveProcessor` for live-only side effects, `Error::ProjectionFailed` and `Error::OutOfOrderDelivery`.
 
-- Cross-language event envelope (ADR-026, #371): events are written and read exactly as the TypeScript and Python SDKs do (flat JSON body; `event_type`/`event_version` in metadata), verified by golden fixtures from the real TS/Python encoders and live round trips (`make test-xlang`).
+- Cross-language event envelope (ADR-027, #371): events are written and read exactly as the TypeScript and Python SDKs do (flat JSON body; `event_type`/`event_version` in metadata), verified by golden fixtures from the real TS/Python encoders and live round trips (`make test-xlang`).
 - `EventSchema` (per-event struct with `EVENT_TYPE`/`EVENT_VERSION`) and the `event_enum!` macro, which generates dispatch-on-type encode/decode with compile-time checks for duplicate `(type, version)` pairs and invalid names (#371).
 - `upcast::Upcasters` (`register`, `rename`, `upcast(event_type, version, Value)`), applied by `EventStoreRepository::with_upcasters` on load and `ProjectionRunner::with_upcasters` before routing (#371).
 - `RecordedEvent::decode::<E: DomainEvent>()` (dispatching), `decode_with(&Upcasters)`, `payload_json::<T>()` (raw) (#371).

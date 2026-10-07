@@ -101,7 +101,7 @@ const DEFAULT_PAGE_SIZE: u32 = 500;
 /// Streams are addressed by `(tenant_id, aggregate_id)`; aggregate IDs must be
 /// unique within a tenant across aggregate types.
 ///
-/// Events are written and read in the cross-language envelope of ADR-026
+/// Events are written and read in the cross-language envelope of ADR-027
 /// ([`crate::wire`]): the JSON payload holds only the event's fields, and
 /// `event_type`, `event_version` and the aggregate's
 /// [`AGGREGATE_TYPE`](Aggregate::AGGREGATE_TYPE) are metadata. Streams are

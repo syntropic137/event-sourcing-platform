@@ -4,7 +4,7 @@
 //! in Rust applications. It builds on top of the event-store gRPC API to provide
 //! developer-friendly APIs for aggregates, commands, events, and repositories.
 //!
-//! Events use the cross-language envelope of ADR-026 ([`wire`]): streams
+//! Events use the cross-language envelope of ADR-027 ([`wire`]): streams
 //! written by this SDK are readable by the TypeScript and Python SDKs, and
 //! vice versa.
 //!
@@ -108,7 +108,7 @@
 //!   concurrency, idempotent retry of unknown-outcome saves
 //! - [`projection`] - Checkpointed projection runner (catch-up, live, resume,
 //!   rebuild) with transactional and external checkpoint stores
-//! - [`wire`] - The cross-language event envelope (ADR-026) shared with the
+//! - [`wire`] - The cross-language event envelope (ADR-027) shared with the
 //!   TypeScript and Python SDKs
 //! - [`upcast`] - Upcasters that migrate stored events to the current schema
 //! - [`client`] - gRPC event store client (layered on `eventstore-sdk-rs`) and

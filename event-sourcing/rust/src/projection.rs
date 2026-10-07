@@ -123,7 +123,7 @@ impl fmt::Display for CheckpointKey {
 /// An event as recorded in the store, with an untyped payload.
 ///
 /// Decode it with [`decode`](Self::decode), which dispatches on
-/// `event_type` and `event_version` (ADR-026). Inside a
+/// `event_type` and `event_version` (ADR-027). Inside a
 /// [`ProjectionRunner`] configured with
 /// [`with_upcasters`](ProjectionRunner::with_upcasters), the event has already
 /// been upcast: type, version and payload are the chain's result.

@@ -290,3 +290,6 @@ worktrees/
 
 # Agentic session artifacts (written by Claude CLI / agentic-primitives)
 .agentic/
+
+# Benchmark output (event-store/scripts/bench-postgres.sh)
+bench-results/

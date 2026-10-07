@@ -1,4 +1,4 @@
-//! Golden cross-language tests (ADR-026).
+//! Golden cross-language tests (ADR-027).
 //!
 //! `tests/fixtures/xlang/{typescript,python}.json` hold the protobuf
 //! `AppendRequest` bytes produced by the real TypeScript and Python SDK
@@ -61,7 +61,7 @@ fn fixtures() -> Vec<Fixture> {
     all
 }
 
-/// Events a producer writes: Python cannot write v2 yet (ADR-026).
+/// Events a producer writes: Python cannot write v2 yet (ADR-027).
 fn expected(f: &Fixture) -> Vec<AccountEvent> {
     let mut events = fixture_events(&f.request.aggregate_id);
     events.truncate(f.request.events.len());
@@ -185,7 +185,7 @@ async fn rust_repository_loads_fixture_streams() {
 }
 
 /// Keys the TypeScript SDK echoes from its event class into the payload
-/// (known deviation, ADR-026). Not part of the canonical body.
+/// (known deviation, ADR-027). Not part of the canonical body.
 const TS_ECHO_KEYS: [&str; 2] = ["eventType", "schemaVersion"];
 
 #[tokio::test]

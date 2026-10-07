@@ -1,4 +1,4 @@
-# ADR-026: Cross-Language Event Envelope
+# ADR-027: Cross-Language Event Envelope
 
 **Status:** Accepted
 **Date:** 2026-10-06

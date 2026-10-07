@@ -82,7 +82,7 @@ pub enum Error {
 
     /// An event cannot be written in the cross-language envelope (invalid
     /// `event_type`, `event_version` 0, or a payload that is not a JSON
-    /// object). See ADR-026.
+    /// object). See ADR-027.
     #[error("Invalid event: {message}")]
     InvalidEvent { message: String },
 

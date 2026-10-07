@@ -1,4 +1,4 @@
-//! The cross-language event envelope (ADR-026).
+//! The cross-language event envelope (ADR-027).
 //!
 //! Every SDK (TypeScript, Python, Rust) writes and reads events in one
 //! encoding, so any SDK can read any stream:

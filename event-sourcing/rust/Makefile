@@ -49,7 +49,7 @@ test-postgres:
 	@test -n "$$TEST_DATABASE_URL" || { echo "TEST_DATABASE_URL must be set"; exit 1; }
 	cargo test --features postgres --tests
 
-# Live cross-language round trips (ADR-026): TypeScript/Python write, Rust
+# Live cross-language round trips (ADR-027): TypeScript/Python write, Rust
 # reads, and back. Needs node (after `pnpm install` at the repo root) and uv.
 test-xlang:
 	cargo test --test xlang_live -- --ignored

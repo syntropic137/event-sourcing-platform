@@ -20,7 +20,7 @@ The Rust event sourcing SDK (`event-sourcing/rust`, crate `event-sourcing-rust`)
 
 ## Events and aggregates
 
-Events use the cross-language envelope (ADR-026): the stored payload is a JSON object with only the event's fields, and `event_type` and `event_version` are event metadata. The TypeScript and Python SDKs use the same envelope, so any SDK can read any stream.
+Events use the cross-language envelope (ADR-027): the stored payload is a JSON object with only the event's fields, and `event_type` and `event_version` are event metadata. The TypeScript and Python SDKs use the same envelope, so any SDK can read any stream.
 
 ```rust
 use event_sourcing_rust::prelude::*;

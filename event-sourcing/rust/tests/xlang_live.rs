@@ -1,4 +1,4 @@
-//! Live cross-language round trips against a real event store (ADR-026):
+//! Live cross-language round trips against a real event store (ADR-027):
 //! TypeScript and Python write, Rust reads; Rust writes, TypeScript and
 //! Python read. Uses the real SDKs through `tests/xlang/ts_peer.cjs` and
 //! `tests/xlang/py_peer.py`.
@@ -116,7 +116,7 @@ async fn rust_writes_typescript_reads() {
         assert_eq!(got["aggregate_type"], "Account");
         assert_eq!(got["content_type"], "application/json");
         let mut data = got["data"].clone();
-        // The TS event classes echo these fields (ADR-026, known deviation).
+        // The TS event classes echo these fields (ADR-027, known deviation).
         data.as_object_mut().unwrap().remove("eventType");
         data.as_object_mut().unwrap().remove("schemaVersion");
         assert_eq!(data, body(want));

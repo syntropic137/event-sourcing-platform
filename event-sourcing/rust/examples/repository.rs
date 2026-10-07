@@ -15,7 +15,7 @@ use event_sourcing_rust::prelude::*;
 
 // Each event is a struct; its fields are the JSON payload. The event type and
 // version go to event metadata, so TypeScript and Python services can read
-// these streams too (ADR-026).
+// these streams too (ADR-027).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CounterCreated {
     id: String,

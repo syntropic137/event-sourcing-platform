@@ -39,7 +39,7 @@ enum OrderStatus {
 }
 
 // Order events: one struct per event; fields are the stored JSON payload,
-// event type and version are metadata (ADR-026).
+// event type and version are metadata (ADR-027).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OrderCreated {
     id: String,

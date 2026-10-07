@@ -1,5 +1,5 @@
 //! Fixture domain shared with `tests/xlang/ts_peer.cjs` and
-//! `tests/xlang/py_peer.py` (ADR-026). Keep the three in sync.
+//! `tests/xlang/py_peer.py` (ADR-027). Keep the three in sync.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -76,7 +76,7 @@ impl Aggregate for Account {
 pub const NOTE: &str = "caf\u{e9} \u{2615} \"quoted\"";
 
 /// The events every peer writes for aggregate `id`. Python writes only the
-/// first two (it cannot write version 2 yet, see ADR-026).
+/// first two (it cannot write version 2 yet, see ADR-027).
 pub fn fixture_events(id: &str) -> Vec<AccountEvent> {
     vec![
         AccountOpened {

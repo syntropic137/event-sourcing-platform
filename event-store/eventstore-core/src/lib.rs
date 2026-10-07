@@ -1,4 +1,5 @@
 pub mod errors;
+pub mod fingerprint;
 pub mod trait_event_store;
 pub mod types;
 

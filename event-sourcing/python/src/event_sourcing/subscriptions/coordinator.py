@@ -28,6 +28,7 @@ from event_sourcing.core.checkpoint import (
     ProjectionCheckpointStore,
     ProjectionResult,
 )
+from event_sourcing.core.errors import UndecodableEventError
 from event_sourcing.core.process_manager import ProcessManager
 from event_sourcing.subscriptions.drain import ProcessManagerDrain
 
@@ -470,9 +471,21 @@ class SubscriptionCoordinator:
         from_global_nonce is inclusive, so a backwards read returns events
         with global_nonce <= from_global_nonce; 0 would return nothing useful.
         """
-        head_events, _is_end, _next = await self._event_store.read_all(
-            from_global_nonce=sys.maxsize, max_count=1, forward=False,
-        )
+        try:
+            head_events, _is_end, _next = await self._event_store.read_all(
+                from_global_nonce=sys.maxsize, max_count=1, forward=False,
+            )
+        except UndecodableEventError as e:
+            # The probe reads only the highest row, so the undecodable event
+            # IS the head. Its position is enough for the boundary, and lets
+            # projections whose checkpoint an operator moved past it resume
+            # (ADR-026). Anyone still before it hits the error again on
+            # subscribe, which is the intended stop.
+            logger.warning(
+                "Head event is undecodable; using its position as the live boundary",
+                extra={"global_nonce": e.global_nonce},
+            )
+            return e.global_nonce
         if head_events and head_events[0].metadata.global_nonce is not None:
             return head_events[0].metadata.global_nonce
         return 0

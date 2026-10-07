@@ -1,0 +1,53 @@
+name: Recovery Drill
+
+# Destructive restart / outage / backup-restore drills for the Postgres event
+# store (#355, docs/operations/BACKUP-RESTORE.md). Slow, so not part of the
+# per-PR CI: runs nightly and on demand. Every drill creates and removes its
+# own disposable Postgres containers on the runner.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 4 * * *' # Nightly at 04:23 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  recovery_drill:
+    name: event-store • recovery drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: "event-store -> target"
+          shared-key: "event-store"
+          cache-targets: true
+
+      - name: Pre-pull Postgres image
+        run: docker pull postgres:15
+
+      - name: Recovery drill
+        run: make -C event-store recovery-drill DRILL_ARGS="--nocapture"
+        env:
+          DRILL_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload event-store logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: recovery-drill-logs
+          path: /tmp/esp-recovery-drill-logs/
+          if-no-files-found: ignore

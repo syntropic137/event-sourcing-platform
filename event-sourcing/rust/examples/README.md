@@ -9,7 +9,7 @@ This directory contains Rust examples demonstrating event sourcing patterns with
 **Focus:** Basic aggregate pattern with command handlers
 
 Demonstrates:
-- One struct per event (`EventSchema`) grouped with `event_enum!`; payloads use the cross-language envelope (ADR-026)
+- One struct per event (`EventSchema`) grouped with `event_enum!`; payloads use the cross-language envelope (ADR-027)
 - `Aggregate` trait with a stable `AGGREGATE_TYPE`, for state management
 - `AggregateRoot` trait for command handling
 - Business validation in `handle_command()`

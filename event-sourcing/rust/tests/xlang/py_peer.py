@@ -1,4 +1,4 @@
-"""Cross-language peer for the Rust SDK wire-format tests (ADR-026).
+"""Cross-language peer for the Rust SDK wire-format tests (ADR-027).
 
 Uses the real Python SDK (aggregate -> EventStoreRepository ->
 GrpcEventStoreClient) so the bytes are exactly what a Python application
@@ -29,7 +29,7 @@ from event_sourcing.decorators.events import event
 
 
 # Fixture domain (mirrors tests/xlang_golden.rs). All v1: the Python client
-# currently writes event_version=1 for every event (see ADR-026).
+# currently writes event_version=1 for every event (see ADR-027).
 @event("AccountOpened", "v1")
 class AccountOpened(DomainEvent):
     event_type: ClassVar[str] = "AccountOpened"

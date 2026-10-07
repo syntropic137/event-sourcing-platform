@@ -527,7 +527,7 @@ async fn execute_is_atomic_when_an_event_fails_to_apply() {
 }
 
 // ---------------------------------------------------------------------------
-// Wire format (ADR-026) and upcasting
+// Wire format (ADR-027) and upcasting
 // ---------------------------------------------------------------------------
 
 async fn read_raw(store: &dyn EventStorePort, tenant: &str, id: &str) -> Vec<proto::EventData> {

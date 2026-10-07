@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Cross-language peer for the Rust SDK wire-format tests (ADR-026).
+// Cross-language peer for the Rust SDK wire-format tests (ADR-027).
 //
 // Uses the real TypeScript SDK (aggregate -> EventStoreRepository ->
 // GrpcEventStoreAdapter -> @eventstore/sdk-ts) so the bytes are exactly what
