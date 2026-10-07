@@ -156,3 +156,19 @@ class ConcurrencyErrorDetail(_message.Message):
     actual_last_aggregate_nonce: int
     actual_last_global_nonce: int
     def __init__(self, tenant_id: _Optional[str] = ..., aggregate_id: _Optional[str] = ..., actual_last_aggregate_nonce: _Optional[int] = ..., actual_last_global_nonce: _Optional[int] = ...) -> None: ...
+
+class GetServerInfoRequest(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class GetServerInfoResponse(_message.Message):
+    __slots__ = ("server_version", "api_version", "backend", "capabilities")
+    SERVER_VERSION_FIELD_NUMBER: _ClassVar[int]
+    API_VERSION_FIELD_NUMBER: _ClassVar[int]
+    BACKEND_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
+    server_version: str
+    api_version: str
+    backend: str
+    capabilities: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, server_version: _Optional[str] = ..., api_version: _Optional[str] = ..., backend: _Optional[str] = ..., capabilities: _Optional[_Iterable[str]] = ...) -> None: ...
