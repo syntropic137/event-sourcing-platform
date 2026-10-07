@@ -49,16 +49,19 @@ test-postgres:
 	@test -n "$$TEST_DATABASE_URL" || { echo "TEST_DATABASE_URL must be set"; exit 1; }
 	cargo test --features postgres --tests
 
-# Live cross-language round trips (ADR-027): TypeScript/Python write, Rust
-# reads, and back. Needs node (after `pnpm install` at the repo root) and uv.
+# Live cross-language round trips (ADR-027) in all six directions between
+# TypeScript, Python and Rust. Needs node (after `pnpm install` at the repo
+# root) and uv.
 test-xlang:
 	cargo test --test xlang_live -- --ignored
 
-# Regenerate the golden fixtures from the real TypeScript and Python encoders.
-# The envelope is a one-way door: review any diff in tests/fixtures/xlang.
+# Regenerate the golden fixtures from the real TypeScript, Python and Rust
+# encoders (typescript-legacy.json is frozen). The envelope is a one-way door:
+# review any diff in tests/fixtures/xlang.
 test-xlang-fixtures:
 	node tests/xlang/ts_peer.cjs capture tests/fixtures/xlang/typescript.json
 	uv run --quiet --project ../python --extra grpc python tests/xlang/py_peer.py capture tests/fixtures/xlang/python.json
+	XLANG_UPDATE_FIXTURES=1 cargo test --test xlang_golden rust_fixture_is_current
 
 qa: qa-fast
 	@echo "⚠️  The slow tests have NOT run. For full QA, run: make qa-full"
