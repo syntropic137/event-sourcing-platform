@@ -76,6 +76,28 @@ qa: qa-fast
 qa-full: fmt clippy check test-full coverage-text
 	@echo "✅ Full QA passed"
 
+# Recovery drills (#355, docs/operations/BACKUP-RESTORE.md): SIGKILL the
+# eventstore-bin process around appends, cut Postgres connectivity during
+# replay/live consumption, pg_dump/pg_restore into a fresh instance. Every
+# drill creates and removes its own Docker containers (label
+# esp-recovery-drill=<run id>). Slow (minutes), so not part of qa/qa-full.
+# Extra test-harness args: make recovery-drill DRILL_ARGS="--nocapture"
+DRILL_TESTS := --test drill_restart --test drill_connectivity --test drill_backup
+.PHONY: recovery-drill recovery-drill-clean
+recovery-drill:
+	@command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 || { echo "Docker is required for recovery drills"; exit 2; }
+	@run_id="$${DRILL_RUN_ID:-drill-$$(date +%s)-$$$$}"; status=0; \
+	 echo "Recovery drill run id: $$run_id"; \
+	 DRILL_RUN_ID="$$run_id" cargo test -p eventstore-bin $(DRILL_TESTS) -- --ignored --test-threads=1 $(DRILL_ARGS) || status=$$?; \
+	 ids=$$(docker ps -aq --filter "label=esp-recovery-drill=$$run_id"); \
+	 if [ -n "$$ids" ]; then echo "Removing leftover drill containers: $$ids"; docker rm -f -v $$ids >/dev/null; fi; \
+	 exit $$status
+
+# Remove containers left by any interrupted drill run (label-scoped).
+recovery-drill-clean:
+	@ids=$$(docker ps -aq --filter label=esp-recovery-drill); \
+	 if [ -n "$$ids" ]; then docker rm -f -v $$ids; else echo "No drill containers"; fi
+
 # Install helper for coverage tool
 cov-setup:
 	@if ! command -v cargo-llvm-cov >/dev/null 2>&1; then \
