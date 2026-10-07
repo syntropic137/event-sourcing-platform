@@ -85,7 +85,13 @@ impl<'a> ProjectionScanner<'a> {
     /// Parse projection metadata from a file
     fn parse_projection(&self, file_path: &Path, file_name: &str) -> Result<Option<Projection>> {
         // Read file content to extract projection class name and metadata
-        let content = fs::read_to_string(file_path)?;
+        let mut content = fs::read_to_string(file_path)?;
+        // A generic projection.py that only re-exports the real class from
+        // elsewhere (`from pkg.module import FooProjection`) describes nothing
+        // itself; read the module it points at instead.
+        if let Some(source) = Self::resolve_python_reexport(&content, file_path) {
+            content = fs::read_to_string(source)?;
+        }
         let line_count = content.lines().count();
 
         // Extract projection name from file name or class name in content
@@ -105,6 +111,29 @@ impl<'a> ProjectionScanner<'a> {
             context: None, // Will be set by DomainScanner if in a context
             line_count,
         }))
+    }
+
+    /// Resolve a Python shim that defines no projection class but imports one.
+    ///
+    /// Returns the module file named by the first absolute
+    /// `from a.b.c import ...XProjection...`, found by trying `a/b/c.py` under
+    /// each ancestor of the shim. `None` when the file defines its own
+    /// projection class or the module cannot be found.
+    fn resolve_python_reexport(content: &str, file_path: &Path) -> Option<std::path::PathBuf> {
+        let defines_class = Regex::new(r"(?m)^\s*class\s+\w+Projection\b").unwrap();
+        if file_path.extension()? != "py" || defines_class.is_match(content) {
+            return None;
+        }
+        let import =
+            Regex::new(r"(?m)^from\s+([A-Za-z_][\w.]*)\s+import\s+\(?([^)]*?\w+Projection\b)")
+                .unwrap();
+        let module = import.captures(content)?.get(1)?.as_str();
+        let relative = format!("{}.py", module.replace('.', "/"));
+        file_path
+            .ancestors()
+            .skip(1)
+            .map(|dir| dir.join(&relative))
+            .find(|candidate| candidate.is_file())
     }
 
     /// Extract projection name from file content or file name
@@ -359,6 +388,34 @@ mod tests {
             require_tests: true,
             adapters: vec!["rest".to_string()],
         }
+    }
+
+    #[test]
+    fn test_reexport_shim_resolves_to_the_real_projection() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        let shared = root.join("pkg/contexts/org/_shared");
+        let slice = root.join("pkg/contexts/org/slices/list_orgs");
+        fs::create_dir_all(&shared).unwrap();
+        fs::create_dir_all(&slice).unwrap();
+        fs::write(
+            shared.join("org_projection.py"),
+            "class OrgProjection:\n    async def on_org_created(self, event):\n        pass\n",
+        )
+        .unwrap();
+        fs::write(
+            slice.join("projection.py"),
+            "\"\"\"Re-exports from _shared.\"\"\"\n\nfrom pkg.contexts.org._shared.org_projection import (\n    OrgProjection,\n    get_org_projection,\n)\n",
+        )
+        .unwrap();
+
+        let scanner = ProjectionScanner::new(None, root);
+        let projections = scanner.scan().unwrap();
+
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].name, "OrgProjection");
+        assert!(projections[0].subscribed_events.contains(&"org_created".to_string()));
+        assert!(projections[0].file_path.ends_with("slices/list_orgs/projection.py"));
     }
 
     #[test]
