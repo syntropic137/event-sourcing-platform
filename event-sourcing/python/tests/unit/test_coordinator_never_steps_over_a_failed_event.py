@@ -557,8 +557,10 @@ class DroppingEventStore(LiveEventStore):
     """``drop()`` resets every open subscription at once, as a lost connection would."""
 
     _RESET = _envelope(-1)
+    _epoch = 0
 
     def drop(self) -> None:
+        self._epoch += 1
         for queue in self._listeners:
             queue.put_nowait(self._RESET)
 
@@ -566,9 +568,12 @@ class DroppingEventStore(LiveEventStore):
         queue: asyncio.Queue[EventEnvelope[DomainEvent]] = asyncio.Queue()
         self._listeners.append(queue)
         self.subscribed_from.append(from_global_nonce)
+        epoch = self._epoch
         try:
             highest = 0
             for envelope in list(self._events):
+                if self._epoch != epoch:
+                    raise ConnectionError("connection reset")
                 nonce = envelope.metadata.global_nonce or 0
                 if nonce >= from_global_nonce:
                     highest = nonce
@@ -669,3 +674,86 @@ async def test_a_manager_recovering_below_a_newer_reconnect_head_goes_live_at_it
     assert manager.failures == 1
     assert fails_at + 2 in store.subscribed_from  # the re-plan's live track
     assert manager.processed_while_held == 0
+
+
+class ScriptedProcessManager(FlakyProcessManager):
+    """Fails each event in ``fail_plan`` that many times; ``on_applied`` sees each apply."""
+
+    def __init__(self, fail_plan: dict[int, int], on_applied: Callable[[int], None]) -> None:
+        super().__init__(fails_at=0, fail_times=0)
+        self._fail_plan = dict(fail_plan)
+        self._on_applied = on_applied
+        self.drained_after_all_applied = 0
+
+    async def handle_event(
+        self,
+        envelope: EventEnvelope[DomainEvent],
+        checkpoint_store: ProjectionCheckpointStore,
+        context: DispatchContext | None = None,
+    ) -> ProjectionResult:
+        nonce = envelope.metadata.global_nonce or 0
+        await asyncio.sleep(0.05)
+        if self._fail_plan.get(nonce, 0) > 0:
+            self._fail_plan[nonce] -= 1
+            self.failures += 1
+            return ProjectionResult.FAILURE
+        result = await super().handle_event(envelope, checkpoint_store, context)
+        self._on_applied(nonce)
+        return result
+
+    async def process_pending(self) -> int:
+        if not any(self._fail_plan.values()) and self.applied:
+            self.drained_after_all_applied += 1
+        return 0
+
+
+async def _drains_after_live_failure_then(
+    fail_plan: dict[int, int], head_after_failure: int, drop_after_recovering: bool
+) -> ScriptedProcessManager:
+    """Fail live event 2, reconnect with ``head_after_failure``; return once settled."""
+    store = DroppingEventStore(history=1)
+    recovered: list[int] = []
+
+    def on_applied(nonce: int) -> None:
+        if nonce == 2 and drop_after_recovering and not recovered:
+            recovered.append(nonce)
+            store.drop()  # reset again, before the new head is delivered
+
+    manager = ScriptedProcessManager(fail_plan, on_applied)
+    coordinator = SubscriptionCoordinator(
+        event_store=store, checkpoint_store=MemoryCheckpointStore(), projections=[manager]
+    )
+    running = asyncio.create_task(coordinator.start())
+    try:
+        async with asyncio.timeout(SETTLE_TIMEOUT_S * 2):
+            await _until(lambda: 1 in manager.applied)
+            assert store.publish() == 2
+            await _until(lambda: manager.failures >= 1)  # failed live
+            while store.publish() < head_after_failure:
+                pass
+            store.drop()
+            await _until(lambda: head_after_failure in manager.applied)
+            assert coordinator.held_projections == {}
+            await coordinator.wait_for_process_managers()
+            await _until(lambda: manager.drained_after_all_applied > 0)
+    finally:
+        await coordinator.stop()
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+    return manager
+
+
+async def test_a_second_reconnect_after_recovery_keeps_the_manager_going_live_at_head() -> None:
+    """Recovered below head H, then reset again before H: the next plan still goes live at H."""
+    manager = await _drains_after_live_failure_then(
+        {2: 1}, head_after_failure=3, drop_after_recovering=True
+    )
+    assert manager.applied == [1, 2, 3]
+
+
+async def test_a_historical_failure_after_a_live_one_keeps_the_manager_going_live_at_head() -> None:
+    """Failed live 2, then failed 3 while catching up to head 4: it still goes live at 4."""
+    manager = await _drains_after_live_failure_then(
+        {2: 1, 3: 1}, head_after_failure=4, drop_after_recovering=False
+    )
+    assert manager.applied == [1, 2, 3, 4]
