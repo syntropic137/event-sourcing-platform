@@ -37,7 +37,13 @@ async def live() -> AsyncIterator[GrpcEventStoreClient]:
 async def test_live_server_reports_info_and_commit_order_guarantee(
     live: GrpcEventStoreClient,
 ) -> None:
-    info = await live.require_capabilities([Capabilities.COMMIT_ORDERED_GLOBAL_NONCE])
+    info = await live.require_capabilities(
+        [
+            Capabilities.COMMIT_ORDERED_GLOBAL_NONCE,
+            Capabilities.SUBSCRIPTION_ERRORS_SURFACED,
+            Capabilities.UNDECODABLE_EVENTS_SURFACED,
+        ]
+    )
     assert not info.is_legacy
     assert info.api_version == "eventstore.v1"
     assert info.backend in {"memory", "postgres"}

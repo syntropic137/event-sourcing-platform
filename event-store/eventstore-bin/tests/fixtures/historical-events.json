@@ -1,0 +1,51 @@
+{
+  "description": "Historical event-version fixtures for the recovery drill (#355). Payloads are raw strings so their exact bytes (whitespace, key order, non-ASCII) are part of the fixture; the store must return them unchanged. Versions: AccountOpened v1 (no currency, implies USD) and v2; FundsDeposited v1 (whole units) and v2 (minor units); FundsWithdrawn v1. Replaying v1 events requires the consumer's v1 upcasters.",
+  "append_order": [
+    ["acct-ada", 0], ["acct-zoe", 0], ["acct-ada", 1], ["acct-raj", 0],
+    ["acct-zoe", 1], ["acct-ada", 2], ["acct-raj", 1], ["acct-zoe", 2],
+    ["acct-ada", 3], ["acct-raj", 2]
+  ],
+  "streams": {
+    "acct-ada": [
+      { "event_type": "AccountOpened", "event_version": 1, "content_type": "application/json",
+        "payload": "{\"owner\":\"Ada\"}",
+        "headers": { "schema": "account.opened/1", "trace": "fixture" } },
+      { "event_type": "FundsDeposited", "event_version": 1, "content_type": "application/json",
+        "payload": "{ \"amount\": 125 }",
+        "headers": {} },
+      { "event_type": "FundsDeposited", "event_version": 2, "content_type": "application/json",
+        "payload": "{\"amount_minor\":1999,\"currency\":\"USD\"}",
+        "headers": { "schema": "funds.deposited/2" } },
+      { "event_type": "FundsWithdrawn", "event_version": 1, "content_type": "application/json",
+        "payload": "{\"amount_minor\":500}",
+        "headers": {} }
+    ],
+    "acct-zoe": [
+      { "event_type": "AccountOpened", "event_version": 2, "content_type": "application/json",
+        "payload": "{\"currency\":\"EUR\",\"owner\":\"Zoë Østergaard\"}",
+        "headers": { "schema": "account.opened/2" } },
+      { "event_type": "FundsDeposited", "event_version": 2, "content_type": "application/json",
+        "payload": "{\"amount_minor\":4200,\"currency\":\"EUR\"}",
+        "headers": {} },
+      { "event_type": "FundsWithdrawn", "event_version": 1, "content_type": "application/json",
+        "payload": "{\"amount_minor\":200}",
+        "headers": {} }
+    ],
+    "acct-raj": [
+      { "event_type": "AccountOpened", "event_version": 1, "content_type": "application/json",
+        "payload": "{\n  \"owner\": \"Raj\"\n}",
+        "headers": {} },
+      { "event_type": "FundsDeposited", "event_version": 1, "content_type": "application/json",
+        "payload": "{\"amount\":3}",
+        "headers": {} },
+      { "event_type": "FundsDeposited", "event_version": 1, "content_type": "application/json",
+        "payload": "{\"amount\":7}",
+        "headers": {} }
+    ]
+  },
+  "expected": {
+    "acct-ada": { "owner": "Ada", "currency": "USD", "balance_minor": 13999, "events_applied": 4 },
+    "acct-zoe": { "owner": "Zoë Østergaard", "currency": "EUR", "balance_minor": 4000, "events_applied": 3 },
+    "acct-raj": { "owner": "Raj", "currency": "USD", "balance_minor": 1000, "events_applied": 3 }
+  }
+}

@@ -177,7 +177,11 @@ test("non-UNIMPLEMENTED errors are not mistaken for legacy", async () => {
 test("live server advertises commit_ordered_global_nonce", { skip: !process.env.EVENTSTORE_ADDR }, async () => {
   const client = new EventStoreClientTS(process.env.EVENTSTORE_ADDR!);
   try {
-    const info = await client.requireCapabilities([Capabilities.COMMIT_ORDERED_GLOBAL_NONCE]);
+    const info = await client.requireCapabilities([
+      Capabilities.COMMIT_ORDERED_GLOBAL_NONCE,
+      Capabilities.SUBSCRIPTION_ERRORS_SURFACED,
+      Capabilities.UNDECODABLE_EVENTS_SURFACED,
+    ]);
     assert.equal(info.legacy, false);
     assert.equal(info.apiVersion, "eventstore.v1");
   } finally {

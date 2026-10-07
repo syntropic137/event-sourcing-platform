@@ -19,6 +19,17 @@ export const Capabilities = {
    * (#337, v0.16.0).
    */
   COMMIT_ORDERED_GLOBAL_NONCE: "commit_ordered_global_nonce",
+  /**
+   * A subscription that cannot keep delivering ends with an error status
+   * naming the resume position, never an empty result or silent end
+   * (#350, v0.17.0).
+   */
+  SUBSCRIPTION_ERRORS_SURFACED: "subscription_errors_surfaced",
+  /**
+   * An undecodable stored event ends the subscription or read with DATA_LOSS
+   * at its position; it is never skipped (#351, v0.17.0).
+   */
+  UNDECODABLE_EVENTS_SURFACED: "undecodable_events_surfaced",
 } as const;
 
 export interface ServerInfo {
