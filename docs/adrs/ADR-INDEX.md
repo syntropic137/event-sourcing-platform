@@ -84,7 +84,8 @@ The **Hexagonal Event-Sourced VSA** pattern combines three powerful architectura
 | [ADR-026](./ADR-026-subscription-failure-semantics.md) | Subscription Failure Semantics | ✅ Accepted | Subscribe surfaces DB failures as `UNAVAILABLE` and undecodable events as `DATA_LOSS`, then ends; at-least-once reconnect; operator recovery path |
 | [ADR-027](./ADR-027-cross-language-event-envelope.md) | **Cross-Language Event Envelope** | ✅ Accepted | **Canonical wire encoding of events shared by the TS, Python and Rust SDKs: flat JSON body, type/version in metadata, upcast then dispatch** |
 | [ADR-028](./ADR-028-append-idempotency-semantics.md) | Append Idempotency Semantics | ✅ Accepted | Idempotency key checked before the concurrency precondition; canonical batch fingerprint shared by all backends; backend conformance suite |
-| [ADR-029](./ADR-029-hash-chained-event-log.md) | Hash-Chained Event Log | 📋 Proposed | Server-computed SHA-256 link per event into its stream and tenant chains; canonical v1 encoding; verification and anchoring in SDKs (#308) |
+| [ADR-029](./ADR-029-hash-chained-event-log.md) | Hash-Chained Event Log | 📋 Proposed | Opt-in, store-wide, irreversible built-in capability: server-computed SHA-256 link per event into its stream and tenant chains; activation during a write pause with an offline per-tenant legacy seal; anchoring via an `AnchorSink` adapter trait; Rust first (#308) |
+| [ADR-030](./ADR-030-extension-model-capabilities-not-plugins.md) | Extension Model: Capabilities, Not Plugins | 📋 Proposed | No plugin framework; extensions are flag-gated built-in capabilities or app-layer patterns and adapters |
 
 ---
 
@@ -564,7 +565,7 @@ vsa validate --config vsa.yaml
 | 2026-10-06 | 2.4.0 | **Added ADR-027: Cross-Language Event Envelope (canonical event encoding across SDKs, golden fixtures)** |
 | 2026-10-06 | 2.5.0 | **Added ADR-024: nginx gateway two-port auth model for the event store's gRPC service (eventstore-bin has no authn/authz of its own)** |
 | 2026-10-07 | 2.6.0 | Updated ADR-024: TLS on the gateway's external port (#301) |
-| 2026-10-07 | 2.7.0 | Added ADR-029 (Proposed): hash-chained event log for tamper-evident integrity |
+| 2026-10-08 | 2.7.0 | Added ADR-029 (Proposed): opt-in hash-chained event log; ADR-030 (Proposed): extension model, capabilities not plugins |
 
 ---
 
