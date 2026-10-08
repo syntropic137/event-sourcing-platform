@@ -777,6 +777,14 @@ pub async fn forward_end_cursor_resumes_after_append(store: Store) {
     let tail = read_all_page(&store, &s.tenant, 0, 10, true).await;
     assert!(tail.is_end);
 
+    // Polling the tail before anything new is empty and keeps the cursor.
+    let empty = read_stream_page(&store, &s, end.next, 10, true).await;
+    assert!(empty.positions.is_empty() && empty.is_end);
+    assert_eq!(empty.next, end.next, "read_stream empty poll keeps cursor");
+    let empty = read_all_page(&store, &s.tenant, tail.next, 10, true).await;
+    assert!(empty.positions.is_empty() && empty.is_end);
+    assert_eq!(empty.next, tail.next, "read_all empty poll keeps cursor");
+
     let ack = store
         .append(s.request(PAGED_EVENTS, "", s.batch(PAGED_EVENTS, 1, "tail", 0)))
         .await

@@ -74,14 +74,17 @@ message AppendResponse {
 }
 
 // Paging (ReadStream and ReadAll): a page holds the events at positions from
-// `from_*` (inclusive) in the requested direction, at most `max_count`. To
-// read on, pass `next_from_*` back as `from_*`: it is one past the page's
-// last event (last + 1 forward, last - 1 backward), so pages never overlap
-// or skip. `is_end` is true on the page after which nothing remains in that
-// direction (an empty page included). Forward, an empty page keeps the
-// cursor, so a tail poll resumes there. Backward, start at the head with a
-// large position (positions above 2^63 - 1 clamp to it) and stop at
-// `is_end`; 0 lies before every event, so a backward read from 0 is empty.
+// `from_*` (inclusive) in the requested direction, up to the page size (see
+// each `max_count`). To read on, pass `next_from_*` back as `from_*`: it is
+// one past the page's last event (last + 1 forward, last - 1 backward), so
+// pages never overlap or skip. `is_end` is true on the page after which
+// nothing remains in that direction; that page may still hold events, so
+// process them before stopping. Forward, the final cursor (and an empty
+// page's, which keeps it) is where the next append lands, so a tail poll
+// resumes there. Backward, start at the head with a large position
+// (positions above 2^63 - 1 clamp to it) and stop at `is_end`; 0 lies before
+// every event, so a backward read from 0 is empty. Servers before #403
+// returned backward cursors one too high (overlapping by one event).
 message ReadStreamRequest {
   string tenant_id                = 1;
   string aggregate_id             = 2;
@@ -118,7 +121,7 @@ message ReadAllRequest {
 message ReadAllResponse {
   repeated EventData events       = 1;  // Events in requested order
   bool is_end                     = 2;  // True if nothing remains after this page
-  uint64 next_from_global_nonce   = 3;  // Position for next page (if !is_end)
+  uint64 next_from_global_nonce   = 3;  // from_global_nonce for the next page
 }
 
 // Attach as google.rpc.Status details on concurrency failures.

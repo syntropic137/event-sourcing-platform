@@ -312,3 +312,52 @@ async fn page_ending_before_undecodable_row_succeeds() {
         .expect_err("next stream page holds the bad row");
     assert_data_integrity_error(&err, bad);
 }
+
+/// Backward, the lookahead row is below the page: a page above an
+/// undecodable event succeeds, and the next page reports it.
+#[tokio::test]
+async fn backward_page_ending_above_undecodable_row_succeeds() {
+    let tenant = unique_tenant("lookahead-back");
+    let store = connect().await;
+    let bad = insert_row(&store, &tenant, "Order-1", 1, false).await;
+    let good = insert_row(&store, &tenant, "Order-1", 2, true).await;
+
+    let all_page = |from| proto::ReadAllRequest {
+        tenant_id: tenant.clone(),
+        from_global_nonce: from,
+        max_count: 1,
+        forward: false,
+    };
+    let page = store
+        .read_all(all_page(u64::MAX))
+        .await
+        .expect("page above the bad row");
+    assert_eq!(page.events.len(), 1);
+    assert!(!page.is_end);
+    assert_eq!(page.next_from_global_nonce, good - 1);
+    let err = store
+        .read_all(all_page(page.next_from_global_nonce))
+        .await
+        .expect_err("next page holds the bad row");
+    assert_data_integrity_error(&err, bad);
+
+    let stream_page = |from| proto::ReadStreamRequest {
+        tenant_id: tenant.clone(),
+        aggregate_id: "Order-1".into(),
+        from_aggregate_nonce: from,
+        max_count: 1,
+        forward: false,
+    };
+    let page = store
+        .read_stream(stream_page(u64::MAX))
+        .await
+        .expect("stream page above the bad row");
+    assert_eq!(page.events.len(), 1);
+    assert!(!page.is_end);
+    assert_eq!(page.next_from_aggregate_nonce, 1);
+    let err = store
+        .read_stream(stream_page(1))
+        .await
+        .expect_err("next stream page holds the bad row");
+    assert_data_integrity_error(&err, bad);
+}
