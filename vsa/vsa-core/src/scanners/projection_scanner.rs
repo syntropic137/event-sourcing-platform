@@ -86,6 +86,31 @@ impl<'a> ProjectionScanner<'a> {
     fn parse_projection(&self, file_path: &Path, file_name: &str) -> Result<Option<Projection>> {
         // Read file content to extract projection class name and metadata
         let content = fs::read_to_string(file_path)?;
+        // A generic projection.py that only re-exports the real class from
+        // elsewhere (`from pkg.module import FooProjection`) describes nothing
+        // itself; describe the imported class from the module it points at.
+        if let Some((source, class_name)) = Self::resolve_python_reexport(&content, file_path) {
+            let module = fs::read_to_string(source)?;
+            if let Some(class_source) = Self::python_class_source(&module, &class_name) {
+                // A read model declared outside the class body is only
+                // attributable to it when no other projection shares the module.
+                let read_model = self.extract_read_model(&class_source).or_else(|| {
+                    let projection_classes =
+                        Regex::new(r"(?m)^\s*class\s+\w+Projection\b").unwrap();
+                    (projection_classes.find_iter(&module).count() == 1)
+                        .then(|| self.extract_read_model(&module))
+                        .flatten()
+                });
+                return Ok(Some(Projection {
+                    name: class_name,
+                    file_path: file_path.to_path_buf(),
+                    subscribed_events: self.extract_subscribed_events(&class_source),
+                    read_model,
+                    context: None, // Will be set by DomainScanner if in a context
+                    line_count: class_source.lines().count(),
+                }));
+            }
+        }
         let line_count = content.lines().count();
 
         // Extract projection name from file name or class name in content
@@ -105,6 +130,112 @@ impl<'a> ProjectionScanner<'a> {
             context: None, // Will be set by DomainScanner if in a context
             line_count,
         }))
+    }
+
+    /// Resolve a Python shim that defines no projection class but imports one.
+    ///
+    /// Returns the module file and the class named by the first absolute
+    /// `from a.b.c import ..., XProjection` statement, the module found by
+    /// trying `a/b/c.py` under each ancestor of the shim. `None` when the file
+    /// defines its own projection class or the module cannot be found.
+    fn resolve_python_reexport(
+        content: &str,
+        file_path: &Path,
+    ) -> Option<(std::path::PathBuf, String)> {
+        let defines_class = Regex::new(r"(?m)^\s*class\s+\w+Projection\b").unwrap();
+        if file_path.extension()? != "py" || defines_class.is_match(content) {
+            return None;
+        }
+        // One `from ... import ...` statement: either a parenthesised name
+        // list, or names running to the end of the line (backslash
+        // continuations included).
+        let import = Regex::new(
+            r"(?m)^from\s+([A-Za-z_][\w.]*)\s+import\s+(?:\(([^)]*)\)|((?:[^\n\\(]|\\\n)*))",
+        )
+        .unwrap();
+        let comment = Regex::new(r"#[^\n]*").unwrap();
+        let (module, class_name) = import.captures_iter(content).find_map(|cap| {
+            let names = cap.get(2).or(cap.get(3))?.as_str().replace("\\\n", " ");
+            let names = comment.replace_all(&names, "");
+            // `FooProjection as Alias` still names the class FooProjection.
+            let class_name = names
+                .split(',')
+                .filter_map(|name| name.split_whitespace().next())
+                .find(|name| name.ends_with("Projection"))?;
+            Some((cap.get(1)?.as_str(), class_name.to_string()))
+        })?;
+        let relative = format!("{}.py", module.replace('.', "/"));
+        file_path
+            .ancestors()
+            .skip(1)
+            .map(|dir| dir.join(&relative))
+            .find(|candidate| candidate.is_file())
+            .map(|source| (source, class_name))
+    }
+
+    /// Source of `class <class_name>` in a Python module: its header (which
+    /// may span lines inside its base-class brackets) and every following
+    /// line indented deeper than it (blank and comment-only lines included).
+    /// `None` when the module does not define the class.
+    fn python_class_source(module: &str, class_name: &str) -> Option<String> {
+        let header =
+            Regex::new(&format!(r"(?m)^([ \t]*)class\s+{}\b", regex::escape(class_name))).unwrap();
+        let cap = header.captures(module)?;
+        let indent = cap.get(1)?.as_str().len();
+        let start = cap.get(0)?.start();
+        // The header ends at the first newline outside brackets that is not
+        // escaped by a backslash continuation. Brackets, quotes and
+        // backslashes inside comments and string literals are not syntax.
+        let bytes = module.as_bytes();
+        let mut depth = 0usize;
+        let mut offset = module.len();
+        let mut i = start;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+                b'\\' => i += 1,
+                b'#' => {
+                    while bytes.get(i + 1).is_some_and(|&b| b != b'\n') {
+                        i += 1;
+                    }
+                }
+                q @ (b'"' | b'\'') => {
+                    let n = if bytes[i..].starts_with(&[q; 3]) { 3 } else { 1 };
+                    let quote = &[q; 3][..n];
+                    i += n;
+                    // A single-quoted string cannot run past its line.
+                    while i < bytes.len()
+                        && !bytes[i..].starts_with(quote)
+                        && (n == 3 || bytes[i] != b'\n')
+                    {
+                        i += if bytes[i] == b'\\' { 2 } else { 1 };
+                    }
+                    if !bytes.get(i..).is_some_and(|rest| rest.starts_with(quote)) {
+                        continue;
+                    }
+                    i += n - 1;
+                }
+                b'\n' if depth == 0 => {
+                    offset = i + 1;
+                    break;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        let mut end = module.len();
+        for line in module[offset..].split_inclusive('\n') {
+            let code = line.trim_start();
+            let is_body =
+                code.is_empty() || code.starts_with('#') || line.len() - code.len() > indent;
+            if !is_body {
+                end = offset;
+                break;
+            }
+            offset += line.len();
+        }
+        Some(module[start..end].trim_end().to_string())
     }
 
     /// Extract projection name from file content or file name
@@ -359,6 +490,239 @@ mod tests {
             require_tests: true,
             adapters: vec!["rest".to_string()],
         }
+    }
+
+    #[test]
+    fn test_reexport_shim_resolves_to_the_real_projection() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        let shared = root.join("pkg/contexts/org/_shared");
+        let slice = root.join("pkg/contexts/org/slices/list_orgs");
+        fs::create_dir_all(&shared).unwrap();
+        fs::create_dir_all(&slice).unwrap();
+        fs::write(
+            shared.join("org_projection.py"),
+            "class OrgProjection:\n    async def on_org_created(self, event):\n        pass\n",
+        )
+        .unwrap();
+        fs::write(
+            slice.join("projection.py"),
+            "\"\"\"Re-exports from _shared.\"\"\"\n\nfrom pkg.contexts.org._shared.org_projection import (\n    OrgProjection,\n    get_org_projection,\n)\n",
+        )
+        .unwrap();
+
+        let scanner = ProjectionScanner::new(None, root);
+        let projections = scanner.scan().unwrap();
+
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].name, "OrgProjection");
+        assert!(projections[0].subscribed_events.contains(&"org_created".to_string()));
+        assert!(projections[0].file_path.ends_with("slices/list_orgs/projection.py"));
+    }
+
+    #[test]
+    fn test_reexport_shim_ignores_unrelated_imports_before_the_projection() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        let shared = root.join("pkg/org/_shared");
+        let slice = root.join("pkg/org/slices/list_orgs");
+        fs::create_dir_all(&shared).unwrap();
+        fs::create_dir_all(&slice).unwrap();
+        fs::write(
+            shared.join("org_projection.py"),
+            "class OrgProjection:\n    async def on_org_created(self, event):\n        pass\n",
+        )
+        .unwrap();
+        fs::write(
+            slice.join("projection.py"),
+            "from __future__ import annotations\n\nfrom pkg.org._shared.org_projection import OrgProjection\n",
+        )
+        .unwrap();
+
+        let projections = ProjectionScanner::new(None, root).scan().unwrap();
+
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].name, "OrgProjection");
+        assert_eq!(projections[0].subscribed_events, vec!["org_created".to_string()]);
+    }
+
+    #[test]
+    fn test_reexport_shim_takes_only_the_imported_class_from_its_module() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        let shared = root.join("pkg/org/_shared");
+        let slice = root.join("pkg/org/slices/list_orgs");
+        fs::create_dir_all(&shared).unwrap();
+        fs::create_dir_all(&slice).unwrap();
+        fs::write(
+            shared.join("projections.py"),
+            concat!(
+                "class OtherProjection:\n",
+                "    read_model: Type[OtherSummary]\n",
+                "\n",
+                "    async def on_member_added(self, event):\n",
+                "        pass\n",
+                "\n",
+                "\n",
+                "class OrgProjection:\n",
+                "    read_model: Type[OrgSummary]\n",
+                "\n",
+                "    # handlers\n",
+                "    async def on_org_created(self, event):\n",
+                "        pass\n",
+                "\n",
+                "    async def on_org_renamed(self, event):\n",
+                "        pass\n",
+                "\n",
+                "\n",
+                "def get_org_projection():\n",
+                "    def on_unrelated_thing(event):\n",
+                "        pass\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            slice.join("projection.py"),
+            "from pkg.org._shared.projections import (\n    get_org_projection,\n    OrgProjection,  # re-exported\n)\n",
+        )
+        .unwrap();
+
+        let projections = ProjectionScanner::new(None, root).scan().unwrap();
+
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].name, "OrgProjection");
+        assert_eq!(
+            projections[0].subscribed_events,
+            vec!["org_created".to_string(), "org_renamed".to_string()]
+        );
+        assert_eq!(projections[0].read_model.as_deref(), Some("OrgSummary"));
+        assert!(projections[0].file_path.ends_with("slices/list_orgs/projection.py"));
+    }
+
+    #[test]
+    fn test_reexport_shim_reads_past_a_multiline_class_header() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        let shared = root.join("pkg/org/_shared");
+        let slice = root.join("pkg/org/slices/list_orgs");
+        fs::create_dir_all(&shared).unwrap();
+        fs::create_dir_all(&slice).unwrap();
+        fs::write(
+            shared.join("org_projection.py"),
+            concat!(
+                "class OrgProjection(\n",
+                "    AutoDispatchProjection,\n",
+                "):\n",
+                "    async def on_org_created(self, event):\n",
+                "        pass\n",
+                "\n",
+                "\n",
+                "class OtherProjection(\n",
+                "    AutoDispatchProjection,\n",
+                "):\n",
+                "    async def on_member_added(self, event):\n",
+                "        pass\n",
+                "\n",
+                "\n",
+                "async def on_unrelated_thing(event):\n",
+                "    pass\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            slice.join("projection.py"),
+            "from pkg.org._shared.org_projection import (\n    OrgProjection,\n)\n",
+        )
+        .unwrap();
+
+        let projections = ProjectionScanner::new(None, root).scan().unwrap();
+
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].name, "OrgProjection");
+        assert_eq!(projections[0].subscribed_events, vec!["org_created".to_string()]);
+        assert!(projections[0].file_path.ends_with("slices/list_orgs/projection.py"));
+    }
+
+    #[test]
+    fn test_reexport_shim_ignores_brackets_in_a_class_header_comment() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        let shared = root.join("pkg/org/_shared");
+        let slice = root.join("pkg/org/slices/list_orgs");
+        fs::create_dir_all(&shared).unwrap();
+        fs::create_dir_all(&slice).unwrap();
+        fs::write(
+            shared.join("org_projection.py"),
+            concat!(
+                "class OrgProjection:  # (legacy consumer\n",
+                "    async def on_org_created(self, event):\n",
+                "        pass\n",
+                "\n",
+                "\n",
+                "class OtherProjection(\n",
+                "    AutoDispatchProjection,\n",
+                "):\n",
+                "    async def on_member_added(self, event):\n",
+                "        pass\n",
+                "\n",
+                "\n",
+                "async def on_unrelated_thing(event):\n",
+                "    pass\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            slice.join("projection.py"),
+            "from pkg.org._shared.org_projection import (\n    OrgProjection,\n)\n",
+        )
+        .unwrap();
+
+        let projections = ProjectionScanner::new(None, root).scan().unwrap();
+
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].name, "OrgProjection");
+        assert_eq!(projections[0].subscribed_events, vec!["org_created".to_string()]);
+        assert!(projections[0].file_path.ends_with("slices/list_orgs/projection.py"));
+    }
+
+    #[test]
+    fn test_reexport_shim_reads_a_continued_class_header_with_brackets_in_comments_and_strings() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        let shared = root.join("pkg/org/_shared");
+        let slice = root.join("pkg/org/slices/list_orgs");
+        fs::create_dir_all(&shared).unwrap();
+        fs::write(
+            shared.join("org_projection.py"),
+            concat!(
+                "class OrgProjection \\\n",
+                "(\n",
+                "    AutoDispatchProjection,  # replaces Legacy)\n",
+                "    tag=\"(#\",\n",
+                "):\n",
+                "    async def on_org_created(self, event):\n",
+                "        pass\n",
+                "\n",
+                "\n",
+                "class OtherProjection(AutoDispatchProjection):\n",
+                "    async def on_member_added(self, event):\n",
+                "        pass\n",
+            ),
+        )
+        .unwrap();
+        fs::create_dir_all(&slice).unwrap();
+        fs::write(
+            slice.join("projection.py"),
+            "from pkg.org._shared.org_projection import OrgProjection\n",
+        )
+        .unwrap();
+
+        let projections = ProjectionScanner::new(None, root).scan().unwrap();
+
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].name, "OrgProjection");
+        assert_eq!(projections[0].subscribed_events, vec!["org_created".to_string()]);
+        assert!(projections[0].file_path.ends_with("slices/list_orgs/projection.py"));
     }
 
     #[test]
