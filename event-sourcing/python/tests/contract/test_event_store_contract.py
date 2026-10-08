@@ -16,15 +16,18 @@ contract unverified, which is the gap #344 was.
 from __future__ import annotations
 
 import os
+import sys
 import uuid
 from typing import TYPE_CHECKING
 
 import pytest
 
+from event_sourcing import AggregateRoot, RepositoryFactory
 from event_sourcing.client.grpc_client import GrpcEventStoreClient
 from event_sourcing.client.memory import MemoryEventStoreClient
 from event_sourcing.core.errors import ConcurrencyConflictError, StreamAlreadyExistsError
 from event_sourcing.core.event import DomainEvent, EventEnvelope, EventMetadata
+from event_sourcing.decorators import event_sourcing_handler
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -126,3 +129,120 @@ async def test_unknown_stream_reads_empty(client: EventStoreClient) -> None:
 
     assert await client.read_events(f"Order-{aid}") == []
     assert not await client.stream_exists(f"Order-{aid}")
+
+
+# --- Paging (#405) -----------------------------------------------------------
+#
+# ReadStream returns pages; a client that reads one page and stops loads a
+# long stream truncated, and its aggregate rehydrates with the wrong state and
+# a stale version. Past the server's 1000-event page here on purpose.
+
+LONG_STREAM = 2501
+
+
+async def _append_many(client: EventStoreClient, aid: str, count: int) -> None:
+    batch = 500
+    for start in range(1, count + 1, batch):
+        envelopes = [
+            _envelope("Order", aid, nonce) for nonce in range(start, min(start + batch, count + 1))
+        ]
+        await client.append_events(f"Order-{aid}", envelopes, expected_version=start - 1)
+
+
+class _Counter(AggregateRoot[_Happened]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen = 0
+
+    def get_aggregate_type(self) -> str:
+        return "Order"
+
+    def happen(self) -> None:
+        self._raise_event(_Happened(value="more"))
+
+    @event_sourcing_handler("Happened")
+    def on_happened(self, event: _Happened) -> None:
+        self.seen += 1
+
+
+async def test_stream_past_one_page_reads_whole(client: EventStoreClient) -> None:
+    aid = _fresh_id()
+    await _append_many(client, aid, LONG_STREAM)
+
+    events = await client.read_events(f"Order-{aid}")
+    assert [e.metadata.aggregate_nonce for e in events] == list(range(1, LONG_STREAM + 1))
+
+    tail = await client.read_events(f"Order-{aid}", from_version=1000)
+    assert [e.metadata.aggregate_nonce for e in tail] == list(range(1000, LONG_STREAM + 1))
+    assert await client.stream_exists(f"Order-{aid}")
+
+
+async def test_long_aggregate_loads_whole_and_saves_at_its_version(
+    client: EventStoreClient,
+) -> None:
+    aid = _fresh_id()
+    await _append_many(client, aid, LONG_STREAM)
+    repository = RepositoryFactory(client).create_repository(_Counter, "Order")
+
+    counter = await repository.load(aid)
+    assert counter is not None
+    assert (counter.seen, counter.version) == (LONG_STREAM, LONG_STREAM)
+
+    counter.happen()
+    await repository.save(counter)  # a truncated load fails OCC here
+    reloaded = await repository.load(aid)
+    assert reloaded is not None
+    assert reloaded.version == LONG_STREAM + 1
+
+
+async def test_read_from_version_is_inclusive(client: EventStoreClient) -> None:
+    aid = _fresh_id()
+    await _append_many(client, aid, 3)
+
+    tail = await client.read_events(f"Order-{aid}", from_version=2)
+    assert [e.metadata.aggregate_nonce for e in tail] == [2, 3]
+    assert await client.read_events(f"Order-{_fresh_id()}", from_version=1) == []
+
+
+async def test_store_assigns_global_nonces(client: EventStoreClient) -> None:
+    """A caller-supplied global nonce is ignored: the store numbers events from 1."""
+    first, second = _fresh_id(), _fresh_id()
+    claimed = _envelope("Order", first, 1)
+    claimed = EventEnvelope(
+        event=claimed.event, metadata=claimed.metadata.model_copy(update={"global_nonce": 0})
+    )
+    await client.append_events(f"Order-{first}", [claimed], expected_version=0)
+    await client.append_events(
+        f"Order-{second}",
+        [_envelope("Order", second, 1), _envelope("Order", second, 2)],
+        expected_version=0,
+    )
+
+    events, _, _ = await client.read_all(from_global_nonce=0, max_count=10)
+    nonces = [e.metadata.global_nonce for e in events]
+    assert len(nonces) == 3
+    assert all(n is not None and n >= 1 for n in nonces)
+    assert nonces == sorted(set(nonces))  # unique, ascending
+
+
+@pytest.mark.parametrize("forward", [True, False])
+async def test_read_all_size_one_pages_visit_every_event_once(
+    client: EventStoreClient, forward: bool
+) -> None:
+    for _ in range(3):
+        await _append_many(client, _fresh_id(), 2)
+
+    cursor = 0 if forward else sys.maxsize
+    seen: list[int | None] = []
+    for _ in range(20):  # 6 events; a cursor that never ends fails here
+        page, is_end, cursor = await client.read_all(
+            from_global_nonce=cursor, max_count=1, forward=forward
+        )
+        seen.extend(e.metadata.global_nonce for e in page)
+        if is_end:
+            break
+    else:
+        pytest.fail("read_all never reported is_end")
+
+    assert len(seen) == 6
+    assert seen == sorted(set(seen), reverse=not forward)  # no repeats, in order
