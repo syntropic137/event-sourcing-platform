@@ -17,10 +17,11 @@ The Postgres append holds the stream row lock and the per-tenant advisory
 lock through its re-checks, write and commit. Anything that runs inside it
 serializes that tenant. A sidecar adds a round trip under the lock, WASM
 adds a runtime and a trap failure mode, a dynamic library has no stable
-ABI, and a compile-time hook trait gives no isolation (hook code has full
-database access). Hashing, signing and quotas also differ in ordering and
-failure semantics, so one hook shape would not fit them. There are no
-third-party extension authors.
+ABI, and a compile-time hook trait gives no isolation (hook code runs
+in-process, inside the transaction, with the server's privileges).
+Hashing, signing and quotas also differ in ordering and failure
+semantics, so one hook shape would not fit them. There are no third-party
+extension authors.
 
 ## Decision
 
@@ -28,9 +29,10 @@ ESP has **no plugin framework**. An extension is one of two things:
 
 1. **A flag-gated built-in capability** of the store: code in this
    repository, deterministic and bounded, no callbacks, no network calls,
-   no third-party code inside the append transaction. Off by default,
-   enabled by explicit configuration, advertised through `GetServerInfo`
-   capabilities (#366) when active. Example: the hash chain (ADR-029).
+   no third-party code inside the append transaction. Gated by explicit
+   configuration when it changes stored data or costs every user;
+   advertised through `GetServerInfo` capabilities (#366) when active.
+   Example: the hash chain (ADR-029).
 2. **An application-layer pattern or library** outside the store: SDK
    traits, adapters behind cargo features, or documentation. Examples:
    projection sinks (existing `ProjectionStore` / `CheckpointStore`

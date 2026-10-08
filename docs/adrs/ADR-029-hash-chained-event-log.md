@@ -116,7 +116,7 @@ in v1.
 - The stream link is a cheaper check when the reader already holds a
   trusted **stream** head: a writer holds one for every stream it appended
   to (`AppendResponse.last_event_hash` is the hash of the stream's newest
-  event), and a loader holds one from its previous verified load. Reading
+  event), and a loader holds one from its previous authenticated load. Reading
   only the stream does **not** authenticate it against a tenant anchor: the
   `prev_tenant_hash` values on a stream's events are opaque without the
   events between them. Proving a stream against a tenant anchor means
@@ -348,9 +348,10 @@ the server it is checking.
 **No new RPC in v1.** A head is the last event of a backward read with an
 explicit upper bound, which the SDK helper hides; the same PR clamps
 `ReadAll`'s `from_global_nonce` to `i64::MAX` so `u64::MAX` means "from the
-end". Backward reads depend on #403 (overlapping backward pages); until it
-lands, verifiers use forward walks only and the head helper reads a single
-event backward. A writer gets heads from `AppendResponse.last_event_hash`.
+end". Backward reads depend on #403 (overlapping backward pages). v1
+verifiers walk forward and the head helper reads a single event backward,
+so #403 gates only multi-page backward walks, which wait for it. A writer
+gets heads from `AppendResponse.last_event_hash`.
 A server-side "verify" RPC is rejected: the threat model distrusts the
 server, so verification belongs to the reader.
 
@@ -372,8 +373,10 @@ history before appending. A client that requires it calls
 3. Run `eventstore-admin chain-activate --anchor <sink>` against the
    database directly. It refuses unless the schema is migrated and
    `chain_activation` is empty, then runs **one transaction**:
-   1. `LOCK TABLE events IN EXCLUSIVE MODE` (reads allowed, writes
-      blocked; a stray writer waits instead of slipping in).
+   1. `LOCK TABLE events IN ACCESS EXCLUSIVE MODE`, with a `lock_timeout`
+      so a forgotten session makes activation fail fast instead of
+      queueing. Servers are stopped, so blocking reads costs nothing; a
+      stray writer that connects later waits, then fails the constraint.
    2. Check the `global_nonce` sequence has increment 1 and `CACHE 1`
       (the `BIGSERIAL` default; a larger cache would let a stray session
       insert a pre-cached nonce below the epoch), then `epoch =
@@ -384,10 +387,12 @@ history before appending. A client that requires it calls
    4. Insert `chain_activation` (fresh random `store_id`, epoch, format 1,
       time, inventory digest).
    5. `ALTER TABLE events ADD CONSTRAINT events_chained CHECK
-      (global_nonce < <epoch> OR (chain_format = 1 AND
+      (global_nonce < <epoch> OR coalesce(chain_format = 1 AND
       octet_length(event_hash) = 32 AND octet_length(prev_stream_hash) = 32
-      AND octet_length(prev_tenant_hash) = 32)) NOT VALID`. Existing rows
-      are all below the epoch. This enforces structure, not cryptographic
+      AND octet_length(prev_tenant_hash) = 32, false)) NOT VALID`. The
+      `coalesce` matters: a `CHECK` that evaluates to NULL passes, so
+      without it NULL link columns would be accepted. Existing rows are all
+      below the epoch. This enforces structure, not cryptographic
       validity; a v2 format widens it in the same migration that adds v2.
    6. Commit.
 
@@ -397,8 +402,9 @@ history before appending. A client that requires it calls
    publishing fails, `eventstore-admin chain-export-inventory` retries
    from the same tables; the result is byte-identical.
 4. Confirm the inventory is published to a medium outside the database's
-   trust domain, and record its digest out of band (section 6). Do not resume writes before that: until it is anchored,
-   the seal is only as trustworthy as the database.
+   trust domain, and record its digest out of band (section 6). Do not
+   resume writes before that: until it is anchored, the seal is only as
+   trustworthy as the database.
 5. Start every instance with `HASH_CHAIN=on`. Writes resume, chained.
 
 Fencing comes from the pause plus the constraint, not from startup checks.
@@ -426,9 +432,10 @@ seal_head`, so legacy and live history form one chain per tenant. The seal
 runs through each tenant's final legacy event inside the pause, so there is
 no gap between seal and chain. A legacy stream's first chained event keeps
 `prev_stream_hash = zero`; its legacy prefix is covered by the tenant seal
-only (no per-stream seals). Cost: one full ordered scan of `events` during
-the pause; the pause lasts as long as that scan (benchmarked in the
-activation PR).
+only (no per-stream seals). The pause covers stopping the servers, the
+lock, one full ordered scan of `events` for the seal, the DDL, publishing
+the inventory and confirming it out of band; the scan dominates on a large
+store (benchmarked in the activation PR).
 
 The verifier never infers "sealed" from a non-zero predecessor. For each
 tenant it looks up the tenant's entry in the anchored inventory, recomputes
@@ -474,10 +481,13 @@ requirement) carries the link columns, `idempotency.last_event_hash`,
 `chain_activation`, `chain_seals` and the constraint. Before writes resume
 after any restore, the runbook runs `eventstore-admin chain-verify`, which
 fetches the pinned activation inventory and every held head record from
-the anchor sink, verifies every tenant's seal and chain to its restored head, and
-checks each anchored head for **reachability** (an ancestor of, or equal
-to, the restored head). Missing evidence is reported as unknown, never as
-verified.
+the anchor sink, verifies every tenant's seal and chain to its restored
+head, and checks each anchored head for **reachability** (an ancestor of, or equal
+to, the restored head). It reports two boundaries per tenant: authenticated
+through the newest reachable anchor, merely consistent after it. Missing
+or unreachable evidence is reported as unknown, never as verified, and
+makes `chain-verify` exit non-zero; resuming writes anyway is an explicit,
+recorded operator decision.
 
 - **Pre-activation backup restored:** `chain_activation` is empty while an
   activation inventory exists in the anchor sink. A server with
@@ -549,9 +559,12 @@ pub trait AnchorSink: Send + Sync {
     /// Store the record durably. Create-only and idempotent by digest:
     /// republishing the same record succeeds; never overwrites.
     async fn publish(&self, record: &AnchorRecord) -> Result<AnchorRef, AnchorError>;
-    /// Read one record back (publish confirmation, pinned inventory).
-    async fn get(&self, at: &AnchorRef) -> Result<Option<AnchorRecord>, AnchorError>;
-    /// Records for `store_id` of `kind`, in position order, paginated.
+    /// Read one record back by digest (publish confirmation, pinned inventory).
+    async fn get(&self, store_id: Uuid, kind: AnchorKind, digest: [u8; 32])
+        -> Result<Option<AnchorRecord>, AnchorError>;
+    /// Records for `store_id` of `kind`, ordered by (created_at_unix_ms,
+    /// digest), paginated with an opaque cursor. An unreadable listing is
+    /// an error, never an empty page.
     async fn list(&self, store_id: Uuid, kind: AnchorKind, after: Option<&str>)
         -> Result<AnchorPage, AnchorError>;
 }
@@ -569,8 +582,12 @@ pub trait AnchorSink: Send + Sync {
   band at activation (runbook, ticket, second medium), and `chain-verify`
   requires it (`--inventory <digest>`) and fetches that record by digest;
   (b) the medium must make records undeletable by whoever can write the
-  database (protected git branch, object lock); (c) anchors cover what was
-  published, nothing more. Signed or transparency-log adapters would add a
+  database: object lock, or a git remote whose rules reject commits that
+  delete or modify existing records (branch protection alone does not);
+  (c) omitted later heads cannot be detected from the records, they only
+  shrink coverage to the newest head the verifier sees, so retention of the
+  medium is the control; (d) anchors cover what was published, nothing
+  more. Signed or transparency-log adapters would add a
   receipt to `AnchorRef`; out of scope for v1.
 - **Tenant coverage.** gRPC reads are per tenant and there is no tenant
   enumeration RPC. `chain-anchor` and `chain-verify` cover the tenants in
@@ -579,9 +596,10 @@ pub trait AnchorSink: Send + Sync {
   `(tenant_id, global_nonce)` index. A tenant created after activation and
   never anchored is not covered, and `chain-verify` prints the covered set.
 - **Filesystem adapter (default, first PR):**
-  `<dir>/<store_id>/<kind>/<zero-padded position>-<digest>.json`, written
-  to a temp file, fsynced, then hard-linked into place (fails if the name
-  exists) and the directory fsynced. On its own it is **not** an
+  `<dir>/<store_id>/<kind>/<zero-padded created_at>-<digest>.json`,
+  written to a temp file, fsynced, then hard-linked into place and the
+  directory fsynced. If the name exists, identical content is success
+  (idempotent) and different content is an error. On its own it is **not** an
   independent anchor: a local directory sits in the operator's trust
   domain. Pushing it to a protected git remote is an ops step the runbook
   describes.
@@ -747,8 +765,9 @@ is missed, the fallbacks are tenant-only links, then a cap on header bytes.
 
 ## Rollout (small PRs, Rust first)
 
-0. Prerequisite, independent: #403, backward pagination overlap (both
-   backends, conformance tests for gaps, multipage and genesis).
+0. Independent: #403, backward pagination overlap (both backends,
+   conformance tests for gaps, multipage and genesis). Not needed by the
+   v1 forward verifiers; required before any multi-page backward walk.
 1. This ADR and ADR-030.
 2. `eventstore_core::chain`: encoding, hash, seal, forward verifier, golden
    vectors, `EventMetadata` coverage guard. No behavior change.
@@ -783,8 +802,8 @@ is missed, the fallbacks are tenant-only links, then a cap on header bytes.
   database administrator.
 - Stores that never activate pay only inert columns, an index and two
   empty tables.
-- Activation is one-way and needs a write pause as long as one ordered
-  scan of `events`.
+- Activation is one-way and needs a full store pause, dominated by one
+  ordered scan of `events`.
 - Two append paths (chained and not) live in both backends, contained by
   conformance tests in both modes.
 - `EventMetadata` changes now require a chain-format decision; the guard
