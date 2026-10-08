@@ -1,0 +1,90 @@
+---
+# Gateway TLS material (#301). Runs only when esp_gateway_tls is true. The
+# directory is bind-mounted read-only into the gateway; the gateway reloads
+# nginx when fullchain.pem/privkey.pem change (esp_gateway_tls_reload_interval).
+
+- name: Reject a half-specified cert/key pair
+  ansible.builtin.assert:
+    that:
+      - (esp_gateway_tls_cert_src | length > 0) == (esp_gateway_tls_key_src | length > 0)
+    fail_msg: Set both esp_gateway_tls_cert_src and esp_gateway_tls_key_src, or neither.
+
+- name: Create gateway TLS directory
+  ansible.builtin.file:
+    path: "{{ esp_gateway_tls_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install gateway certificate chain from the controller
+  ansible.builtin.copy:
+    src: "{{ esp_gateway_tls_cert_src }}"
+    dest: "{{ esp_gateway_tls_dir }}/fullchain.pem"
+    owner: root
+    group: root
+    mode: "0644"
+  when: esp_gateway_tls_cert_src | length > 0
+  notify: Reload gateway TLS
+
+- name: Install gateway private key from the controller
+  ansible.builtin.copy:
+    src: "{{ esp_gateway_tls_key_src }}"
+    dest: "{{ esp_gateway_tls_dir }}/privkey.pem"
+    owner: root
+    group: root
+    mode: "0600"
+  when: esp_gateway_tls_key_src | length > 0
+  no_log: true
+  diff: false
+  notify: Reload gateway TLS
+
+- name: Check whether the self-signed gateway certificate needs (re)issuing
+  # Missing, or expiring within 30 days. The generator discards its CA key,
+  # so a reissue means a new CA: clients must trust the newly fetched one.
+  # Delete esp_gateway_tls_dir to force a reissue (e.g. changed names).
+  ansible.builtin.command:
+    cmd: >-
+      openssl x509 -checkend 2592000 -noout
+      -in {{ (esp_gateway_tls_dir ~ '/fullchain.pem') | quote }}
+  register: gateway_self_signed_check
+  changed_when: false
+  failed_when: false
+  when:
+    - esp_gateway_tls_self_signed | bool
+    - esp_gateway_tls_cert_src | length == 0
+
+- name: Generate a private CA and gateway certificate on the host
+  ansible.builtin.script:
+    cmd: >-
+      gen-self-signed.sh {{ esp_gateway_tls_dir | quote }}
+      {{ esp_gateway_tls_names | map('quote') | join(' ') }}
+  when:
+    - esp_gateway_tls_self_signed | bool
+    - esp_gateway_tls_cert_src | length == 0
+    - gateway_self_signed_check.rc != 0
+  notify: Reload gateway TLS
+
+- name: Fetch the private CA for clients
+  ansible.builtin.fetch:
+    src: "{{ esp_gateway_tls_dir }}/ca.pem"
+    dest: "{{ esp_gateway_tls_ca_fetch_dest }}"
+    flat: true
+  when:
+    - esp_gateway_tls_self_signed | bool
+    - esp_gateway_tls_cert_src | length == 0
+
+- name: Check gateway certificate and key are present
+  ansible.builtin.stat:
+    path: "{{ esp_gateway_tls_dir }}/{{ item }}"
+  loop: [fullchain.pem, privkey.pem]
+  register: gateway_tls_files
+
+- name: Fail closed without a gateway certificate
+  ansible.builtin.assert:
+    that: gateway_tls_files.results | rejectattr('stat.exists') | list | length == 0
+    fail_msg: >-
+      esp_gateway_tls is on but {{ esp_gateway_tls_dir }}/fullchain.pem and
+      privkey.pem are not both present. Set esp_gateway_tls_cert_src/key_src,
+      or esp_gateway_tls_self_signed: true, or provision them on the host
+      (certbot + deploy hook). See event-store/gateway/README.md "TLS".

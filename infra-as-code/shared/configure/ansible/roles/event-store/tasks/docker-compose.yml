@@ -152,7 +152,10 @@
 
 - name: Display Event Store status
   ansible.builtin.debug:
-    msg: "Event Store is running; gateway published on port {{ eventstore_grpc_port }} (ADR-024, Basic Auth enforced)"
+    msg: >-
+      Event Store is running; gateway published on
+      {{ 'port ' ~ eventstore_grpc_port ~ ' (TLS + Basic Auth)' if esp_gateway_tls | bool
+         else '127.0.0.1:' ~ eventstore_grpc_port ~ ' only (plaintext; terminate TLS on this host)' }}
 
 - name: Show running containers
   ansible.builtin.command:

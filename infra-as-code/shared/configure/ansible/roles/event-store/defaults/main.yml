@@ -45,3 +45,27 @@ use_local_postgres: true
 # "changeme" default here must never reach a real deployment.
 esp_gateway_user: admin
 esp_gateway_password: "changeme"  # Override in group_vars with Ansible Vault
+
+# Gateway TLS (#301). The published gRPC port carries the Basic Auth
+# credential, so it is TLS-only by default and the deploy fails if no
+# cert/key is available. Pick ONE provisioning option (details:
+# event-store/gateway/README.md "TLS"):
+#   - esp_gateway_tls_cert_src/key_src: PEM files on the controller (e.g. a
+#     Let's Encrypt DNS-01 cert or an internal-CA cert), copied to the host
+#   - esp_gateway_tls_self_signed: generate a private CA + cert on the host
+#     (private networks); the CA is fetched to esp_gateway_tls_ca_fetch_dest
+#     for clients to trust
+#   - neither: something on the host (e.g. certbot + deploy hook) keeps
+#     fullchain.pem/privkey.pem in esp_gateway_tls_dir
+# esp_gateway_tls: false publishes the port on 127.0.0.1 only (plaintext),
+# for a TLS terminator on the same host (e.g. cloudflared).
+esp_gateway_tls: true
+esp_gateway_tls_dir: /etc/event-store/tls
+esp_gateway_tls_cert_src: ""
+esp_gateway_tls_key_src: ""
+esp_gateway_tls_self_signed: false
+esp_gateway_tls_names: ["{{ ansible_host | default(inventory_hostname) }}"]
+esp_gateway_tls_ca_fetch_dest: "{{ playbook_dir }}/gateway-ca.pem"
+# Seconds between the gateway's cert-change checks (0 = off; then reload
+# with `docker exec event-store-gateway nginx -s reload`).
+esp_gateway_tls_reload_interval: 300

@@ -118,7 +118,7 @@ client.require_capabilities(&[capabilities::COMMIT_ORDERED_GLOBAL_NONCE]).await?
 | `tcp_keepalive` | 60s | |
 | `lazy_connect` | false | Connect on first RPC |
 
-Credentials go in the `authorization` header: `basic_auth(user, pass)` is what the ADR-024 nginx gateway (HTTP Basic Auth on its external port) expects; `bearer_token(t)` and `token_provider(p)` send `Bearer <token>` (use `SharedToken` and call `set` from a refresh task to rotate without reconnecting). Credentials are refused over plaintext to non-loopback hosts unless you set `allow_insecure_credentials(true)`; the gateway has no TLS yet (#301), so only do that on a trusted network. `Debug` output never contains secrets.
+Credentials go in the `authorization` header: `basic_auth(user, pass)` is what the ADR-024 nginx gateway (HTTP Basic Auth on its external port) expects; `bearer_token(t)` and `token_provider(p)` send `Bearer <token>` (use `SharedToken` and call `set` from a refresh task to rotate without reconnecting). Credentials are refused over plaintext to non-loopback hosts unless you set `allow_insecure_credentials(true)`; the gateway serves TLS on its external port (#301), so use `https://` (plus `TlsConfig::ca_certificate_pem` for a private CA) instead. `Debug` output never contains secrets.
 
 Configuration errors are `Error::Config`; failed capability/version checks are `Error::Incompatible`.
 

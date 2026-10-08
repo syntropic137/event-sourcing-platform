@@ -735,11 +735,13 @@ where
         self
     }
 
-    /// Upcast every event before the projection sees it (and before
-    /// [`CheckpointedProjection::handles`] is asked, so a renamed type is
-    /// routed by its new name). An upcaster failure stops the runner with
-    /// [`Error::ProjectionFailed`] at that event; the checkpoint does not
-    /// advance past it.
+    /// Upcast every event the projection handles before it sees it.
+    /// [`CheckpointedProjection::handles`] is asked with the type the chain
+    /// ends at ([`Upcasters::target`]), so a renamed type is routed by its
+    /// new name, and an event it does not handle is skipped without running
+    /// any step. An upcaster failure on a handled event (or a rename cycle)
+    /// stops the runner with [`Error::ProjectionFailed`] at that event; the
+    /// checkpoint does not advance past it.
     pub fn with_upcasters(mut self, upcasters: Upcasters) -> Self {
         self.upcasters = upcasters;
         self
@@ -1125,10 +1127,23 @@ where
             global_nonce: event.global_nonce,
             source: Box::new(source),
         };
-        let upcast = self.upcasters.upcast_recorded(event).map_err(failed)?;
-        let event = upcast.as_ref();
+        // Filter on the type after upcasting, known without running the
+        // chain, so an ignored event is never upcast and cannot fail
+        // (ADR-027, #396). A cycle has no target: upcast it to fail.
+        let wanted = match self
+            .upcasters
+            .target(&event.event_type, event.event_version)
+        {
+            Some((ty, _)) => self.projection.handles(ty),
+            None => true,
+        };
+        let upcast = if wanted {
+            Some(self.upcasters.upcast_recorded(event).map_err(failed)?)
+        } else {
+            None
+        };
         let mut tx = self.store.begin(&self.key).await?;
-        if self.projection.handles(&event.event_type) {
+        if let Some(event) = upcast.as_deref() {
             self.projection
                 .handle(&mut tx, event, ctx)
                 .await

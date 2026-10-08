@@ -12,8 +12,7 @@ network:
     - subnet-aaaaaaaa
     - subnet-bbbbbbbb
   # Admin CIDRs for SSH, and for gRPC while allow_public_grpc is false.
-  # Replace the TEST-NET placeholder with your own range; never 0.0.0.0/0
-  # while the gateway has no TLS (#301).
+  # Replace the TEST-NET placeholder with your own range.
   ssh_allowed_cidrs:
     - 203.0.113.0/24
 
@@ -26,8 +25,8 @@ compute:
 
 security:
   iam_instance_profile: event-store-instance-profile
-  # false until TLS fronts the gateway (#301): its Basic Auth credential is
-  # sent in plaintext, so gRPC ingress is limited to the admin CIDRs.
+  # The gateway port is TLS-only (#301), so opening it is safe in transit;
+  # still defaults to admin CIDRs only. Set true for public gRPC ingress.
   allow_public_grpc: false
   allow_public_dashboard: false
 
@@ -42,6 +41,13 @@ postgres:
 gateway:
   secret_arn: arn:aws:secretsmanager:us-west-2:123456789012:secret:event-store/prod/gateway
   user: admin
+  # TLS on the published port (#301): always on here; the deploy fails
+  # without a cert. Either keep /etc/event-store/tls filled on the instance
+  # (certbot + dns-route53 + deploy hook, event-store/gateway/README.md
+  # "TLS") or ship PEM files from the controller:
+  # tls:
+  #   cert_src: ~/certs/es.example.com/fullchain.pem
+  #   key_src: ~/certs/es.example.com/privkey.pem
 
 metadata:
   environment: prod
