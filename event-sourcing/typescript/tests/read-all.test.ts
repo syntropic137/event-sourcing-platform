@@ -71,6 +71,55 @@ describe('MemoryEventStoreClient readAll', () => {
     expect(page3.isEnd).toBe(true);
   });
 
+  it.each([
+    [true, 1],
+    [true, 2],
+    [true, 4],
+    [false, 1],
+    [false, 2],
+    [false, 3],
+    [false, 4],
+  ])('pages without overlap (forward=%s, size=%s) (#403)', async (forward, size) => {
+    const repo = new RepositoryFactory(client).createRepository(
+      () => new OrderAggregate(),
+      'Order'
+    );
+    for (let i = 0; i < 6; i++) {
+      const order = new OrderAggregate();
+      order.submit(`order-${i}`, `cust-${i}`);
+      await repo.save(order);
+    }
+    const all = (await client.readAll(0, 100, true)).events.map((e) => e.metadata.globalNonce);
+    const expected = forward ? all : [...all].reverse();
+
+    let cursor = forward ? 0 : Number.MAX_SAFE_INTEGER;
+    const seen: (number | undefined)[] = [];
+    let calls = 0;
+    for (;;) {
+      calls++;
+      const page = await client.readAll(cursor, size, forward);
+      seen.push(...page.events.map((e) => e.metadata.globalNonce));
+      if (page.isEnd) break;
+      expect(page.events.length).toBe(size);
+      cursor = page.nextFromGlobalNonce;
+    }
+    expect(seen).toEqual(expected);
+    expect(calls).toBe(Math.ceil(expected.length / size));
+  });
+
+  it('treats maxCount 0 as the default page size', async () => {
+    const repo = new RepositoryFactory(client).createRepository(
+      () => new OrderAggregate(),
+      'Order'
+    );
+    const order = new OrderAggregate();
+    order.submit('order-0', 'cust-0');
+    await repo.save(order);
+    const page = await client.readAll(0, 0, true);
+    expect(page.events.length).toBe(1);
+    expect(page.isEnd).toBe(true);
+  });
+
   it('returns isEnd=true for empty store', async () => {
     const result = await client.readAll(0, 10, true);
 

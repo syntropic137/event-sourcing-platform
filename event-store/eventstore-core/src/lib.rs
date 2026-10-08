@@ -2,6 +2,7 @@
 pub mod conformance;
 pub mod errors;
 pub mod fingerprint;
+pub mod paging;
 pub mod trait_event_store;
 pub mod types;
 

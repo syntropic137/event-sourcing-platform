@@ -231,14 +231,14 @@ class MemoryEventStoreClient:
         from_global_nonce: int,
         forward: bool,
     ) -> int:
-        """Calculate the next global nonce for pagination."""
+        """Next global nonce: one past the page's last event, either direction (#403)."""
         if forward:
             if page and page[-1].metadata.global_nonce is not None:
                 return page[-1].metadata.global_nonce + 1
             return from_global_nonce
 
-        if page and page[0].metadata.global_nonce is not None:
-            return max(0, page[0].metadata.global_nonce - 1)
+        if page and page[-1].metadata.global_nonce is not None:
+            return max(0, page[-1].metadata.global_nonce - 1)
         return 0
 
     async def read_all(
@@ -259,8 +259,9 @@ class MemoryEventStoreClient:
             Tuple of (events, is_end, next_from_global_nonce)
         """
         sorted_events = self._filter_and_sort_events(from_global_nonce, forward)
-        page = sorted_events[:max_count]
-        is_end = len(page) < max_count
+        limit = min(max_count, 1000) if max_count > 0 else 100  # like the store
+        page = sorted_events[:limit]
+        is_end = len(sorted_events) <= limit  # nothing remains after this page
         next_from = self._calculate_next_position(page, from_global_nonce, forward)
         return page, is_end, next_from
 
