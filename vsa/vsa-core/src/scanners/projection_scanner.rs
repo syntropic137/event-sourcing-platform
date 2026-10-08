@@ -184,21 +184,45 @@ impl<'a> ProjectionScanner<'a> {
         let indent = cap.get(1)?.as_str().len();
         let start = cap.get(0)?.start();
         // The header ends at the first newline outside brackets that is not
-        // escaped by a backslash continuation.
+        // escaped by a backslash continuation. Brackets, quotes and
+        // backslashes inside comments and string literals are not syntax.
+        let bytes = module.as_bytes();
         let mut depth = 0usize;
-        let mut prev = '\0';
         let mut offset = module.len();
-        for (i, c) in module[start..].char_indices() {
-            match c {
-                '(' | '[' | '{' => depth += 1,
-                ')' | ']' | '}' => depth = depth.saturating_sub(1),
-                '\n' if depth == 0 && prev != '\\' => {
-                    offset = start + i + 1;
+        let mut i = start;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+                b'\\' => i += 1,
+                b'#' => {
+                    while bytes.get(i + 1).is_some_and(|&b| b != b'\n') {
+                        i += 1;
+                    }
+                }
+                q @ (b'"' | b'\'') => {
+                    let n = if bytes[i..].starts_with(&[q; 3]) { 3 } else { 1 };
+                    let quote = &[q; 3][..n];
+                    i += n;
+                    // A single-quoted string cannot run past its line.
+                    while i < bytes.len()
+                        && !bytes[i..].starts_with(quote)
+                        && (n == 3 || bytes[i] != b'\n')
+                    {
+                        i += if bytes[i] == b'\\' { 2 } else { 1 };
+                    }
+                    if !bytes.get(i..).is_some_and(|rest| rest.starts_with(quote)) {
+                        continue;
+                    }
+                    i += n - 1;
+                }
+                b'\n' if depth == 0 => {
+                    offset = i + 1;
                     break;
                 }
                 _ => {}
             }
-            prev = c;
+            i += 1;
         }
         let mut end = module.len();
         for line in module[offset..].split_inclusive('\n') {
@@ -608,6 +632,88 @@ mod tests {
         fs::write(
             slice.join("projection.py"),
             "from pkg.org._shared.org_projection import (\n    OrgProjection,\n)\n",
+        )
+        .unwrap();
+
+        let projections = ProjectionScanner::new(None, root).scan().unwrap();
+
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].name, "OrgProjection");
+        assert_eq!(projections[0].subscribed_events, vec!["org_created".to_string()]);
+        assert!(projections[0].file_path.ends_with("slices/list_orgs/projection.py"));
+    }
+
+    #[test]
+    fn test_reexport_shim_ignores_brackets_in_a_class_header_comment() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        let shared = root.join("pkg/org/_shared");
+        let slice = root.join("pkg/org/slices/list_orgs");
+        fs::create_dir_all(&shared).unwrap();
+        fs::create_dir_all(&slice).unwrap();
+        fs::write(
+            shared.join("org_projection.py"),
+            concat!(
+                "class OrgProjection:  # (legacy consumer\n",
+                "    async def on_org_created(self, event):\n",
+                "        pass\n",
+                "\n",
+                "\n",
+                "class OtherProjection(\n",
+                "    AutoDispatchProjection,\n",
+                "):\n",
+                "    async def on_member_added(self, event):\n",
+                "        pass\n",
+                "\n",
+                "\n",
+                "async def on_unrelated_thing(event):\n",
+                "    pass\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            slice.join("projection.py"),
+            "from pkg.org._shared.org_projection import (\n    OrgProjection,\n)\n",
+        )
+        .unwrap();
+
+        let projections = ProjectionScanner::new(None, root).scan().unwrap();
+
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].name, "OrgProjection");
+        assert_eq!(projections[0].subscribed_events, vec!["org_created".to_string()]);
+        assert!(projections[0].file_path.ends_with("slices/list_orgs/projection.py"));
+    }
+
+    #[test]
+    fn test_reexport_shim_reads_a_continued_class_header_with_brackets_in_comments_and_strings() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        let shared = root.join("pkg/org/_shared");
+        let slice = root.join("pkg/org/slices/list_orgs");
+        fs::create_dir_all(&shared).unwrap();
+        fs::write(
+            shared.join("org_projection.py"),
+            concat!(
+                "class OrgProjection \\\n",
+                "(\n",
+                "    AutoDispatchProjection,  # replaces Legacy)\n",
+                "    tag=\"(#\",\n",
+                "):\n",
+                "    async def on_org_created(self, event):\n",
+                "        pass\n",
+                "\n",
+                "\n",
+                "class OtherProjection(AutoDispatchProjection):\n",
+                "    async def on_member_added(self, event):\n",
+                "        pass\n",
+            ),
+        )
+        .unwrap();
+        fs::create_dir_all(&slice).unwrap();
+        fs::write(
+            slice.join("projection.py"),
+            "from pkg.org._shared.org_projection import OrgProjection\n",
         )
         .unwrap();
 
