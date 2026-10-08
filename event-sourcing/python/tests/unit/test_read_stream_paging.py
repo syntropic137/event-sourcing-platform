@@ -50,7 +50,7 @@ class _PagingStub:
         self, request: eventstore_pb2.ReadStreamRequest
     ) -> eventstore_pb2.ReadStreamResponse:
         self.requests.append((request.from_aggregate_nonce, request.max_count))
-        start = max(request.from_aggregate_nonce, 1)
+        start = 1 if self.mode == "ignores_cursor" else max(request.from_aggregate_nonce, 1)
         nonces = list(range(start, min(start + self.page, self.count + 1)))
         last = nonces[-1] if nonces else None
         if self.mode == "stuck":
@@ -92,6 +92,13 @@ async def test_from_version_starts_the_first_page() -> None:
 async def test_a_cursor_that_does_not_advance_fails() -> None:
     with pytest.raises(EventStoreError, match="did not advance"):
         await _client(_PagingStub(count=7, page=3, mode="stuck")).read_events("Paged-a")
+
+
+async def test_a_page_that_does_not_start_at_the_cursor_fails() -> None:
+    """A repeated first page with a correct-looking cursor must not loop."""
+    stub = _PagingStub(count=7, page=3, mode="ignores_cursor")
+    with pytest.raises(EventStoreError, match="not contiguous"):
+        await _client(stub).read_events("Paged-a")
 
 
 async def test_stream_exists_reads_one_event() -> None:

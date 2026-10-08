@@ -25,7 +25,11 @@ import pytest
 from event_sourcing import AggregateRoot, RepositoryFactory
 from event_sourcing.client.grpc_client import GrpcEventStoreClient
 from event_sourcing.client.memory import MemoryEventStoreClient
-from event_sourcing.core.errors import ConcurrencyConflictError, StreamAlreadyExistsError
+from event_sourcing.core.errors import (
+    ConcurrencyConflictError,
+    EventStoreError,
+    StreamAlreadyExistsError,
+)
 from event_sourcing.core.event import DomainEvent, EventEnvelope, EventMetadata
 from event_sourcing.decorators import event_sourcing_handler
 
@@ -202,6 +206,27 @@ async def test_read_from_version_is_inclusive(client: EventStoreClient) -> None:
     tail = await client.read_events(f"Order-{aid}", from_version=2)
     assert [e.metadata.aggregate_nonce for e in tail] == [2, 3]
     assert await client.read_events(f"Order-{_fresh_id()}", from_version=1) == []
+
+
+async def test_non_consecutive_aggregate_nonces_are_refused(client: EventStoreClient) -> None:
+    """A gap would make a from_version read and the OCC head disagree."""
+    aid = _fresh_id()
+    with pytest.raises(EventStoreError):
+        await client.append_events(
+            f"Order-{aid}", [_envelope("Order", aid, 10)], expected_version=0
+        )
+    await _append_many(client, aid, 2)
+    with pytest.raises(EventStoreError):
+        await client.append_events(f"Order-{aid}", [_envelope("Order", aid, 4)], expected_version=2)
+    assert len(await client.read_events(f"Order-{aid}")) == 2
+
+
+async def test_omitted_expected_version_means_new_stream(client: EventStoreClient) -> None:
+    aid = _fresh_id()
+    await client.append_events(f"Order-{aid}", [_envelope("Order", aid, 1)])
+
+    with pytest.raises(StreamAlreadyExistsError):
+        await client.append_events(f"Order-{aid}", [_envelope("Order", aid, 2)])
 
 
 async def test_store_assigns_global_nonces(client: EventStoreClient) -> None:

@@ -248,16 +248,24 @@ class GrpcEventStoreClient:
         envelopes: list[EventEnvelope[DomainEvent]] = []
         while True:
             response = await self._read_stream_page(stream_name, cursor, READ_STREAM_PAGE_SIZE)
+            nonces = [e.meta.aggregate_nonce for e in response.events]
+            # The store keeps nonces 1..N with no gaps, so a page holds exactly
+            # cursor, cursor+1, ... Anything else would make this loop skip,
+            # repeat or never end.
+            if nonces and nonces != list(range(cursor, cursor + len(nonces))):
+                raise EventStoreError(
+                    f"ReadStream page on '{stream_name}' from {cursor} returned nonces "
+                    f"{nonces[0]}..{nonces[-1]} ({len(nonces)} events): not contiguous"
+                )
             envelopes.extend(self._proto_to_envelope(e) for e in response.events)
             # A server before #404 sets is_end only on an empty page, so an
             # empty page ends the read too.
-            if response.is_end or not response.events:
+            if response.is_end or not nonces:
                 break
-            last = response.events[-1].meta.aggregate_nonce
-            if response.next_from_aggregate_nonce <= last:
+            if response.next_from_aggregate_nonce != nonces[-1] + 1:
                 raise EventStoreError(
-                    f"ReadStream cursor did not advance on '{stream_name}': "
-                    f"last nonce {last}, next {response.next_from_aggregate_nonce}"
+                    f"ReadStream cursor on '{stream_name}' did not advance past "
+                    f"{nonces[-1]}: next {response.next_from_aggregate_nonce}"
                 )
             cursor = response.next_from_aggregate_nonce
 

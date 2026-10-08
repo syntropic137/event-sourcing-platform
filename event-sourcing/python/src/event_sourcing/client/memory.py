@@ -125,10 +125,13 @@ class MemoryEventStoreClient:
         Args:
             stream_name: The stream identifier
             events: Events to append
-            expected_version: Expected current version (0 means stream must be new)
+            expected_version: Expected current version; 0 or None means the
+                stream must be new (the gRPC client sends None as 0)
 
         Raises:
             ConcurrencyConflictError: If version mismatch detected
+            EventStoreError: If aggregate nonces do not continue the stream
+                one by one (the store refuses them)
         """
         if not events:
             return
@@ -136,18 +139,25 @@ class MemoryEventStoreClient:
         key = _stream_key(stream_name)
         # Get current version (number of events in stream)
         current_version = len(self._streams.get(key, []))
+        expected_version = expected_version or 0
 
-        # Check expected version if provided
-        if expected_version is not None:
-            if current_version != expected_version:
-                if expected_version == 0 and current_version > 0:
-                    raise StreamAlreadyExistsError(
-                        stream_name=stream_name,
-                        actual_version=current_version,
-                    )
-                raise ConcurrencyConflictError(
-                    expected_version=expected_version,
+        if current_version != expected_version:
+            if expected_version == 0:
+                raise StreamAlreadyExistsError(
+                    stream_name=stream_name,
                     actual_version=current_version,
+                )
+            raise ConcurrencyConflictError(
+                expected_version=expected_version,
+                actual_version=current_version,
+            )
+
+        # Version N is the event at index N - 1 (read_events relies on it).
+        for offset, event in enumerate(events, start=1):
+            if event.metadata.aggregate_nonce != current_version + offset:
+                raise EventStoreError(
+                    f"event {offset - 1} aggregate_nonce {event.metadata.aggregate_nonce} "
+                    f"must equal expected {current_version + offset}"
                 )
 
         # Create stream if it doesn't exist
