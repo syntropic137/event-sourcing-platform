@@ -147,9 +147,7 @@ class TestReadAll:
                 event=envelope.event,
                 metadata=envelope.metadata.model_copy(update={"global_nonce": 1}),
             )
-            await memory_client.append_events(
-                f"TestAggregate-{aid}", [claimed], expected_version=0
-            )
+            await memory_client.append_events(f"TestAggregate-{aid}", [claimed], expected_version=0)
 
         events, _, _ = await memory_client.read_all(from_global_nonce=0, max_count=10)
         assert [e.metadata.global_nonce for e in events] == [1, 2]

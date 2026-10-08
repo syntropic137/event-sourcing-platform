@@ -79,7 +79,9 @@ class MemoryEventStoreClient:
         # Keyed by aggregate id alone, as the server keys them: see _stream_key.
         self._streams: dict[str, list[EventEnvelope[DomainEvent]]] = {}
         self._connected = False
-        self._global_nonce_counter = 0  # For assigning global nonces
+        # Next global nonce to assign. The store numbers events from 1, so a
+        # backward read's terminal cursor 0 names no event (#405).
+        self._global_nonce_counter = 1
 
     async def connect(self) -> None:
         """Connect (no-op for memory client)."""
@@ -101,28 +103,15 @@ class MemoryEventStoreClient:
 
         Args:
             stream_name: The stream identifier
-            from_version: Optional version to read from (1-based)
+            from_version: Aggregate nonce to read from, inclusive; 0, 1 or
+                None read from the first event (like the store)
 
         Returns:
-            List of event envelopes
-
-        Raises:
-            EventStoreError: If stream doesn't exist and from_version is specified
+            List of event envelopes; empty for an unknown stream
         """
-        key = _stream_key(stream_name)
-        if key not in self._streams:
-            if from_version is not None:
-                raise EventStoreError(f"Stream not found: {stream_name}")
-            return []
-
-        events = self._streams[key]
-
-        if from_version is not None:
-            # from_version is 1-based, so we need to convert to 0-based index
-            start_index = from_version
-            events = events[start_index:]
-
-        return list(events)  # Return copy to prevent external modification
+        events = self._streams.get(_stream_key(stream_name), [])
+        # Version N is the event at index N - 1.
+        return events[max((from_version or 0) - 1, 0) :]  # a copy
 
     async def append_events(
         self,
@@ -165,20 +154,16 @@ class MemoryEventStoreClient:
         if key not in self._streams:
             self._streams[key] = []
 
-        # Assign global nonce to events if not already set
-        # Create new envelopes since EventEnvelope is frozen
+        # The store numbers every event, ignoring any global nonce the caller
+        # set: keeping it could duplicate one and break paging (#405).
+        # EventEnvelope is frozen, so each gets new metadata.
         updated_events: list[EventEnvelope[DomainEvent]] = []
         for event in events:
-            if event.metadata.global_nonce is None:
-                # Create new metadata with global_nonce
-                new_metadata = event.metadata.model_copy(
-                    update={"global_nonce": self._global_nonce_counter}
-                )
-                new_envelope = EventEnvelope(event=event.event, metadata=new_metadata)
-                updated_events.append(new_envelope)
-                self._global_nonce_counter += 1
-            else:
-                updated_events.append(event)
+            new_metadata = event.metadata.model_copy(
+                update={"global_nonce": self._global_nonce_counter}
+            )
+            updated_events.append(EventEnvelope(event=event.event, metadata=new_metadata))
+            self._global_nonce_counter += 1
 
         # Append events
         self._streams[key].extend(updated_events)

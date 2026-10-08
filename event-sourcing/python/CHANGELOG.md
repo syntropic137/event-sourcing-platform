@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (long streams load whole, #405)
+
+- `GrpcEventStoreClient.read_events` read one 1000-event ReadStream page and
+  stopped, so a stream over 1000 events loaded truncated: its aggregate
+  rehydrated with the wrong state and a stale version, and its next save
+  failed OCC. It now follows `next_from_aggregate_nonce` until `is_end` (or an
+  empty page, for servers before #404), and raises `EventStoreError` if the
+  cursor does not advance. `stream_exists` reads one event instead of the
+  whole stream.
+- `MemoryEventStoreClient` now numbers global nonces from 1, like the store,
+  and ignores a caller-supplied `global_nonce` (it could duplicate one and
+  make paging skip or repeat an event). `read_events(from_version=N)` starts
+  at version N inclusive, like the store (it started at N + 1), and an
+  unknown stream reads empty instead of raising.
+
 ### Fixed (v0.17.0 release review, #349)
 
 - Filter before decode (ADR-027): `GrpcEventStoreClient.subscribe` takes

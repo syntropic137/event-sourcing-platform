@@ -56,6 +56,9 @@ logger = logging.getLogger(__name__)
 # stored event (eventstore-core UNDECODABLE_GLOBAL_NONCE_KEY).
 UNDECODABLE_GLOBAL_NONCE_KEY = "esp-undecodable-global-nonce"
 
+# Events per ReadStream call; read_events follows the cursor across pages.
+READ_STREAM_PAGE_SIZE = 1000
+
 
 def _undecodable_global_nonce(error: grpc.RpcError) -> int | None:
     """global_nonce of the undecodable stored event, if `error` reports one."""
@@ -232,6 +235,8 @@ class GrpcEventStoreClient:
         """
         Read events from a specific stream.
 
+        Reads every page, so a stream of any length loads whole (#405).
+
         Args:
             stream_name: The name of the event stream.
             from_version: The starting version (inclusive) to read from.
@@ -239,6 +244,30 @@ class GrpcEventStoreClient:
         Returns:
             A list of EventEnvelope objects.
         """
+        cursor = max(from_version or 0, 1)  # aggregate nonces start at 1
+        envelopes: list[EventEnvelope[DomainEvent]] = []
+        while True:
+            response = await self._read_stream_page(stream_name, cursor, READ_STREAM_PAGE_SIZE)
+            envelopes.extend(self._proto_to_envelope(e) for e in response.events)
+            # A server before #404 sets is_end only on an empty page, so an
+            # empty page ends the read too.
+            if response.is_end or not response.events:
+                break
+            last = response.events[-1].meta.aggregate_nonce
+            if response.next_from_aggregate_nonce <= last:
+                raise EventStoreError(
+                    f"ReadStream cursor did not advance on '{stream_name}': "
+                    f"last nonce {last}, next {response.next_from_aggregate_nonce}"
+                )
+            cursor = response.next_from_aggregate_nonce
+
+        logger.debug(f"Read {len(envelopes)} events from stream '{stream_name}'")
+        return envelopes
+
+    async def _read_stream_page(
+        self, stream_name: str, from_nonce: int, max_count: int
+    ) -> eventstore_pb2.ReadStreamResponse:
+        """One forward ReadStream page from ``from_nonce`` (inclusive)."""
         if not self._stub:
             raise EventStoreError("Client is not connected")
 
@@ -247,30 +276,15 @@ class GrpcEventStoreClient:
         if len(parts) != 2:
             raise EventStoreError(f"Invalid stream name format: {stream_name}")
 
-        aggregate_type, aggregate_id = parts
-
-        # Default to 0, then convert to 1-based indexing for protobuf
-        start_version = from_version if from_version is not None else 0
-
         request = eventstore_pb2.ReadStreamRequest(
             tenant_id=self.tenant_id,
-            aggregate_id=aggregate_id,
-            from_aggregate_nonce=max(start_version, 1),  # Protobuf uses 1-based indexing
-            max_count=1000,
+            aggregate_id=parts[1],
+            from_aggregate_nonce=from_nonce,
+            max_count=max_count,
             forward=True,
         )
-
         try:
-            response = await self._stub.ReadStream(request)
-            envelopes = []
-
-            for event_data in response.events:
-                envelope = self._proto_to_envelope(event_data)
-                envelopes.append(envelope)
-
-            logger.debug(f"Read {len(envelopes)} events from stream '{stream_name}'")
-            return envelopes
-
+            return await self._stub.ReadStream(request)
         except grpc.RpcError as e:
             # Typed and actionable: the caller logs it, not once per attempt here (#360).
             _raise_if_unauthenticated(e, "Failed to read stream")
@@ -356,8 +370,8 @@ class GrpcEventStoreClient:
         becoming False. "Cannot see" answered as "does not exist" lets every
         existence check built on this pass while the store is down.
         """
-        events = await self.read_events(stream_name, from_version=0)
-        return len(events) > 0
+        response = await self._read_stream_page(stream_name, 1, 1)
+        return len(response.events) > 0
 
     @staticmethod
     def _extract_actual_version(rpc_error: grpc.RpcError) -> int:
