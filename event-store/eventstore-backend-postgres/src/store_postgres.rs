@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use eventstore_core::fingerprint::{batch_fingerprint, fingerprint_matches};
+use eventstore_core::paging;
 use eventstore_core::{proto, EventStore as EventStoreTrait, StoreError, StoreStream};
 use futures::stream;
 use sqlx::pool::PoolConnection;
@@ -1009,11 +1010,15 @@ impl EventStoreTrait for PostgresStore {
             ));
         }
 
-        let start_nonce = if req.from_aggregate_nonce <= 1 {
-            1
+        let from = if req.forward {
+            req.from_aggregate_nonce.max(1)
         } else {
             req.from_aggregate_nonce
-        } as i64;
+        };
+        let start_nonce = bind_position(from);
+        // One extra row tells whether anything lies beyond the page. NULL
+        // (max_count 0) is no limit.
+        let limit = (req.max_count != 0).then(|| i64::from(req.max_count) + 1);
 
         let mut conn = self.acquire().await?;
         let query = async {
@@ -1029,7 +1034,7 @@ impl EventStoreTrait for PostgresStore {
                 .bind(&req.tenant_id)
                 .bind(&req.aggregate_id)
                 .bind(start_nonce)
-                .bind(req.max_count as i64)
+                .bind(limit)
                 .fetch_all(&mut *conn)
                 .await
             } else {
@@ -1044,7 +1049,7 @@ impl EventStoreTrait for PostgresStore {
                 .bind(&req.tenant_id)
                 .bind(&req.aggregate_id)
                 .bind(start_nonce)
-                .bind(req.max_count as i64)
+                .bind(limit)
                 .fetch_all(&mut *conn)
                 .await
             }
@@ -1060,36 +1065,17 @@ impl EventStoreTrait for PostgresStore {
         };
         drop(conn);
 
-        let mut events = Vec::with_capacity(rows.len());
-        for row in rows.into_iter() {
-            events.push(row_to_event(&row)?);
-        }
-
-        // Note: No need to reverse for backward reads - the SQL ORDER BY DESC
-        // already returns events in the correct order (most recent first)
-
-        let next_from = if req.forward {
-            events
-                .last()
-                .and_then(|ev| ev.meta.as_ref().map(|m| m.aggregate_nonce + 1))
-                .unwrap_or(start_nonce as u64)
-        } else {
-            events
-                .first()
-                .and_then(|ev| {
-                    ev.meta
-                        .as_ref()
-                        .map(|m| m.aggregate_nonce.saturating_sub(1))
-                })
-                .unwrap_or(0)
-        };
-
-        let is_end = events.is_empty();
+        // Rows are already in the requested order (ASC or DESC).
+        let (events, more) = page_rows(rows, req.max_count as usize)?;
+        let last = events
+            .last()
+            .and_then(|ev| ev.meta.as_ref())
+            .map(|m| m.aggregate_nonce);
 
         Ok(proto::ReadStreamResponse {
             events,
-            is_end,
-            next_from_aggregate_nonce: next_from,
+            is_end: !more,
+            next_from_aggregate_nonce: paging::next_cursor(req.forward, from, last),
         })
     }
 
@@ -1110,7 +1096,7 @@ impl EventStoreTrait for PostgresStore {
             req.max_count.min(1000)
         } as i64;
 
-        let from_global = req.from_global_nonce as i64;
+        let from_global = bind_position(req.from_global_nonce);
 
         let mut conn = self.acquire().await?;
         let query = async {
@@ -1125,7 +1111,7 @@ impl EventStoreTrait for PostgresStore {
                 )
                 .bind(&req.tenant_id)
                 .bind(from_global)
-                .bind(max_count)
+                .bind(max_count + 1)
                 .fetch_all(&mut *conn)
                 .await
             } else {
@@ -1139,7 +1125,7 @@ impl EventStoreTrait for PostgresStore {
                 )
                 .bind(&req.tenant_id)
                 .bind(from_global)
-                .bind(max_count)
+                .bind(max_count + 1)
                 .fetch_all(&mut *conn)
                 .await
             }
@@ -1155,31 +1141,16 @@ impl EventStoreTrait for PostgresStore {
         };
         drop(conn);
 
-        let mut events = Vec::with_capacity(rows.len());
-        for row in rows.into_iter() {
-            events.push(row_to_event(&row)?);
-        }
-
-        // Determine if we've reached the end
-        let is_end = (events.len() as i64) < max_count;
-
-        // Calculate next position for pagination
-        let next_from = if req.forward {
-            events
-                .last()
-                .and_then(|ev| ev.meta.as_ref().map(|m| m.global_nonce + 1))
-                .unwrap_or(from_global as u64)
-        } else {
-            events
-                .first()
-                .and_then(|ev| ev.meta.as_ref().map(|m| m.global_nonce.saturating_sub(1)))
-                .unwrap_or(0)
-        };
+        let (events, more) = page_rows(rows, max_count as usize)?;
+        let last = events
+            .last()
+            .and_then(|ev| ev.meta.as_ref())
+            .map(|m| m.global_nonce);
 
         Ok(proto::ReadAllResponse {
             events,
-            is_end,
-            next_from_global_nonce: next_from,
+            is_end: !more,
+            next_from_global_nonce: paging::next_cursor(req.forward, req.from_global_nonce, last),
         })
     }
 
@@ -1518,6 +1489,28 @@ fn subscription_unavailable(
 /// naming the row's `global_nonce` and the column. The underlying decoder
 /// message is deliberately dropped: it can quote stored values (e.g. a
 /// header value), and this error is logged and sent to clients.
+/// A position as a `BIGINT` bind. Positions past `i64::MAX` (a head probe
+/// such as `u64::MAX`) clamp to it instead of wrapping negative.
+fn bind_position(position: u64) -> i64 {
+    i64::try_from(position).unwrap_or(i64::MAX)
+}
+
+/// Decodes the first `limit` rows of a page fetched with one extra row
+/// (`limit` 0: no limit) and reports whether that extra row was there. The
+/// extra row is not decoded, so an undecodable event just past the page
+/// does not fail it.
+fn page_rows(
+    mut rows: Vec<sqlx::postgres::PgRow>,
+    limit: usize,
+) -> Result<(Vec<proto::EventData>, bool), StoreError> {
+    let more = limit != 0 && rows.len() > limit;
+    if more {
+        rows.truncate(limit);
+    }
+    let events = rows.iter().map(row_to_event).collect::<Result<_, _>>()?;
+    Ok((events, more))
+}
+
 fn row_to_event(row: &sqlx::postgres::PgRow) -> Result<proto::EventData, StoreError> {
     // global_nonce first, so every other failure can name its position.
     let global_nonce = match row.try_get::<i64, _>("global_nonce") {
