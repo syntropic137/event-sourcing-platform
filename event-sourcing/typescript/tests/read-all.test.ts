@@ -107,6 +107,19 @@ describe('MemoryEventStoreClient readAll', () => {
     expect(calls).toBe(Math.ceil(expected.length / size));
   });
 
+  it('treats maxCount 0 as the default page size', async () => {
+    const repo = new RepositoryFactory(client).createRepository(
+      () => new OrderAggregate(),
+      'Order'
+    );
+    const order = new OrderAggregate();
+    order.submit('order-0', 'cust-0');
+    await repo.save(order);
+    const page = await client.readAll(0, 0, true);
+    expect(page.events.length).toBe(1);
+    expect(page.isEnd).toBe(true);
+  });
+
   it('returns isEnd=true for empty store', async () => {
     const result = await client.readAll(0, 10, true);
 

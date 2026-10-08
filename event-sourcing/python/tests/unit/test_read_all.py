@@ -137,6 +137,20 @@ class TestReadAll:
         assert calls == -(-len(expected) // page_size)
 
     @pytest.mark.asyncio
+    async def test_read_all_max_count_zero_is_default(
+        self, memory_client: MemoryEventStoreClient
+    ) -> None:
+        """max_count 0 means the default page size, like the store."""
+        await memory_client.append_events(
+            "TestAggregate-agg0", [make_envelope("agg0", 1, "e")], expected_version=0
+        )
+        page, is_end, _ = await memory_client.read_all(
+            from_global_nonce=0, max_count=0, forward=True
+        )
+        assert len(page) == 1
+        assert is_end is True
+
+    @pytest.mark.asyncio
     async def test_read_all_empty_store(self, memory_client: MemoryEventStoreClient) -> None:
         """Test that read_all returns is_end=True for empty store."""
         events, is_end, _ = await memory_client.read_all(

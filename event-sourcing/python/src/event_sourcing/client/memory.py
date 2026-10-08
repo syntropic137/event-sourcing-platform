@@ -259,8 +259,9 @@ class MemoryEventStoreClient:
             Tuple of (events, is_end, next_from_global_nonce)
         """
         sorted_events = self._filter_and_sort_events(from_global_nonce, forward)
-        page = sorted_events[:max_count]
-        is_end = len(sorted_events) <= max_count  # nothing remains after this page
+        limit = min(max_count, 1000) if max_count > 0 else 100  # like the store
+        page = sorted_events[:limit]
+        is_end = len(sorted_events) <= limit  # nothing remains after this page
         next_from = self._calculate_next_position(page, from_global_nonce, forward)
         return page, is_end, next_from
 

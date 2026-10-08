@@ -93,9 +93,11 @@ export class MemoryEventStoreClient implements EventStoreClient {
       return forward ? nonceA - nonceB : nonceB - nonceA;
     });
 
-    // Apply limit; the store's end flag is "nothing remains after this page"
-    const page = filtered.slice(0, maxCount);
-    const isEnd = filtered.length <= maxCount;
+    // Like the store: 0 means 100, larger requests cap at 1000. isEnd means
+    // nothing remains after this page.
+    const limit = maxCount > 0 ? Math.min(maxCount, 1000) : 100;
+    const page = filtered.slice(0, limit);
+    const isEnd = filtered.length <= limit;
 
     // Next page starts one past this page's last event, in either direction
     // (matches the event store, #403)

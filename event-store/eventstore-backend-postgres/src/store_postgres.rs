@@ -1015,6 +1015,13 @@ impl EventStoreTrait for PostgresStore {
         } else {
             req.from_aggregate_nonce
         };
+        if req.forward && from > i64::MAX as u64 {
+            return Ok(proto::ReadStreamResponse {
+                events: vec![],
+                is_end: true,
+                next_from_aggregate_nonce: from,
+            });
+        }
         let start_nonce = bind_position(from);
         // One extra row tells whether anything lies beyond the page. NULL
         // (max_count 0) is no limit.
@@ -1096,6 +1103,13 @@ impl EventStoreTrait for PostgresStore {
             req.max_count.min(1000)
         } as i64;
 
+        if req.forward && req.from_global_nonce > i64::MAX as u64 {
+            return Ok(proto::ReadAllResponse {
+                events: vec![],
+                is_end: true,
+                next_from_global_nonce: req.from_global_nonce,
+            });
+        }
         let from_global = bind_position(req.from_global_nonce);
 
         let mut conn = self.acquire().await?;
@@ -1483,14 +1497,9 @@ fn subscription_unavailable(
     ))
 }
 
-/// Decode one stored event row. Never panics.
-///
-/// A column that cannot be decoded yields [`StoreError::UndecodableEvent`]
-/// naming the row's `global_nonce` and the column. The underlying decoder
-/// message is deliberately dropped: it can quote stored values (e.g. a
-/// header value), and this error is logged and sent to clients.
-/// A position as a `BIGINT` bind. Positions past `i64::MAX` (a head probe
-/// such as `u64::MAX`) clamp to it instead of wrapping negative.
+/// A position as a `BIGINT` bind. Positions past `i64::MAX` (a backward
+/// head probe such as `u64::MAX`) clamp to it instead of wrapping negative.
+/// Forward reads past `i64::MAX` never reach here: nothing is stored there.
 fn bind_position(position: u64) -> i64 {
     i64::try_from(position).unwrap_or(i64::MAX)
 }
@@ -1511,6 +1520,12 @@ fn page_rows(
     Ok((events, more))
 }
 
+/// Decode one stored event row. Never panics.
+///
+/// A column that cannot be decoded yields [`StoreError::UndecodableEvent`]
+/// naming the row's `global_nonce` and the column. The underlying decoder
+/// message is deliberately dropped: it can quote stored values (e.g. a
+/// header value), and this error is logged and sent to clients.
 fn row_to_event(row: &sqlx::postgres::PgRow) -> Result<proto::EventData, StoreError> {
     // global_nonce first, so every other failure can name its position.
     let global_nonce = match row.try_get::<i64, _>("global_nonce") {

@@ -452,6 +452,8 @@ macro_rules! read_conformance_tests {
         $crate::__append_conformance_case!($factory, read_stream_empty_and_unbounded);
         $crate::__append_conformance_case!($factory, read_all_pages_forward);
         $crate::__append_conformance_case!($factory, read_all_pages_backward);
+        $crate::__append_conformance_case!($factory, forward_end_cursor_resumes_after_append);
+        $crate::__append_conformance_case!($factory, read_all_page_size_default_and_cap);
     };
 }
 
@@ -473,7 +475,7 @@ struct Page {
 /// order), every page but the last is full, `is_end` is set on the page
 /// that holds the last event (not one empty page later), and the call
 /// count is the minimum.
-async fn assert_pages<F, Fut>(read: F, from: u64, size: u32, expected: &[u64], context: &str)
+async fn assert_pages<F, Fut>(read: F, from: u64, size: u32, expected: &[u64], context: &str) -> u64
 where
     F: Fn(u64) -> Fut,
     Fut: std::future::Future<Output = Page>,
@@ -494,19 +496,57 @@ where
             page.positions.len()
         );
         seen.extend_from_slice(&page.positions);
-        if page.is_end {
+        let is_end = page.is_end;
+        if !is_end {
+            assert_eq!(
+                page.positions.len(),
+                size as usize,
+                "{context}: page before the end is full (cursor {cursor})"
+            );
+        }
+        cursor = page.next;
+        if is_end {
             break;
         }
-        assert_eq!(
-            page.positions.len(),
-            size as usize,
-            "{context}: page before the end is full (cursor {cursor})"
-        );
-        cursor = page.next;
     }
     assert_eq!(seen, expected, "{context}: concatenated pages");
     let min_calls = expected.len().div_ceil(size as usize).max(1);
     assert_eq!(calls, min_calls, "{context}: is_end on the last page");
+    cursor
+}
+
+/// The cursor the final page must return: one past the last event, or, for
+/// an empty read, `start` forward (the normalized request position) and 0
+/// backward.
+fn end_cursor(forward: bool, start: u64, expected: &[u64]) -> u64 {
+    match (forward, expected.last()) {
+        (true, Some(last)) => last + 1,
+        (true, None) => start,
+        (false, Some(last)) => last - 1,
+        (false, None) => 0,
+    }
+}
+
+/// Runs `assert_pages` and checks the final cursor.
+#[allow(clippy::too_many_arguments)]
+async fn assert_paging<F, Fut>(
+    read: F,
+    from: u64,
+    start: u64,
+    forward: bool,
+    size: u32,
+    expected: &[u64],
+    context: &str,
+) where
+    F: Fn(u64) -> Fut,
+    Fut: std::future::Future<Output = Page>,
+{
+    let end = assert_pages(read, from, size, expected, context).await;
+    assert_eq!(
+        end,
+        end_cursor(forward, start, expected),
+        "{context}: final cursor"
+    );
 }
 
 async fn read_stream_page(store: &Store, s: &Stream, from: u64, size: u32, forward: bool) -> Page {
@@ -544,12 +584,14 @@ async fn paged_stream(store: &Store) -> Stream {
 /// past the head.
 pub async fn read_stream_pages_forward(store: Store) {
     let s = paged_stream(&store).await;
-    for from in [0, 1, 2, 4, PAGED_EVENTS, PAGED_EVENTS + 1] {
+    for from in [0, 1, 2, 4, PAGED_EVENTS, PAGED_EVENTS + 1, u64::MAX] {
         let expected: Vec<u64> = (from.max(1)..=PAGED_EVENTS).collect();
         for size in PAGE_SIZES {
-            assert_pages(
+            assert_paging(
                 |cursor| read_stream_page(&store, &s, cursor, size, true),
                 from,
+                from.max(1),
+                true,
                 size,
                 &expected,
                 &format!("forward from {from} size {size}"),
@@ -576,9 +618,11 @@ pub async fn read_stream_pages_backward(store: Store) {
     ] {
         let expected: Vec<u64> = (1..=from.min(PAGED_EVENTS)).rev().collect();
         for size in PAGE_SIZES {
-            assert_pages(
+            assert_paging(
                 |cursor| read_stream_page(&store, &s, cursor, size, false),
                 from,
+                from,
+                false,
                 size,
                 &expected,
                 &format!("backward from {from} size {size}"),
@@ -663,12 +707,22 @@ async fn paged_tenant(store: &Store) -> (String, Vec<u64>) {
 pub async fn read_all_pages_forward(store: Store) {
     let (tenant, globals) = paged_tenant(&store).await;
     let head = *globals.last().unwrap();
-    for from in [0, globals[0], globals[2], globals[3] - 1, head, head + 1] {
+    for from in [
+        0,
+        globals[0],
+        globals[2],
+        globals[3] - 1,
+        head,
+        head + 1,
+        u64::MAX,
+    ] {
         let expected: Vec<u64> = globals.iter().copied().filter(|g| *g >= from).collect();
         for size in PAGE_SIZES {
-            assert_pages(
+            assert_paging(
                 |cursor| read_all_page(&store, &tenant, cursor, size, true),
                 from,
+                from,
+                true,
                 size,
                 &expected,
                 &format!("read_all forward from {from} size {size}"),
@@ -700,9 +754,11 @@ pub async fn read_all_pages_backward(store: Store) {
             .filter(|g| *g <= from)
             .collect();
         for size in PAGE_SIZES {
-            assert_pages(
+            assert_paging(
                 |cursor| read_all_page(&store, &tenant, cursor, size, false),
                 from,
+                from,
+                false,
                 size,
                 &expected,
                 &format!("read_all backward from {from} size {size}"),
@@ -710,4 +766,48 @@ pub async fn read_all_pages_backward(store: Store) {
             .await;
         }
     }
+}
+
+/// The cursor on a final forward page is where the next append lands, so a
+/// reader polling the tail sees each new event exactly once.
+pub async fn forward_end_cursor_resumes_after_append(store: Store) {
+    let s = paged_stream(&store).await;
+    let end = read_stream_page(&store, &s, 1, 10, true).await;
+    assert!(end.is_end);
+    let tail = read_all_page(&store, &s.tenant, 0, 10, true).await;
+    assert!(tail.is_end);
+
+    let ack = store
+        .append(s.request(PAGED_EVENTS, "", s.batch(PAGED_EVENTS, 1, "tail", 0)))
+        .await
+        .expect("append after the end");
+
+    let page = read_stream_page(&store, &s, end.next, 10, true).await;
+    assert_eq!(page.positions, vec![PAGED_EVENTS + 1], "read_stream tail");
+    assert!(page.is_end);
+    let page = read_all_page(&store, &s.tenant, tail.next, 10, true).await;
+    assert_eq!(page.positions, vec![ack.last_global_nonce], "read_all tail");
+    assert!(page.is_end);
+}
+
+/// `ReadAll` `max_count` 0 means 100, and larger requests are capped at
+/// 1000; `is_end` stays false while events remain.
+pub async fn read_all_page_size_default_and_cap(store: Store) {
+    let s = Stream::new();
+    let total = 1001;
+    store
+        .append(s.request(0, "", s.batch(0, total, "cap", 0)))
+        .await
+        .expect("append 1001 events");
+
+    let page = read_all_page(&store, &s.tenant, 0, 0, true).await;
+    assert_eq!(page.positions.len(), 100, "default page size");
+    assert!(!page.is_end);
+
+    let page = read_all_page(&store, &s.tenant, 0, 5000, true).await;
+    assert_eq!(page.positions.len(), 1000, "page size cap");
+    assert!(!page.is_end, "one event remains past the cap");
+    let rest = read_all_page(&store, &s.tenant, page.next, 5000, true).await;
+    assert_eq!(rest.positions.len(), 1);
+    assert!(rest.is_end);
 }
