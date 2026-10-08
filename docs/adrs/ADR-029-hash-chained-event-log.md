@@ -1,9 +1,9 @@
 # ADR-029: Hash-Chained Event Log
 
-**Status:** Proposed
-**Date:** 2026-10-07 (revised 2026-10-08)
+**Status:** Accepted
+**Date:** 2026-10-08 (proposed 2026-10-07)
 **Deciders:** NeuralEmpowerment
-**Related:** [ADR-026](ADR-026-subscription-failure-semantics.md), [ADR-027](ADR-027-cross-language-event-envelope.md), [ADR-028](ADR-028-append-idempotency-semantics.md), [ADR-030](ADR-030-extension-model-capabilities-not-plugins.md), issues #308, #337, #366, #403
+**Related:** [ADR-026](ADR-026-subscription-failure-semantics.md), [ADR-027](ADR-027-cross-language-event-envelope.md), [ADR-028](ADR-028-append-idempotency-semantics.md), [ADR-030](ADR-030-extension-model-capabilities-not-plugins.md), issues #308, #337, #366, #403 (fixed by #404)
 
 ## Context
 
@@ -57,14 +57,17 @@ Facts about the current store that constrain the design:
 - **Reads.** `ReadStream`, `ReadAll` and `Subscribe` return raw `EventData`.
   The Rust event-sourcing SDK (`event-sourcing/rust`) converts to
   `RecordedEvent`, which drops `content_schema` and `payload_sha256`,
-  reports `event_version` 0 as 1, and may be upcast. Backward reads are
-  broken today: a backward page's continuation cursor is taken from the
-  newest event of the page, so pages overlap (#403, both backends), and
-  `ReadAll` backward from `u64::MAX` reads nothing (the value wraps to -1
-  in SQL).
+  reports `event_version` 0 as 1, and may be upcast. Backward paging is
+  sound since #404 (fixes #403): the shared cursor rule
+  (`eventstore_core::paging`) continues one below a backward page's last
+  event in both backends, and positions above `i64::MAX` clamp instead of
+  wrapping, so `ReadAll` backward from `u64::MAX` starts at the end.
 - **Capabilities (#366).** `GetServerInfo` reports version, API, backend and
   named guarantees; each backend opts in explicitly. It reports no store
-  identity.
+  identity, and no RPC enumerates tenants: every read takes a `tenant_id`.
+- **Auth (ADR-024).** `eventstore-bin` has no authentication of its own.
+  The nginx gateway's external port requires TLS and Basic Auth; any
+  authenticated client can address any tenant.
 - **No deletion exists.** There is no tenant deletion, compaction or
   redaction feature today.
 
@@ -345,15 +348,60 @@ These server-reported values are informational. A verifier takes
 `store_id` and the epoch from the anchored activation inventory, never from
 the server it is checking.
 
-**No new RPC in v1.** A head is the last event of a backward read with an
-explicit upper bound, which the SDK helper hides; the same PR clamps
-`ReadAll`'s `from_global_nonce` to `i64::MAX` so `u64::MAX` means "from the
-end". Backward reads depend on #403 (overlapping backward pages). v1
-verifiers walk forward and the head helper reads a single event backward,
-so #403 gates only multi-page backward walks, which wait for it. A writer
-gets heads from `AppendResponse.last_event_hash`.
-A server-side "verify" RPC is rejected: the threat model distrusts the
-server, so verification belongs to the reader.
+**Heads need no new RPC.** A head is the last event of a one-event
+backward read (`ReadAll` from `u64::MAX`, `ReadStream` from the stream's
+`last_aggregate_nonce`), which the SDK helper hides; this relies on the
+#404 cursor and clamp rules. Verifiers walk forward. A writer gets heads
+from `AppendResponse.last_event_hash`. A server-side "verify" RPC is
+rejected: the threat model distrusts the server, so verification belongs
+to the reader.
+
+**One new admin RPC: tenant enumeration.** The anchoring tool must find
+every tenant without database access. A separate service, never part of
+the tenant-facing API:
+
+```proto
+package eventstore.admin.v1;
+service EventStoreAdmin {
+  rpc ListTenants (ListTenantsRequest) returns (ListTenantsResponse);
+}
+message ListTenantsRequest {
+  string after_tenant_id = 1;  // exclusive keyset cursor, bytewise order; "" = start
+  uint32 page_size       = 2;  // 0 = 500; values above 1000 are clamped to 1000
+}
+message ListTenantsResponse {
+  repeated string tenant_ids = 1;  // ascending bytewise, no duplicates
+  string next_after          = 2;  // last id of this page; pass back as after_tenant_id
+  bool   is_end              = 3;  // true on the page holding the last tenant
+}
+```
+
+- **Authorization.** Stronger than the data plane, because the data plane
+  has no per-tenant auth to lean on. `eventstore-bin` serves the admin
+  service only when both `ADMIN_BIND_ADDR` and `ADMIN_TOKEN` are set, on
+  that separate listener, never on the data port. It checks
+  `authorization: Bearer <token>` itself on every call, in constant time,
+  and refuses to start with a token shorter than 32 bytes. Missing or
+  wrong token: `UNAUTHENTICATED`, logged without the presented value. The
+  admin token is a separate secret from the gateway password.
+- **Network exposure.** The admin listener refuses a non-loopback bind
+  unless `ADMIN_ALLOW_REMOTE=true` (the hop is plaintext, like the
+  gateway's internal port). The gateway never proxies the admin listener
+  and rejects `/eventstore.admin.v1.EventStoreAdmin/` paths on both of its
+  ports, so a tenant client cannot reach it even by guessing the path.
+- **What it reveals.** Tenant ids only: no counts, heads, sizes or
+  timestamps. Ids are logged only at debug level; errors never echo the
+  cursor. The admin token holder learns every tenant id, which is the
+  point: it is an operator credential, not a tenant one.
+- **Pagination.** Keyset over distinct `tenant_id` (a loose index scan on
+  `(tenant_id, global_nonce)` in Postgres, one index probe per tenant; an
+  ordered map in memory). Not a snapshot: a tenant whose first event
+  commits during a listing, with an id below the cursor, is found by the
+  next listing. There is no tenant deletion, so a complete listing covers
+  every tenant that existed when it started. Independent of `HASH_CHAIN`.
+- **Trust.** The answer comes from the server being checked. Omission of a
+  tenant in the inventory or an earlier head record is detected (section
+  6); a tenant never anchored and hidden by a compromised server is not.
 
 **Capability `hash_chained_log`:** advertised only by an activated store.
 Every event at or above the epoch carries a v1 link, links are present on
@@ -589,12 +637,12 @@ pub trait AnchorSink: Send + Sync {
   medium is the control; (d) anchors cover what was published, nothing
   more. Signed or transparency-log adapters would add a
   receipt to `AnchorRef`; out of scope for v1.
-- **Tenant coverage.** gRPC reads are per tenant and there is no tenant
-  enumeration RPC. `chain-anchor` and `chain-verify` cover the tenants in
-  the inventory, in earlier head records, and any passed explicitly;
-  `chain-anchor` with database access can also discover tenants from the
-  `(tenant_id, global_nonce)` index. A tenant created after activation and
-  never anchored is not covered, and `chain-verify` prints the covered set.
+- **Tenant coverage.** `chain-anchor` lists tenants with the admin
+  `ListTenants` RPC (section 4) and anchors every one. `chain-verify`
+  covers the union of that listing, the inventory and every earlier head
+  record, and reports a tenant known from the anchors but missing from the
+  listing as a failure. A tenant created after the newest anchor is not
+  yet covered; `chain-verify` prints the covered set.
 - **Filesystem adapter (default, first PR):**
   `<dir>/<store_id>/<kind>/<zero-padded created_at>-<digest>.json`,
   written to a temp file, fsynced, then hard-linked into place and the
@@ -603,11 +651,15 @@ pub trait AnchorSink: Send + Sync {
   independent anchor: a local directory sits in the operator's trust
   domain. Pushing it to a protected git remote is an ops step the runbook
   describes.
-- **S3 Object Lock adapter (later PR, cargo feature).** Other media are new
-  adapters, not new formats.
+- **S3 Object Lock adapter (first rollout, right after filesystem, cargo
+  feature `s3`):** one object per record in a bucket with compliance-mode
+  retention, written with `If-None-Match: *`, credentials separate from
+  the database's. This is the recommended production medium. Other media
+  are new adapters, not new formats.
 
 `eventstore-admin` uses the trait for `chain-activate`, `chain-anchor`
-(reads current tenant heads over gRPC and publishes a `heads` record) and
+(lists tenants via `ListTenants`, reads each head with a one-event
+backward read, publishes one `heads` record) and
 `chain-verify`. Scheduling `chain-anchor` is the operator's job; anchor
 freshness bounds the undetectable rewrite window (section 9).
 
@@ -765,34 +817,41 @@ is missed, the fallbacks are tenant-only links, then a cap on header bytes.
 
 ## Rollout (small PRs, Rust first)
 
-0. Independent: #403, backward pagination overlap (both backends,
-   conformance tests for gaps, multipage and genesis). Not needed by the
-   v1 forward verifiers; required before any multi-page backward walk.
+Backward paging (#403) is already fixed by #404.
+
 1. This ADR and ADR-030.
 2. `eventstore_core::chain`: encoding, hash, seal, forward verifier, golden
    vectors, `EventMetadata` coverage guard. No behavior change.
 3. `eventstore-anchor`: record format and digest, `AnchorSink`, filesystem
    adapter, golden record vectors.
-4. Proto: `EventChainLink`, `EventData.chain`,
+4. `eventstore-anchor` S3 Object Lock adapter (feature `s3`), tested
+   against a local S3-compatible server with object lock.
+5. Admin service: `eventstore.admin.v1.EventStoreAdmin/ListTenants` in
+   both backends, admin listener and bearer-token check in
+   `eventstore-bin`, gateway deny rule, conformance (ordering, cursor,
+   page clamp, empty store) and auth tests (no token, wrong token, data
+   port and gateway return no admin service).
+6. Proto: `EventChainLink`, `EventData.chain`,
    `AppendResponse.last_event_hash`, ServerInfo `store_id` /
-   `chain_epoch` / `chain_format`, capability constant (not advertised),
-   `ReadAll` clamp. Regenerate TS and Python stubs; no behavior there.
-5. Memory backend: `HASH_CHAIN`, links, conformance in both modes (on,
+   `chain_epoch` / `chain_format`, capability constant (not advertised).
+   Regenerate TS and Python stubs; no behavior there.
+7. Memory backend: `HASH_CHAIN`, links, conformance in both modes (on,
    off, retry returns original hash, client link ignored, rollback leaves
    heads untouched, refuse unlinked predecessor). Advertise on memory when
    on.
-6. Postgres inert migrations (index first, concurrent, `indisvalid`
+8. Postgres inert migrations (index first, concurrent, `indisvalid`
    check).
-7. Postgres chained append path, startup config/store check,
+9. Postgres chained append path, startup config/store check,
    `eventstore-admin chain-activate` (seal, constraint, inventory publish),
    forced-race and crash tests, bench against the budget (and the
    tenant-only fallback decision). Tamper tests: `UPDATE` with the trigger
    disabled, `DELETE`, `TRUNCATE`, older-dump and pre-activation restore.
-8. Rust SDK verification (`verify_stream`, `verify_tenant_range`,
-   `RecordedEvent.chain`), `eventstore-admin chain-anchor` and
-   `chain-verify`. Runbook: activation, anchoring, restore drill.
-9. Later, on demand: S3 Object Lock adapter; TS/Python verifiers;
-   checkpoint-hash persistence; signed heads.
+10. Rust SDK verification (`verify_stream`, `verify_tenant_range`,
+    `RecordedEvent.chain`), `eventstore-admin chain-anchor` and
+    `chain-verify`. Runbook: activation, anchoring, restore drill, admin
+    token handling.
+11. Later, on demand: TS/Python verifiers; checkpoint-hash persistence;
+    signed heads.
 
 ## Consequences
 

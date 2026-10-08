@@ -1,6 +1,6 @@
 # ADR-030: Extension Model: Capabilities, Not Plugins
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-10-08
 **Deciders:** NeuralEmpowerment
 **Related:** [ADR-029](ADR-029-hash-chained-event-log.md), issue #308
@@ -37,7 +37,7 @@ ESP has **no plugin framework**. An extension is one of two things:
    traits, adapters behind cargo features, or documentation. Examples:
    projection sinks (existing `ProjectionStore` / `CheckpointStore`
    traits; new sinks are implementations added when an application needs
-   one), anchor sinks (`AnchorSink`, ADR-029), and storing content by
+   one), anchor sinks (`AnchorSink`, ADR-029; filesystem and S3 Object Lock adapters), and storing content by
    reference (event carries reference and content hash, blob written
    first; a separate pattern document).
 
