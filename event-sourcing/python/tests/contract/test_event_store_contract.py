@@ -221,6 +221,15 @@ async def test_non_consecutive_aggregate_nonces_are_refused(client: EventStoreCl
     assert len(await client.read_events(f"Order-{aid}")) == 2
 
 
+async def test_stream_name_sets_aggregate_id_and_type(client: EventStoreClient) -> None:
+    """The store keys and labels an event by its stream, not the envelope's claim."""
+    aid = _fresh_id()
+    await client.append_events(f"Order-{aid}", [_envelope("Invoice", "other", 1)], 0)
+
+    [event] = await client.read_events(f"Order-{aid}")
+    assert (event.metadata.aggregate_id, event.metadata.aggregate_type) == (aid, "Order")
+
+
 async def test_omitted_expected_version_means_new_stream(client: EventStoreClient) -> None:
     aid = _fresh_id()
     await client.append_events(f"Order-{aid}", [_envelope("Order", aid, 1)])

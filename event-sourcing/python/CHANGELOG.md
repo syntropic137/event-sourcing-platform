@@ -23,7 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at version N inclusive, like the store (it started at N + 1), and an
   unknown stream reads empty instead of raising. Like the store, it refuses
   aggregate nonces that do not continue the stream one by one, and treats an
-  omitted `expected_version` as 0 (new stream), as the gRPC client sends it.
+  omitted `expected_version` as 0 (new stream), as the gRPC client sends it
+  (`ExpectedVersion.ANY` docs corrected: it never skipped the check on the
+  store). Events take their aggregate id and type from the stream name, as
+  the gRPC client sends them, not from the envelope.
 
 ### Fixed (v0.17.0 release review, #349)
 

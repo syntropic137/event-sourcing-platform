@@ -170,7 +170,12 @@ class MemoryEventStoreClient:
         updated_events: list[EventEnvelope[DomainEvent]] = []
         for event in events:
             new_metadata = event.metadata.model_copy(
-                update={"global_nonce": self._global_nonce_counter}
+                update={
+                    "global_nonce": self._global_nonce_counter,
+                    # The gRPC client labels events by stream name, not envelope.
+                    "aggregate_id": key,
+                    "aggregate_type": stream_name.split("-", 1)[0],
+                }
             )
             updated_events.append(EventEnvelope(event=event.event, metadata=new_metadata))
             self._global_nonce_counter += 1
