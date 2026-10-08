@@ -202,8 +202,8 @@ event_hash = SHA-256(
   checking the blob against its hash is the application's job. That
   storage pattern is documented separately, not by this ADR.
 
-**Algorithm: SHA-256.** Already a dependency (`sha2`, used by the
-fingerprint), available in every target language's standard library and in
+**Algorithm: SHA-256.** Already a Rust dependency (`sha2`, used by the
+fingerprint), in the Node and Python standard libraries, and in
 Postgres (`sha256()`, so operators can audit in SQL), FIPS-approved, and
 hardware-accelerated on current x86 and ARM. Events are small and an
 append's cost is the commit, not the hash (section 9). Length extension is
@@ -245,7 +245,8 @@ Postgres append on an activated store:
    is refused (`FAILED_PRECONDITION`, logged with the position). If the
    tenant's last event is below the epoch (the tenant's first chained
    event), `prev_tenant_hash` is that tenant's **seal head** from
-   `chain_seals` (section 5), or zero if the tenant has no seal. If the
+   `chain_seals` (section 5), or zero if the tenant has no seal; a tenant
+   with events below the epoch but no seal row is refused. If the
    stream's last event is below the epoch, `prev_stream_hash` is zero.
    This is a structural check, not verification: the server does not
    re-verify history on append. If chained rows were deleted, the server
@@ -264,7 +265,9 @@ A store that is not activated runs today's append path unchanged.
 
 Memory computes the same links under its existing write lock. Memory is
 not persistent, so with `HASH_CHAIN=on` it is activated at startup with
-epoch 1, no legacy events and no seals.
+epoch 1, no legacy events and no seals. Memory is for development and
+tests: it gets a fresh `store_id` per process, publishes no inventory, and
+is outside the anchoring and restore procedures.
 
 **Idempotent retries.** A keyed retry of a committed batch must return the
 original hash. The `idempotency` row gains `last_event_hash`, written in the
@@ -371,25 +374,30 @@ history before appending. A client that requires it calls
    `chain_activation` is empty, then runs **one transaction**:
    1. `LOCK TABLE events IN EXCLUSIVE MODE` (reads allowed, writes
       blocked; a stray writer waits instead of slipping in).
-   2. `epoch = nextval(global_nonce sequence)`. Every committed event is
-      below it; every later insert draws a larger value.
+   2. Check the `global_nonce` sequence has increment 1 and `CACHE 1`
+      (the `BIGSERIAL` default; a larger cache would let a stray session
+      insert a pre-cached nonce below the epoch), then `epoch =
+      nextval(...)` and assert `epoch > max(global_nonce)`. Every committed
+      event is below it; every later insert draws a larger value.
    3. Seal every tenant with events below the epoch (below) and insert
       the `chain_seals` rows.
    4. Insert `chain_activation` (fresh random `store_id`, epoch, format 1,
       time, inventory digest).
    5. `ALTER TABLE events ADD CONSTRAINT events_chained CHECK
-      (global_nonce < <epoch> OR (chain_format IS NOT NULL AND event_hash
-      IS NOT NULL AND prev_stream_hash IS NOT NULL AND prev_tenant_hash IS
-      NOT NULL)) NOT VALID`. Existing rows are all below the epoch.
+      (global_nonce < <epoch> OR (chain_format = 1 AND
+      octet_length(event_hash) = 32 AND octet_length(prev_stream_hash) = 32
+      AND octet_length(prev_tenant_hash) = 32)) NOT VALID`. Existing rows
+      are all below the epoch. This enforces structure, not cryptographic
+      validity; a v2 format widens it in the same migration that adds v2.
    6. Commit.
 
-   A crash before commit leaves nothing; rerun. After commit the tool
+   A crash before commit leaves only a nonce gap; rerun. After commit the tool
    builds the activation inventory from the committed tables, publishes it
    through the anchor sink (section 6) and reads it back to confirm. If
    publishing fails, `eventstore-admin chain-export-inventory` retries
    from the same tables; the result is byte-identical.
 4. Confirm the inventory is published to a medium outside the database's
-   trust domain. Do not resume writes before that: until it is anchored,
+   trust domain, and record its digest out of band (section 6). Do not resume writes before that: until it is anchored,
    the seal is only as trustworthy as the database.
 5. Start every instance with `HASH_CHAIN=on`. Writes resume, chained.
 
@@ -465,8 +473,8 @@ Postgres; both are hashed as stored, so both verify.
 requirement) carries the link columns, `idempotency.last_event_hash`,
 `chain_activation`, `chain_seals` and the constraint. Before writes resume
 after any restore, the runbook runs `eventstore-admin chain-verify`, which
-fetches the activation inventory and the newest held heads from the anchor
-sink, verifies every tenant's seal and chain to its restored head, and
+fetches the pinned activation inventory and every held head record from
+the anchor sink, verifies every tenant's seal and chain to its restored head, and
 checks each anchored head for **reachability** (an ancestor of, or equal
 to, the restored head). Missing evidence is reported as unknown, never as
 verified.
@@ -534,31 +542,51 @@ A `"kind": "heads"` record has the same envelope with `"heads": [{
 pub struct AnchorRecord { /* parsed esp/anchor/v1 record */ }
 pub struct AnchorRef { pub digest: [u8; 32], pub location: String }
 pub enum AnchorKind { Inventory, Heads }
+pub struct AnchorPage { pub records: Vec<AnchorRecord>, pub next: Option<String> }
 
 #[async_trait]
 pub trait AnchorSink: Send + Sync {
     /// Store the record durably. Create-only and idempotent by digest:
     /// republishing the same record succeeds; never overwrites.
     async fn publish(&self, record: &AnchorRecord) -> Result<AnchorRef, AnchorError>;
-    /// Every record for `store_id` of `kind`. The caller re-checks digests.
-    async fn list(&self, store_id: Uuid, kind: AnchorKind) -> Result<Vec<AnchorRecord>, AnchorError>;
+    /// Read one record back (publish confirmation, pinned inventory).
+    async fn get(&self, at: &AnchorRef) -> Result<Option<AnchorRecord>, AnchorError>;
+    /// Records for `store_id` of `kind`, in position order, paginated.
+    async fn list(&self, store_id: Uuid, kind: AnchorKind, after: Option<&str>)
+        -> Result<AnchorPage, AnchorError>;
 }
 ```
 
-- Sinks only store and return records. Digest checks, choosing the newest
-  head per tenant (highest `global_nonce`), and reachability checks live in
-  shared code above the trait, so an adapter cannot weaken verification.
-- **Filesystem adapter (default, first PR):** writes
-  `<dir>/<store_id>/<kind>/<sortable position>-<digest>.json` with
-  create-new semantics. On its own it is **not** an independent anchor: a
-  local directory sits in the same trust domain as the operator. Pushing
-  that directory to a protected git remote (or any write-once medium) is
-  an ops step the runbook describes.
-- **S3 Object Lock adapter (later PR, cargo feature):** one object per
-  record in a bucket with compliance-mode retention, written with
-  `If-None-Match: *`; credentials separate from the database's.
-- Other media (transparency log, signed records) are new adapters, not new
-  formats.
+- **Sinks store, verification decides.** Digest recomputation,
+  reachability and fork checks live in shared code above the trait. Every
+  retained head record is checked, not only the newest: each must be an
+  ancestor of, or equal to, the current head, and two records with
+  different hashes at the same `(tenant_id, global_nonce)` are a fork.
+- **What the sink is trusted for.** Digests catch altered records, not
+  omitted ones: a sink, or anyone holding its write or delete credentials,
+  that hides records weakens the evidence, and nothing in the records
+  reveals that. So: (a) the operator records the inventory digest out of
+  band at activation (runbook, ticket, second medium), and `chain-verify`
+  requires it (`--inventory <digest>`) and fetches that record by digest;
+  (b) the medium must make records undeletable by whoever can write the
+  database (protected git branch, object lock); (c) anchors cover what was
+  published, nothing more. Signed or transparency-log adapters would add a
+  receipt to `AnchorRef`; out of scope for v1.
+- **Tenant coverage.** gRPC reads are per tenant and there is no tenant
+  enumeration RPC. `chain-anchor` and `chain-verify` cover the tenants in
+  the inventory, in earlier head records, and any passed explicitly;
+  `chain-anchor` with database access can also discover tenants from the
+  `(tenant_id, global_nonce)` index. A tenant created after activation and
+  never anchored is not covered, and `chain-verify` prints the covered set.
+- **Filesystem adapter (default, first PR):**
+  `<dir>/<store_id>/<kind>/<zero-padded position>-<digest>.json`, written
+  to a temp file, fsynced, then hard-linked into place (fails if the name
+  exists) and the directory fsynced. On its own it is **not** an
+  independent anchor: a local directory sits in the operator's trust
+  domain. Pushing it to a protected git remote is an ops step the runbook
+  describes.
+- **S3 Object Lock adapter (later PR, cargo feature).** Other media are new
+  adapters, not new formats.
 
 `eventstore-admin` uses the trait for `chain-activate`, `chain-anchor`
 (reads current tenant heads over gRPC and publishes a `heads` record) and
@@ -586,6 +614,10 @@ freshness bounds the undetectable rewrite window (section 9).
   complete only if its lower end reaches genesis, the tenant's anchored
   seal head, or a hash the caller already trusts. A suffix that merely
   ends at the trusted head, with earlier events withheld, is incomplete.
+- A stream's links restart at zero after activation, so a trusted stream
+  head authenticates only the stream's chained suffix. `verify_stream`
+  reports that boundary ("chained from aggregate nonce k"); the legacy
+  prefix is covered only by verifying the tenant's seal.
 - API: `verify_stream(aggregate_id, trusted_stream_head)` and
   `verify_tenant_range(from, trusted_lower, trusted_head)`, forward walks,
   each returning the level reached, the verified head, or the first failing
@@ -610,7 +642,7 @@ so a future feature does not have to break the chain:
 | Operation | Verifier result |
 |---|---|
 | Projection rebuild | Not affected: projections are not chained. |
-| Payload redaction (erasure, crypto-shredding) | Keep the row and its link, drop the payload bytes, keep a server-written payload digest. The chain verifies; the verifier reports "verified, payload redacted". Each redaction needs its own attested record. Needs its own ADR. |
+| Payload redaction (erasure, crypto-shredding) | Future, own ADR. Hashing the payload as a digest keeps this possible: keep the row and link, drop the bytes, keep a server-written digest (a column v1 does not add), plus an attested redaction record. |
 | Stream or prefix compaction | Must not delete rows: a deleted event is a hole in its tenant chain. Compact by redacting to stubs. |
 | Tenant deletion | Detected as "tenant absent" by any anchor or inventory entry for it. The chain cannot tell a legitimate deletion from an attack; deletion must leave an attested record outside the tenant. |
 
