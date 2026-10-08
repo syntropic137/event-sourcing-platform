@@ -66,8 +66,9 @@ Facts about the current store that constrain the design:
   named guarantees; each backend opts in explicitly. It reports no store
   identity, and no RPC enumerates tenants: every read takes a `tenant_id`.
 - **Auth (ADR-024).** `eventstore-bin` has no authentication of its own.
-  The nginx gateway's external port requires TLS and Basic Auth; any
-  authenticated client can address any tenant.
+  The nginx gateway's external port defaults to TLS and Basic Auth, with
+  documented exceptions (loopback publish, explicit unauthenticated
+  override). Any client that passes the gateway can address any tenant.
 - **No deletion exists.** There is no tenant deletion, compaction or
   redaction feature today.
 
@@ -235,8 +236,8 @@ Postgres append on an activated store:
    (stream row, then tenant) is preserved.
 3. The stream-head re-check query also reads the hash of the stream's last
    event (primary key `(tenant_id, aggregate_id, last_nonce)`), the
-   tenant's last event (`global_nonce`, `event_hash`) via a new index
-   `(tenant_id, global_nonce)`, and draws the batch's nonces (`SELECT
+   tenant's last event (`global_nonce`, `event_hash`) via the new index
+   `(tenant_id COLLATE "C", global_nonce)`, and draws the batch's nonces (`SELECT
    nextval(...) FROM generate_series(1, n)`, sorted), in the same
    statement: no added round trip, which matters because the locked window
    is round trip bound (`POSTGRES-BASELINE.md`, finding 2). Nonces are
@@ -298,7 +299,8 @@ today.
   `prev_stream_hash BYTEA`, `prev_tenant_hash BYTEA`, all nullable.
   Catalog-only change.
 - `idempotency.last_event_hash BYTEA`, nullable.
-- Index `(tenant_id, global_nonce)`, built `CONCURRENTLY` in its own
+- Index `(tenant_id COLLATE "C", global_nonce)` (collation: see
+  `ListTenants` below), built `CONCURRENTLY` in its own
   non-transactional migration (sqlx `-- no-transaction`) so a large table
   is not write-locked while it builds. A failed concurrent build leaves an
   `INVALID` index that `IF NOT EXISTS` would skip; the migration checks
@@ -393,9 +395,15 @@ message ListTenantsResponse {
   timestamps. Ids are logged only at debug level; errors never echo the
   cursor. The admin token holder learns every tenant id, which is the
   point: it is an operator credential, not a tenant one.
-- **Pagination.** Keyset over distinct `tenant_id` (a loose index scan on
-  `(tenant_id, global_nonce)` in Postgres, one index probe per tenant; an
-  ordered map in memory). Not a snapshot: a tenant whose first event
+- **Pagination.** Keyset over distinct `tenant_id` in bytewise order (a
+  loose index scan on `(tenant_id, global_nonce)` in Postgres, one index
+  probe per tenant; an ordered map in memory). `tenant_id` is `TEXT` with
+  the database collation, so the index is declared on `tenant_id COLLATE
+  "C"` and every query that uses it (cursor comparison, ordering, tenant
+  equality) says `COLLATE "C"`; memory compares bytes. The server reads
+  one distinct tenant beyond the page to set `is_end`. An empty page
+  returns `is_end = true` and echoes the request's cursor as `next_after`.
+  Not a snapshot: a tenant whose first event
   commits during a listing, with an id below the cursor, is found by the
   next listing. There is no tenant deletion, so a complete listing covers
   every tenant that existed when it started. Independent of `HASH_CHAIN`.
@@ -826,8 +834,10 @@ Backward paging (#403) is already fixed by #404.
    adapter, golden record vectors.
 4. `eventstore-anchor` S3 Object Lock adapter (feature `s3`), tested
    against a local S3-compatible server with object lock.
-5. Admin service: `eventstore.admin.v1.EventStoreAdmin/ListTenants` in
-   both backends, admin listener and bearer-token check in
+5. Postgres index migration `(tenant_id COLLATE "C", global_nonce)`
+   (concurrent, `indisvalid` check). Admin service: `eventstore.admin.v1`
+   proto and generated Rust code (TS/Python stubs regenerated, no
+   client), `ListTenants` in both backends, admin listener and bearer-token check in
    `eventstore-bin`, gateway deny rule, conformance (ordering, cursor,
    page clamp, empty store) and auth tests (no token, wrong token, data
    port and gateway return no admin service).
@@ -839,8 +849,8 @@ Backward paging (#403) is already fixed by #404.
    off, retry returns original hash, client link ignored, rollback leaves
    heads untouched, refuse unlinked predecessor). Advertise on memory when
    on.
-8. Postgres inert migrations (index first, concurrent, `indisvalid`
-   check).
+8. Postgres inert chain migrations (link columns, idempotency column,
+   empty activation and seal tables).
 9. Postgres chained append path, startup config/store check,
    `eventstore-admin chain-activate` (seal, constraint, inventory publish),
    forced-race and crash tests, bench against the budget (and the
