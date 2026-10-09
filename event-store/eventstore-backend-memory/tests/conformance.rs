@@ -11,3 +11,4 @@ async fn store() -> Arc<dyn EventStore> {
 }
 
 eventstore_core::append_conformance_tests!(store);
+eventstore_core::read_conformance_tests!(store);

@@ -416,23 +416,25 @@ After Terraform creates the VM:
    ```bash
    curl http://192.168.0.100:8080/health
    ```
-7. **Verify the gRPC gateway requires auth** (ADR-024 — `eventstore-bin` itself has no auth; the `gateway` service in front of it is the trust boundary). `eventstore-bin` doesn't enable gRPC server reflection, so pass `-proto` (from the repo root) or `list` fails with "server does not support the reflection API" regardless of auth:
+7. **Verify the gRPC gateway requires TLS and auth** (ADR-024 — `eventstore-bin` itself has no auth; the `gateway` service in front of it is the trust boundary). The port is TLS-only (#301); by default Ansible generates a private CA on the VM and fetches it to `infra-as-code/proxmox/configure/ansible/envs/local/gateway-ca.pem`. `eventstore-bin` doesn't enable gRPC server reflection, so pass `-proto` (from the repo root) or `list` fails with "server does not support the reflection API" regardless of auth:
    ```bash
-   # Without credentials — should fail with 401/Unauthorized (doesn't need
+   CA=infra-as-code/proxmox/configure/ansible/envs/local/gateway-ca.pem
+
+   # Without credentials — should fail with UNAUTHENTICATED (doesn't need
    # -proto, since it never gets past the auth check)
-   grpcurl -plaintext 192.168.0.100:50051 list
+   grpcurl -cacert "$CA" 192.168.0.100:50051 list
 
    # With credentials — should succeed
    # Use `tr -d '\n'` after base64, not `-w0` (GNU-only, not on macOS/BSD
    # base64) — a wrapped/newline-containing token breaks the auth header.
    TOKEN=$(echo -n "admin:$ESP_GATEWAY_PASSWORD" | base64 | tr -d '\n')
-   grpcurl -plaintext \
+   grpcurl -cacert "$CA" \
      -import-path event-store/eventstore-proto/proto \
      -proto eventstore/v1/eventstore.proto \
      -H "authorization: Basic $TOKEN" \
      192.168.0.100:50051 list
    ```
-   Note: the Rust, TypeScript and Python SDK clients all support Basic Auth (Rust `ClientConfig::basic_auth`, TS `auth: Credentials.basic(...)`, Python `auth=BasicAuth(...)`); see "Client SDK support" in `event-store/gateway/README.md`. Over plaintext to this host they need the explicit insecure-credentials opt-in until TLS lands (#301).
+   Note: the Rust, TypeScript and Python SDK clients all support TLS with a custom CA plus Basic Auth (connect to `https://192.168.0.100:50051`); see "Client SDK support" and "TLS" in `event-store/gateway/README.md` (also for using a Let's Encrypt cert instead of the private CA, and rotation).
 
 ## Security Checklist
 
@@ -453,10 +455,10 @@ Before deploying to production:
 - [ ] Set a strong `ESP_GATEWAY_PASSWORD` (ADR-024) — `eventstore-bin` has no
       auth of its own; an unset or default password leaves the gRPC service
       effectively open to anyone who can reach the gateway's published port
-- [ ] Put TLS termination in front of the gateway before exposing it beyond
-      a trusted network — Basic Auth over plaintext HTTP/2 is only safe
-      behind TLS (not yet wired into this repo's infra, see ADR-024 "Bad /
-      accepted tradeoffs")
+- [ ] Gateway TLS (#301) is on by default; for anything beyond a private
+      network use a publicly trusted cert (`ESP_GATEWAY_TLS_CERT_SRC` /
+      `_KEY_SRC`, or certbot on the VM) and plan its renewal, see
+      `event-store/gateway/README.md` "TLS"
 
 ## Troubleshooting Checklist
 

@@ -103,6 +103,32 @@ jobs:
             event-store/coverage/lcov.info
             event-store/coverage/html
 
+  # Rust SDK through the nginx gateway with TLS + Basic Auth (#301): streaming,
+  # cert rotation, fail-closed startup. Builds only the small nginx image.
+  gateway_tls_e2e:
+    name: gateway • TLS e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: "event-store -> target"
+          shared-key: "event-store"
+          cache-targets: true
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Gateway TLS e2e
+        run: make -C event-store gateway-tls-e2e E2E_ARGS=--nocapture
+
   rust_sdk_fast:
     name: SDK (Rust) • qa-fast
     runs-on: ubuntu-latest

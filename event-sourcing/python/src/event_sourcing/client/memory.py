@@ -79,7 +79,9 @@ class MemoryEventStoreClient:
         # Keyed by aggregate id alone, as the server keys them: see _stream_key.
         self._streams: dict[str, list[EventEnvelope[DomainEvent]]] = {}
         self._connected = False
-        self._global_nonce_counter = 0  # For assigning global nonces
+        # Next global nonce to assign. The store numbers events from 1, so a
+        # backward read's terminal cursor 0 names no event (#405).
+        self._global_nonce_counter = 1
 
     async def connect(self) -> None:
         """Connect (no-op for memory client)."""
@@ -101,28 +103,15 @@ class MemoryEventStoreClient:
 
         Args:
             stream_name: The stream identifier
-            from_version: Optional version to read from (1-based)
+            from_version: Aggregate nonce to read from, inclusive; 0, 1 or
+                None read from the first event (like the store)
 
         Returns:
-            List of event envelopes
-
-        Raises:
-            EventStoreError: If stream doesn't exist and from_version is specified
+            List of event envelopes; empty for an unknown stream
         """
-        key = _stream_key(stream_name)
-        if key not in self._streams:
-            if from_version is not None:
-                raise EventStoreError(f"Stream not found: {stream_name}")
-            return []
-
-        events = self._streams[key]
-
-        if from_version is not None:
-            # from_version is 1-based, so we need to convert to 0-based index
-            start_index = from_version
-            events = events[start_index:]
-
-        return list(events)  # Return copy to prevent external modification
+        events = self._streams.get(_stream_key(stream_name), [])
+        # Version N is the event at index N - 1.
+        return events[max((from_version or 0) - 1, 0) :]  # a copy
 
     async def append_events(
         self,
@@ -136,10 +125,13 @@ class MemoryEventStoreClient:
         Args:
             stream_name: The stream identifier
             events: Events to append
-            expected_version: Expected current version (0 means stream must be new)
+            expected_version: Expected current version; 0 or None means the
+                stream must be new (the gRPC client sends None as 0)
 
         Raises:
             ConcurrencyConflictError: If version mismatch detected
+            EventStoreError: If aggregate nonces do not continue the stream
+                one by one (the store refuses them)
         """
         if not events:
             return
@@ -147,38 +139,46 @@ class MemoryEventStoreClient:
         key = _stream_key(stream_name)
         # Get current version (number of events in stream)
         current_version = len(self._streams.get(key, []))
+        expected_version = expected_version or 0
 
-        # Check expected version if provided
-        if expected_version is not None:
-            if current_version != expected_version:
-                if expected_version == 0 and current_version > 0:
-                    raise StreamAlreadyExistsError(
-                        stream_name=stream_name,
-                        actual_version=current_version,
-                    )
-                raise ConcurrencyConflictError(
-                    expected_version=expected_version,
+        if current_version != expected_version:
+            if expected_version == 0:
+                raise StreamAlreadyExistsError(
+                    stream_name=stream_name,
                     actual_version=current_version,
+                )
+            raise ConcurrencyConflictError(
+                expected_version=expected_version,
+                actual_version=current_version,
+            )
+
+        # Version N is the event at index N - 1 (read_events relies on it).
+        for offset, event in enumerate(events, start=1):
+            if event.metadata.aggregate_nonce != current_version + offset:
+                raise EventStoreError(
+                    f"event {offset - 1} aggregate_nonce {event.metadata.aggregate_nonce} "
+                    f"must equal expected {current_version + offset}"
                 )
 
         # Create stream if it doesn't exist
         if key not in self._streams:
             self._streams[key] = []
 
-        # Assign global nonce to events if not already set
-        # Create new envelopes since EventEnvelope is frozen
+        # The store numbers every event, ignoring any global nonce the caller
+        # set: keeping it could duplicate one and break paging (#405).
+        # EventEnvelope is frozen, so each gets new metadata.
         updated_events: list[EventEnvelope[DomainEvent]] = []
         for event in events:
-            if event.metadata.global_nonce is None:
-                # Create new metadata with global_nonce
-                new_metadata = event.metadata.model_copy(
-                    update={"global_nonce": self._global_nonce_counter}
-                )
-                new_envelope = EventEnvelope(event=event.event, metadata=new_metadata)
-                updated_events.append(new_envelope)
-                self._global_nonce_counter += 1
-            else:
-                updated_events.append(event)
+            new_metadata = event.metadata.model_copy(
+                update={
+                    "global_nonce": self._global_nonce_counter,
+                    # The gRPC client labels events by stream name, not envelope.
+                    "aggregate_id": key,
+                    "aggregate_type": stream_name.split("-", 1)[0],
+                }
+            )
+            updated_events.append(EventEnvelope(event=event.event, metadata=new_metadata))
+            self._global_nonce_counter += 1
 
         # Append events
         self._streams[key].extend(updated_events)
@@ -231,14 +231,14 @@ class MemoryEventStoreClient:
         from_global_nonce: int,
         forward: bool,
     ) -> int:
-        """Calculate the next global nonce for pagination."""
+        """Next global nonce: one past the page's last event, either direction (#403)."""
         if forward:
             if page and page[-1].metadata.global_nonce is not None:
                 return page[-1].metadata.global_nonce + 1
             return from_global_nonce
 
-        if page and page[0].metadata.global_nonce is not None:
-            return max(0, page[0].metadata.global_nonce - 1)
+        if page and page[-1].metadata.global_nonce is not None:
+            return max(0, page[-1].metadata.global_nonce - 1)
         return 0
 
     async def read_all(
@@ -259,8 +259,9 @@ class MemoryEventStoreClient:
             Tuple of (events, is_end, next_from_global_nonce)
         """
         sorted_events = self._filter_and_sort_events(from_global_nonce, forward)
-        page = sorted_events[:max_count]
-        is_end = len(page) < max_count
+        limit = min(max_count, 1000) if max_count > 0 else 100  # like the store
+        page = sorted_events[:limit]
+        is_end = len(sorted_events) <= limit  # nothing remains after this page
         next_from = self._calculate_next_position(page, from_global_nonce, forward)
         return page, is_end, next_from
 

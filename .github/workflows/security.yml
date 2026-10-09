@@ -3,7 +3,10 @@ name: Security Scanning
 on:
   push:
     branches: [main]
+  # PRs into `release` run this via release-gate.yml, which gates on it.
   pull_request:
+    branches-ignore: [release]
+  workflow_call:
   schedule:
     - cron: '0 6 * * 1' # Weekly on Monday at 06:00 UTC
 
@@ -14,8 +17,9 @@ permissions:
 # Supersede in-flight PR scans when a newer commit is pushed to the same PR.
 # Scoped to pull_request only: push-to-main and scheduled scans are never
 # cancelled, so the default-branch security posture keeps a complete history.
+# Literal prefix: under workflow_call github.workflow is the caller's name.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: security-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

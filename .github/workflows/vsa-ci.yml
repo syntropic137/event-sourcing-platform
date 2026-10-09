@@ -7,13 +7,18 @@ on:
   pull_request:
     branches: [main]
     paths: [vsa/**]
+  # release-gate.yml calls this unfiltered so a broken VSA cannot reach release.
+  workflow_call:
 
 # Least-privilege default - limits blast radius if a step is compromised.
 permissions:
   contents: read
 
+# Literal prefix, not github.workflow: when called from release-gate.yml,
+# github.workflow is the caller's name, so it would share a group with the
+# called CI workflow and cancel-in-progress would cancel one of them.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: vsa-ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
