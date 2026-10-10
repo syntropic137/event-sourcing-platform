@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.svg" alt="Syntropic137 Event Sourcing" width="100%">
+</p>
+
 # Event Sourcing Platform
 
 A comprehensive event sourcing platform that packages a robust event store with higher-level event sourcing abstractions. This platform provides reliable, robust, and flexible packages for implementing event sourcing in different applications, with progressive examples serving as living documentation.
