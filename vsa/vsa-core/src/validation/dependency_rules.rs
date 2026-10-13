@@ -16,7 +16,7 @@ use super::{
 use crate::error::Result;
 use crate::scanner::Scanner;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ============================================================================
 // VSA027: Domain Purity Rule
@@ -65,8 +65,12 @@ impl ValidationRule for DomainPurityRule {
 
                 // Check each import
                 for import in imports {
-                    // Detect if import targets forbidden layers
-                    let is_forbidden = Self::is_forbidden_import(&import.module);
+                    // Detect if import targets forbidden layers. A relative
+                    // import is first resolved against the importing file.
+                    let file_in_context =
+                        file_path.strip_prefix(&context.path).unwrap_or(file_path);
+                    let is_forbidden =
+                        Self::is_forbidden_import_from(&import.module, file_in_context);
 
                     if is_forbidden {
                         let relative_path = file_path.strip_prefix(&ctx.root).unwrap_or(file_path);
@@ -102,6 +106,19 @@ impl ValidationRule for DomainPurityRule {
 }
 
 impl DomainPurityRule {
+    /// Check an import written in `file` (a path relative to the context
+    /// root). Relative imports (`super::events`, Python `.events`, TS
+    /// `../events/X`) are resolved against the file first, so `super::events`
+    /// from `domain/order.rs` is `domain/events` (allowed) while
+    /// `super::super::events` from `domain/aggregate_x/order.rs` is the
+    /// context-root `events/` (forbidden).
+    fn is_forbidden_import_from(module: &str, file: &Path) -> bool {
+        match resolve_relative_import(module, file) {
+            Some(resolved) => Self::is_forbidden_import(&resolved),
+            None => Self::is_forbidden_import(module),
+        }
+    }
+
     /// Check if an import module targets a forbidden layer for domain
     fn is_forbidden_import(module: &str) -> bool {
         let normalized = module.replace("::", "/").replace('.', "/");
@@ -123,24 +140,75 @@ impl DomainPurityRule {
             return true;
         }
 
-        // A relative import (`super::events`, `self::events`, Python
-        // `.events`, TS `./events`) is written from inside domain/, so an
-        // `events` segment in it is domain/events or below, not the old
-        // context-root events/. Without resolving it against the file there is
-        // no telling, so the location check only applies to anchored imports.
-        let relative = module.starts_with("super::")
-            || module.starts_with("self::")
-            || module.starts_with('.');
-        if relative {
-            return false;
-        }
-
         // Per ADR-019: domain events live only in domain/events/. Any other
         // `events` segment (context-root events/, etc.) is a forbidden location.
         let has_events = segments.contains(&"events");
         let events_under_domain = segments.windows(2).any(|w| w == ["domain", "events"]);
         has_events && !events_under_domain
     }
+}
+
+/// Resolve a relative import against the importing file (path relative to
+/// the context root) into a context-root-relative path like
+/// `domain/events/order_placed`. `None` when the import is not relative, or
+/// climbs out of the context.
+///
+/// - Rust: `super::` / `self::` walk the module tree. A file's module is its
+///   directory for `mod.rs` / `lib.rs` / `main.rs`, else directory + stem.
+/// - Python: `.x` is the file's package, each extra dot one level up.
+/// - TypeScript/JavaScript: `./` and `../` are relative to the file's directory.
+fn resolve_relative_import(module: &str, file: &Path) -> Option<String> {
+    let dir: Vec<String> = file
+        .parent()
+        .map(|p| p.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+
+    let (mut base, rest): (Vec<String>, Vec<String>) =
+        if module.starts_with("super::") || module.starts_with("self::") {
+            let stem = file.file_stem()?.to_string_lossy().into_owned();
+            let mut base = dir;
+            if !matches!(stem.as_str(), "mod" | "lib" | "main") {
+                base.push(stem);
+            }
+            let mut parts = module.split("::").map(str::trim).peekable();
+            while let Some(&part) = parts.peek() {
+                match part {
+                    "super" => {
+                        base.pop()?;
+                    }
+                    "self" => {}
+                    _ => break,
+                }
+                parts.next();
+            }
+            (base, parts.map(str::to_string).collect())
+        } else if module.starts_with("./") || module.starts_with("../") {
+            let mut base = dir;
+            let mut rest = Vec::new();
+            for part in module.split('/') {
+                match part {
+                    "." => {}
+                    ".." => {
+                        base.pop()?;
+                    }
+                    other => rest.push(other.to_string()),
+                }
+            }
+            (base, rest)
+        } else if module.starts_with('.') {
+            let dots = module.chars().take_while(|&c| c == '.').count();
+            let mut base = dir;
+            for _ in 1..dots {
+                base.pop()?;
+            }
+            let rest =
+                module[dots..].split('.').filter(|s| !s.is_empty()).map(str::to_string).collect();
+            (base, rest)
+        } else {
+            return None;
+        };
+    base.extend(rest.into_iter().filter(|s| !s.is_empty()));
+    Some(base.join("/"))
 }
 
 // ============================================================================
@@ -681,21 +749,31 @@ mod tests {
         for module in ["crate::domain::events", "crate::domain::item", "std::collections"] {
             assert!(!DomainPurityRule::is_forbidden_import(module), "{module} should be allowed");
         }
-        // Relative imports from inside domain/ reach domain/events, which is allowed.
-        for module in [
-            "super::events",
-            "super::events::OrderPlaced",
-            "self::events",
-            ".events",
-            "./events/OrderPlaced",
-        ] {
-            assert!(!DomainPurityRule::is_forbidden_import(module), "{module} should be allowed");
-        }
-        // Anchored context-root events/ stays forbidden; relative imports still
-        // cannot reach outer layers.
         assert!(DomainPurityRule::is_forbidden_import("crate::events::OrderPlaced"));
-        assert!(DomainPurityRule::is_forbidden_import("super::super::infrastructure"));
-        assert!(DomainPurityRule::is_forbidden_import("..ports.EventStorePort"));
+    }
+
+    #[test]
+    fn test_vsa027_relative_imports_resolve_against_the_file() {
+        let check = |module: &str, file: &str| {
+            DomainPurityRule::is_forbidden_import_from(module, Path::new(file))
+        };
+        // Reach domain/events: allowed.
+        assert!(!check("super::events", "domain/order.rs"));
+        assert!(!check("super::events::OrderPlaced", "domain/order.rs"));
+        assert!(!check("self::events", "domain/mod.rs"));
+        assert!(!check("super::super::events::OrderPlaced", "domain/aggregate_order/order.rs"));
+        assert!(!check(".events", "domain/aggregate.py"));
+        assert!(!check("./events/OrderPlaced", "domain/aggregate.ts"));
+        assert!(!check("..events", "domain/aggregate_order/aggregate.py"));
+        // Reach the context-root events/: forbidden.
+        assert!(check("super::super::events::OrderPlaced", "domain/order.rs"));
+        assert!(check("super::super::super::events", "domain/aggregate_order/order.rs"));
+        assert!(check("..events", "domain/aggregate.py"));
+        assert!(check("../events/OrderPlaced", "domain/aggregate.ts"));
+        // Reach an outer layer: forbidden.
+        assert!(check("super::super::infrastructure", "domain/order.rs"));
+        assert!(check("..ports.EventStorePort", "domain/aggregate.py"));
+        assert!(check("../ports/EventStorePort", "domain/aggregate.ts"));
     }
 
     #[test]
