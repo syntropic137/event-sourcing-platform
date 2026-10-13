@@ -183,18 +183,18 @@ fn resolve_relative_import(module: &str, file: &Path) -> Option<String> {
             }
             (base, parts.map(str::to_string).collect())
         } else if module.starts_with("./") || module.starts_with("../") {
-            let mut base = dir;
-            let mut rest = Vec::new();
+            // One stack: `..` after a named segment cancels that segment.
+            let mut path = dir;
             for part in module.split('/') {
                 match part {
-                    "." => {}
+                    "." | "" => {}
                     ".." => {
-                        base.pop()?;
+                        path.pop()?;
                     }
-                    other => rest.push(other.to_string()),
+                    other => path.push(other.to_string()),
                 }
             }
-            (base, rest)
+            (path, Vec::new())
         } else if module.starts_with('.') {
             let dots = module.chars().take_while(|&c| c == '.').count();
             let mut base = dir;
@@ -774,6 +774,9 @@ mod tests {
         assert!(check("super::super::infrastructure", "domain/order.rs"));
         assert!(check("..ports.EventStorePort", "domain/aggregate.py"));
         assert!(check("../ports/EventStorePort", "domain/aggregate.ts"));
+        // `..` after a named segment cancels it.
+        assert!(!check("../events/../events/OrderPlaced", "domain/aggregate_order/order.ts"));
+        assert!(check("./x/../../../events/OrderPlaced", "domain/aggregate.ts"));
     }
 
     #[test]
