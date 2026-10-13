@@ -178,7 +178,7 @@ impl<'a> SliceScanner<'a> {
     /// Scan for all slices
     pub fn scan(&self) -> Result<Vec<Slice>> {
         let mut slices = Vec::new();
-        for dir in self.slice_directories() {
+        for dir in self.slice_directories()? {
             self.scan_slices_directory(&dir, &mut slices)?;
         }
         Ok(slices)
@@ -190,7 +190,7 @@ impl<'a> SliceScanner<'a> {
     /// `<root>/<context>/<path>` covers the multi-context layout, where each
     /// bounded context keeps its own `slices/`. Before both were scanned, a
     /// multi-context project had no slices as far as the slice rules could see.
-    fn slice_directories(&self) -> Vec<PathBuf> {
+    fn slice_directories(&self) -> Result<Vec<PathBuf>> {
         let relative =
             self.config.map(|c| c.path.clone()).unwrap_or_else(|| PathBuf::from("slices"));
         let mut dirs = Vec::new();
@@ -200,23 +200,23 @@ impl<'a> SliceScanner<'a> {
             dirs.push(direct);
         }
 
-        if !self.per_context {
-            return dirs;
+        if !self.per_context || !self.root.is_dir() {
+            return Ok(dirs);
         }
 
-        for context in sorted_subdirectories(self.root) {
+        for context in sorted_subdirectories(self.root)? {
             let candidate = context.join(&relative);
             if candidate.is_dir() && !dirs.contains(&candidate) {
                 dirs.push(candidate);
             }
         }
 
-        dirs
+        Ok(dirs)
     }
 
     /// Scan a slices directory for individual slice folders
     fn scan_slices_directory(&self, dir: &Path, slices: &mut Vec<Slice>) -> Result<()> {
-        for path in sorted_subdirectories(dir) {
+        for path in sorted_subdirectories(dir)? {
             if let Some(slice) = self.analyze_slice(&path)? {
                 slices.push(slice);
             }
@@ -417,23 +417,23 @@ impl<'a> SliceScanner<'a> {
 }
 
 /// Subdirectories of `dir`, sorted, skipping hidden, `_`-prefixed and
-/// build/cache folders.
-fn sorted_subdirectories(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut dirs: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .filter(|p| {
-            p.file_name()
+/// build/cache folders. A directory that cannot be read is an error, so a scan
+/// never reports success over slices it could not see.
+fn sorted_subdirectories(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut dirs = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        let keep = path.is_dir()
+            && path
+                .file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| !n.starts_with('.') && !n.starts_with('_') && !is_skipped_name(n))
-        })
-        .collect();
+                .is_some_and(|n| !n.starts_with('.') && !n.starts_with('_') && !is_skipped_name(n));
+        if keep {
+            dirs.push(path);
+        }
+    }
     dirs.sort();
-    dirs
+    Ok(dirs)
 }
 
 fn is_skipped_name(name: &str) -> bool {

@@ -51,17 +51,20 @@ impl ValidationRule for NoCrossSliceImportsRule {
         let scanner = SliceScanner::for_config(&ctx.config, &ctx.root);
         let slices = scanner.scan()?;
 
-        // Collect all slice names for cross-reference. Slices listed in
-        // validation.exclude_from_isolation are shared read models that siblings
-        // may import, the same exemption VSA031 applies.
+        // Slices listed in validation.exclude_from_isolation are shared read
+        // models that siblings may import, the same exemption VSA031 applies.
         let excluded = &ctx.config.validation.exclude_from_isolation;
-        let slice_names: Vec<&str> = slices
-            .iter()
-            .map(|s| s.name.as_str())
-            .filter(|name| !excluded.iter().any(|e| e == name))
-            .collect();
 
         for slice in &slices {
+            // Siblings are the slices in the same slices/ directory. Slices of
+            // another context are not siblings: a same-named slice there must
+            // not turn an unrelated import into a cross-slice violation.
+            let slice_names: Vec<&str> = slices
+                .iter()
+                .filter(|other| other.path.parent() == slice.path.parent())
+                .map(|other| other.name.as_str())
+                .filter(|name| !excluded.iter().any(|e| e == name))
+                .collect();
             for file in &slice.files {
                 // Skip non-source files
                 if !is_source_file(&file.name) {
@@ -730,5 +733,24 @@ export class CreateOrderController {
         assert_eq!(run(config.clone()), 1, "per-context slices are now checked");
         config.validation.exclude_from_isolation = vec!["list_orders".to_string()];
         assert_eq!(run(config), 0, "an excluded shared read model may be imported");
+    }
+
+    #[test]
+    fn vsa010_does_not_pool_slice_names_across_contexts() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+        let config = create_test_config(root.clone());
+        fs::create_dir_all(root.join("billing/slices/list_invoices")).unwrap();
+        let handler = root.join("orders/slices/create_order");
+        fs::create_dir_all(&handler).unwrap();
+        fs::write(
+            handler.join("CreateOrderHandler.ts"),
+            "import { T } from '../../domain/list_invoices/types';\n",
+        )
+        .unwrap();
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+        NoCrossSliceImportsRule.validate(&ctx, &mut report).unwrap();
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
     }
 }

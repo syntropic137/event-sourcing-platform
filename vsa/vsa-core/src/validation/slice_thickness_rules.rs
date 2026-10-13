@@ -22,9 +22,8 @@
 //! adapters (VSA011) and slice isolation (VSA010/VSA031).
 
 use std::collections::HashSet;
-use std::path::Path;
 
-use super::import_parser::parse_imports;
+use super::source_refs::referenced_segments;
 use super::{
     is_test_or_conftest_name, EnhancedValidationReport, Severity, Suggestion, ValidationContext,
     ValidationIssue,
@@ -61,7 +60,9 @@ impl ThicknessPolicy {
     }
 }
 
-/// Layer names (path segments) the slice's non-test source files import.
+/// Layer names and identifiers the slice's non-test source files refer to
+/// (imports, and Rust qualified paths), with comments, literals and
+/// test-only code left out.
 fn imported_segments(slice: &Slice) -> HashSet<String> {
     let mut segments = HashSet::new();
     for file in &slice.files {
@@ -70,45 +71,7 @@ fn imported_segments(slice: &Slice) -> HashSet<String> {
         {
             continue;
         }
-        for import in parse_imports(&file.path).unwrap_or_default() {
-            segments.extend(module_segments(&import.module));
-        }
-        if file.name.ends_with(".rs") {
-            segments.extend(rust_inline_path_segments(&file.path));
-        }
-    }
-    segments
-}
-
-/// Split an import module into path segments: `crate::domain::x`,
-/// `../../domain/x`, `..domain.x` and `@/ports/x` all yield `domain` / `ports`.
-fn module_segments(module: &str) -> impl Iterator<Item = String> + '_ {
-    module
-        .split([':', '/', '.', '\\'])
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
-/// Rust code can name a layer without a `use`: `crate::domain::decide(..)`.
-/// Collect the first segment after a `crate::` / `super::` path prefix.
-fn rust_inline_path_segments(path: &Path) -> Vec<String> {
-    let Ok(source) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    let mut segments = Vec::new();
-    for line in source.lines().map(str::trim).filter(|l| !l.starts_with("//")) {
-        for prefix in ["crate::", "super::"] {
-            let mut rest = line;
-            while let Some(at) = rest.find(prefix) {
-                rest = &rest[at + prefix.len()..];
-                let after = rest.trim_start_matches("super::");
-                let segment: String =
-                    after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-                if !segment.is_empty() {
-                    segments.push(segment);
-                }
-            }
-        }
+        segments.extend(referenced_segments(&file.path));
     }
     segments
 }
@@ -220,6 +183,7 @@ mod tests {
     };
     use std::collections::HashMap;
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
 
     fn ctx(
@@ -249,7 +213,11 @@ mod tests {
     }
 
     fn command_slice(root: &Path, name: &str, handler: &str) {
-        let dir = root.join("orders/slices").join(name).join("internal");
+        command_slice_in(&root.join("orders/slices"), name, handler);
+    }
+
+    fn command_slice_in(slices: &Path, name: &str, handler: &str) {
+        let dir = slices.join(name).join("internal");
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.parent().unwrap().join("slice.yaml"),
@@ -272,6 +240,12 @@ mod tests {
                        if title.is_empty() { return Err(\"empty\".into()); }\n\
                        if existing.iter().any(|t| t == title) { return Err(\"dup\".into()); }\n\
                        Ok(title.to_string())\n}\n";
+
+    fn run_messages(rule: &dyn ValidationRule, ctx: &ValidationContext) -> Vec<String> {
+        let mut report = EnhancedValidationReport::default();
+        rule.validate(ctx, &mut report).unwrap();
+        report.errors.iter().map(|e| e.message.clone()).collect()
+    }
 
     fn run(rule: &dyn ValidationRule, ctx: &ValidationContext) -> Vec<String> {
         let mut report = EnhancedValidationReport::default();
@@ -308,19 +282,49 @@ mod tests {
     }
 
     #[test]
-    fn python_and_typescript_imports_count() {
-        assert!(module_segments("..domain.aggregate_order").any(|s| s == "domain"));
-        assert!(module_segments("../../ports/EventStorePort").any(|s| s == "ports"));
-        assert!(module_segments("crate::domain::decide").any(|s| s == "domain"));
-        assert!(!module_segments("crate::domain_events").any(|s| s == "domain"));
+    fn grouped_imports_count_and_strings_comments_tests_do_not() {
+        let (_t, ctx) = ctx(ArchitectureType::HexagonalEventSourcedVsa, None);
+        command_slice(
+            &ctx.root,
+            "grouped",
+            "use crate::{domain::decide, ports::EventStorePort};\npub fn f() {}\n",
+        );
+        command_slice(
+            &ctx.root,
+            "pretend",
+            "// use crate::domain::decide;\n\
+             pub fn f() { let _ = \"crate::domain::decide crate::ports::EventStorePort\"; }\n\
+             #[cfg(test)]\nmod tests {\n    use crate::domain::decide;\n    use crate::ports::EventStorePort;\n}\n",
+        );
+        let domain = run_messages(&CommandSliceReachesDomainRule, &ctx);
+        let port = run_messages(&CommandSliceReachesPortRule, &ctx);
+        assert_eq!(domain.len(), 1, "{domain:?}");
+        assert!(domain[0].contains("'pretend'"));
+        assert_eq!(port.len(), 1, "{port:?}");
+        assert!(port[0].contains("'pretend'"));
     }
 
     #[test]
     fn off_by_default_for_other_architectures() {
         let (_t, ctx) = ctx(ArchitectureType::default(), None);
-        command_slice(&ctx.root, "rename", FAT);
+        // Single-root architectures scan <root>/slices.
+        command_slice_in(&ctx.root.join("slices"), "rename", FAT);
+        assert_eq!(command_slices(&ctx).unwrap().len(), 1, "the slice is seen");
         assert!(run(&CommandSliceReachesDomainRule, &ctx).is_empty());
         assert!(run(&CommandSliceReachesPortRule, &ctx).is_empty());
+    }
+
+    #[test]
+    fn config_can_turn_checks_on_elsewhere_and_independently() {
+        let only_port = CommandSliceConfig {
+            require_domain_call: Some(false),
+            require_port: Some(true),
+            ..CommandSliceConfig::default()
+        };
+        let (_t, ctx) = ctx(ArchitectureType::default(), Some(only_port));
+        command_slice_in(&ctx.root.join("slices"), "rename", FAT);
+        assert!(run(&CommandSliceReachesDomainRule, &ctx).is_empty());
+        assert_eq!(run(&CommandSliceReachesPortRule, &ctx), vec!["VSA035"]);
     }
 
     #[test]

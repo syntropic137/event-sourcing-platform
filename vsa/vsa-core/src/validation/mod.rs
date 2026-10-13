@@ -11,6 +11,7 @@ mod query_slice_rules;
 mod rules;
 mod slice_location_rules;
 mod slice_thickness_rules;
+mod source_refs;
 mod structure_rules;
 mod suggestions;
 
