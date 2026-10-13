@@ -125,7 +125,7 @@ impl DomainPurityRule {
 
         // Per ADR-019: domain events live only in domain/events/. Any other
         // `events` segment (context-root events/, etc.) is a forbidden location.
-        let has_events = segments.iter().any(|s| *s == "events");
+        let has_events = segments.contains(&"events");
         let events_under_domain = segments.windows(2).any(|w| w == ["domain", "events"]);
         has_events && !events_under_domain
     }
