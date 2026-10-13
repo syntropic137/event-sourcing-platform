@@ -485,6 +485,18 @@ pub struct CommandSliceConfig {
     /// Allowed adapter types
     #[serde(default = "default_adapter_types")]
     pub adapters: Vec<String>,
+
+    /// The slice must import the domain layer, where the decision lives
+    /// (VSA034). `None` means the architecture default: on for
+    /// `hexagonal-event-sourced-vsa`, off otherwise.
+    #[serde(default)]
+    pub require_domain_call: Option<bool>,
+
+    /// The slice must import a port, its way to persist what the domain
+    /// decided (VSA035). `None` means the architecture default: on for
+    /// `hexagonal-event-sourced-vsa`, off otherwise.
+    #[serde(default)]
+    pub require_port: Option<bool>,
 }
 
 impl Default for CommandSliceConfig {
@@ -496,6 +508,8 @@ impl Default for CommandSliceConfig {
             require_tests: true,
             no_business_logic: true,
             adapters: default_adapter_types(),
+            require_domain_call: None,
+            require_port: None,
         }
     }
 }

@@ -47,17 +47,24 @@ impl ValidationRule for NoCrossSliceImportsRule {
             return Ok(());
         }
 
-        // Get slices config
-        let slices_config = ctx.config.slices.as_ref();
-
         // Scan for slices
-        let scanner = SliceScanner::new(slices_config, &ctx.root);
+        let scanner = SliceScanner::for_config(&ctx.config, &ctx.root);
         let slices = scanner.scan()?;
 
-        // Collect all slice names for cross-reference
-        let slice_names: Vec<&str> = slices.iter().map(|s| s.name.as_str()).collect();
+        // Slices listed in validation.exclude_from_isolation are shared read
+        // models that siblings may import, the same exemption VSA031 applies.
+        let excluded = &ctx.config.validation.exclude_from_isolation;
 
         for slice in &slices {
+            // Siblings are the slices in the same slices/ directory. Slices of
+            // another context are not siblings: a same-named slice there must
+            // not turn an unrelated import into a cross-slice violation.
+            let slice_names: Vec<&str> = slices
+                .iter()
+                .filter(|other| other.path.parent() == slice.path.parent())
+                .map(|other| other.name.as_str())
+                .filter(|name| !excluded.iter().any(|e| e == name))
+                .collect();
             for file in &slice.files {
                 // Skip non-source files
                 if !is_source_file(&file.name) {
@@ -152,11 +159,8 @@ impl ValidationRule for ThinAdapterRule {
             .and_then(|q| q.max_lines)
             .unwrap_or(100);
 
-        // Get slices config
-        let slices_config = ctx.config.slices.as_ref();
-
         // Scan for slices
-        let scanner = SliceScanner::new(slices_config, &ctx.root);
+        let scanner = SliceScanner::for_config(&ctx.config, &ctx.root);
         let slices = scanner.scan()?;
 
         for slice in &slices {
@@ -220,6 +224,27 @@ fn is_adapter_file(name: &str) -> bool {
     lower.contains("controller") || lower.contains("adapter") || lower.contains("route")
 }
 
+/// Does `import_path` name the slice `slice_name`? A segment equal to the
+/// slice name counts when it follows a `slices` segment, or when the path
+/// goes through no other layer. `../../domain/list_orders/types` names a
+/// domain module that shares the slice's name, not the slice.
+fn imports_slice(import_path: &str, slice_name: &str) -> bool {
+    const LAYERS: [&str; 6] =
+        ["domain", "ports", "application", "infrastructure", "events", "_shared"];
+    let segments: Vec<&str> = import_path
+        .split(|c: char| matches!(c, '/' | '\\' | '.' | ':') || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let through_layer = segments.iter().any(|s| LAYERS.contains(s));
+    // A bare package (`uuid`, `react`) is never a sibling slice; only a
+    // relative or crate-rooted path can reach one without naming `slices`.
+    let relative = import_path.starts_with('.')
+        || ["crate", "super", "self"].contains(&segments.first().copied().unwrap_or(""));
+    segments.iter().enumerate().any(|(i, s)| {
+        *s == slice_name && ((i > 0 && segments[i - 1] == "slices") || (relative && !through_layer))
+    })
+}
+
 /// Detect cross-slice imports in file content
 fn detect_cross_slice_imports(
     content: &str,
@@ -240,26 +265,11 @@ fn detect_cross_slice_imports(
     for import_path in imports {
         // Check if import references another slice
         for slice_name in all_slices {
-            if *slice_name != current_slice {
-                // Check various import patterns that might reference slices
-                let patterns = [
-                    format!("/{slice_name}/"),       // /slice_name/
-                    format!("/{slice_name}"),        // /slice_name at end
-                    format!("../{slice_name}/"),     // ../slice_name/
-                    format!("slices/{slice_name}/"), // slices/slice_name/
-                    format!("slices.{slice_name}"),  // slices.slice_name (Python)
-                    format!("from {slice_name} "),   // from slice_name
-                ];
-
-                for pattern in &patterns {
-                    if import_path.contains(pattern) {
-                        violations.push(ImportViolation {
-                            imported_slice: (*slice_name).to_string(),
-                            import_path: import_path.clone(),
-                        });
-                        break;
-                    }
-                }
+            if *slice_name != current_slice && imports_slice(&import_path, slice_name) {
+                violations.push(ImportViolation {
+                    imported_slice: (*slice_name).to_string(),
+                    import_path: import_path.clone(),
+                });
             }
         }
     }
@@ -703,5 +713,63 @@ export class CreateOrderController {
 
         // Should have no warnings
         assert_eq!(report.warnings.len(), 0);
+    }
+
+    #[test]
+    fn vsa010_honours_exclude_from_isolation_in_per_context_slices() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+        let mut config = create_test_config(root.clone());
+        let slices = root.join("orders/slices");
+        fs::create_dir_all(slices.join("list_orders")).unwrap();
+        fs::create_dir_all(slices.join("create_order")).unwrap();
+        fs::write(slices.join("list_orders/OrderListProjection.ts"), "export class P {}").unwrap();
+        fs::write(
+            slices.join("create_order/CreateOrderHandler.ts"),
+            "import { P } from '../list_orders/OrderListProjection';\n",
+        )
+        .unwrap();
+
+        let run = |config: VsaConfig| {
+            let ctx = ValidationContext::new(config, root.clone());
+            let mut report = EnhancedValidationReport::default();
+            NoCrossSliceImportsRule.validate(&ctx, &mut report).unwrap();
+            report.errors.len()
+        };
+        assert_eq!(run(config.clone()), 1, "per-context slices are now checked");
+        config.validation.exclude_from_isolation = vec!["list_orders".to_string()];
+        assert_eq!(run(config), 0, "an excluded shared read model may be imported");
+    }
+
+    #[test]
+    fn vsa010_does_not_pool_slice_names_across_contexts() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+        let config = create_test_config(root.clone());
+        fs::create_dir_all(root.join("billing/slices/list_invoices")).unwrap();
+        let handler = root.join("orders/slices/create_order");
+        fs::create_dir_all(&handler).unwrap();
+        fs::write(
+            handler.join("CreateOrderHandler.ts"),
+            "import { T } from '../../domain/list_invoices/types';\n",
+        )
+        .unwrap();
+        let ctx = ValidationContext::new(config, root);
+        let mut report = EnhancedValidationReport::default();
+        NoCrossSliceImportsRule.validate(&ctx, &mut report).unwrap();
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+    }
+
+    #[test]
+    fn vsa010_a_layer_module_sharing_a_slice_name_is_not_that_slice() {
+        assert!(!imports_slice("../../domain/list_orders/types", "list_orders"));
+        assert!(imports_slice("../list_orders/OrderListProjection", "list_orders"));
+        assert!(imports_slice("crate::slices::list_orders::handler", "list_orders"));
+        assert!(imports_slice("app.contexts.orders.slices.list_orders.handler", "list_orders"));
+        assert!(!imports_slice("crate::domain::list_orders", "list_orders"));
+        // A package that shares a slice's name is not the slice.
+        assert!(!imports_slice("uuid", "uuid"));
+        assert!(!imports_slice("uuid/v4", "uuid"));
+        assert!(imports_slice("super::super::uuid::handler", "uuid"));
     }
 }
