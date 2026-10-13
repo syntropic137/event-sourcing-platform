@@ -192,7 +192,7 @@ mod tests {
 
         let slices_config = SlicesConfig::default();
         assert_eq!(slices_config.path, PathBuf::from("slices"));
-        assert_eq!(slices_config.types.len(), 3);
+        assert_eq!(slices_config.types.len(), 5); // four patterns + legacy mixed
     }
 
     /// Regression test for composite filename classification bug

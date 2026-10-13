@@ -50,7 +50,7 @@ impl ValidationRule for RequireProjectionForQueryRule {
         let slices = scanner.scan()?;
 
         for slice in slices {
-            if slice.slice_type == SliceType::Query && !slice.has_projection() {
+            if slice.slice_type.pattern() == SliceType::View && !slice.has_projection() {
                 // Suggest creating a projection
                 // Note: to_pascal_case already handles both '-' and '_' delimiters
                 let projection_name = format!("{}Projection", to_pascal_case(&slice.name));
@@ -62,7 +62,7 @@ impl ValidationRule for RequireProjectionForQueryRule {
                         code: self.code().to_string(),
                         severity: Severity::Error,
                         message: format!(
-                            "Query slice '{}' is missing a projection. Projections build read models from events.",
+                            "View (query) slice '{}' is missing a projection. Projections build read models from events.",
                             slice.name
                         ),
                         suggestions: vec![Suggestion::create_file(
@@ -101,7 +101,7 @@ impl ValidationRule for RequireHandlerForQueryRule {
         let slices = scanner.scan()?;
 
         for slice in slices {
-            if slice.slice_type == SliceType::Query && !slice.has_handler() {
+            if slice.slice_type.pattern() == SliceType::View && !slice.has_handler() {
                 // Suggest creating a handler
                 // Note: to_pascal_case already handles both '-' and '_' delimiters
                 let handler_name = format!("{}Handler", to_pascal_case(&slice.name));
@@ -113,7 +113,7 @@ impl ValidationRule for RequireHandlerForQueryRule {
                         code: self.code().to_string(),
                         severity: Severity::Error,
                         message: format!(
-                            "Query slice '{}' is missing a handler. Handlers execute queries against the projection.",
+                            "View (query) slice '{}' is missing a handler. Handlers execute queries against the projection.",
                             slice.name
                         ),
                         suggestions: vec![Suggestion::create_file(

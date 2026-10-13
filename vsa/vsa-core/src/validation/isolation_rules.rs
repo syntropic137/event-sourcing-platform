@@ -164,12 +164,10 @@ impl ValidationRule for ThinAdapterRule {
         let slices = scanner.scan()?;
 
         for slice in &slices {
-            let max_lines = match slice.slice_type {
-                crate::config::SliceType::Command => command_max_lines,
-                crate::config::SliceType::Query => query_max_lines,
-                crate::config::SliceType::Saga => command_max_lines, // Use command default for sagas
-                crate::config::SliceType::Mixed => command_max_lines, // Use command default for mixed slices
-                crate::config::SliceType::Unknown => command_max_lines, // Use command default for unknown slices
+            // Views use the query budget; every other pattern the command one.
+            let max_lines = match slice.slice_type.pattern() {
+                crate::config::SliceType::View => query_max_lines,
+                _ => command_max_lines,
             };
 
             for file in &slice.files {

@@ -377,13 +377,9 @@ impl<'a> SliceScanner<'a> {
         // 1. Explicit: Check slice.yaml first
         if let Some(manifest) = metadata {
             if !manifest.slice_type.is_empty() {
-                let slice_type = match manifest.slice_type.to_lowercase().as_str() {
-                    "command" => SliceType::Command,
-                    "query" => SliceType::Query,
-                    "saga" => SliceType::Saga,
-                    "mixed" => SliceType::Mixed,
-                    _ => SliceType::Unknown, // Default to Unknown for unrecognized types
-                };
+                // Unknown for unrecognized types; VSA036 reports them.
+                let slice_type =
+                    SliceType::from_name(&manifest.slice_type).unwrap_or(SliceType::Unknown);
                 return (slice_type, true);
             }
             // No `type:`: section keys in slice.yaml say what the slice is.
