@@ -1,0 +1,53 @@
+# Minimal hexagonal-event-sourced-vsa context used by the CLI exit-code tests.
+# It validates clean (0 errors, 0 warnings); the tests mutate a copy of it.
+version: 2
+architecture: hexagonal-event-sourced-vsa
+language: rust
+root: contexts
+
+patterns:
+  filename_convention: snake_case
+  command: "**/*_command.rs"
+  event: "**/*_event.rs"
+  query: "**/*_query.rs"
+  handler: "*_handler"
+  test: "*_test"
+
+domain:
+  path: domain
+  aggregates:
+    pattern: "*_aggregate.rs"
+    require_suffix: true
+    extensions: [".rs"]
+  commands:
+    path: commands
+    pattern: "**/*_command.rs"
+    require_suffix: true
+    require_aggregate_id: false
+    organize_by_feature: false
+    extensions: [".rs"]
+  events:
+    path: events
+    pattern: "**/*_event.rs"
+    require_suffix: true
+    extensions: [".rs"]
+    versioning:
+      enabled: false
+      require_decorator: false
+      require_upcasters: false
+
+slices:
+  path: slices
+  types: [command]
+
+validation:
+  domain_level_commands: true
+  require_handler: false
+  decorators:
+    require_event_decorator: false
+    require_version_parameter: false
+    require_upcaster_decorator: false
+  event_sourcing:
+    require_event_versioning: false
+  max_warnings: 0
+  fail_on_errors: true

@@ -715,11 +715,14 @@ pub struct ValidationConfig {
     #[serde(default = "default_true")]
     pub allow_nested_features: bool,
 
-    /// Maximum warnings before failing validation
+    /// Warning budget for `vsa validate`: more warnings than this fails the run
+    /// (non-zero exit). `None` (the default when the key is omitted) means no
+    /// budget, so warnings are reported but never fail the run. Set `0` to make
+    /// every warning blocking.
     #[serde(default = "default_max_warnings")]
     pub max_warnings: Option<usize>,
 
-    /// Fail on errors
+    /// Errors fail `vsa validate` (non-zero exit). Defaults to `true`.
     #[serde(default = "default_true")]
     pub fail_on_errors: bool,
 
@@ -749,7 +752,7 @@ impl Default for ValidationConfig {
             require_integration_events_in_shared: true,
             max_nesting_depth: 3,
             allow_nested_features: true,
-            max_warnings: Some(10),
+            max_warnings: default_max_warnings(),
             fail_on_errors: true,
             exclude_from_isolation: Vec::new(),
             domain_level_commands: false,
@@ -1199,8 +1202,11 @@ fn default_max_depth() -> usize {
     3
 }
 
+// No budget unless the config sets one. This used to be `Some(10)`, but the
+// CLI never enforced it, so turning enforcement on with that default would fail
+// consumers on a limit they never wrote.
 fn default_max_warnings() -> Option<usize> {
-    Some(10)
+    None
 }
 
 impl VsaConfig {
