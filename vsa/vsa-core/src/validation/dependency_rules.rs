@@ -123,6 +123,18 @@ impl DomainPurityRule {
             return true;
         }
 
+        // A relative import (`super::events`, `self::events`, Python
+        // `.events`, TS `./events`) is written from inside domain/, so an
+        // `events` segment in it is domain/events or below, not the old
+        // context-root events/. Without resolving it against the file there is
+        // no telling, so the location check only applies to anchored imports.
+        let relative = module.starts_with("super::")
+            || module.starts_with("self::")
+            || module.starts_with('.');
+        if relative {
+            return false;
+        }
+
         // Per ADR-019: domain events live only in domain/events/. Any other
         // `events` segment (context-root events/, etc.) is a forbidden location.
         let has_events = segments.contains(&"events");
@@ -669,6 +681,21 @@ mod tests {
         for module in ["crate::domain::events", "crate::domain::item", "std::collections"] {
             assert!(!DomainPurityRule::is_forbidden_import(module), "{module} should be allowed");
         }
+        // Relative imports from inside domain/ reach domain/events, which is allowed.
+        for module in [
+            "super::events",
+            "super::events::OrderPlaced",
+            "self::events",
+            ".events",
+            "./events/OrderPlaced",
+        ] {
+            assert!(!DomainPurityRule::is_forbidden_import(module), "{module} should be allowed");
+        }
+        // Anchored context-root events/ stays forbidden; relative imports still
+        // cannot reach outer layers.
+        assert!(DomainPurityRule::is_forbidden_import("crate::events::OrderPlaced"));
+        assert!(DomainPurityRule::is_forbidden_import("super::super::infrastructure"));
+        assert!(DomainPurityRule::is_forbidden_import("..ports.EventStorePort"));
     }
 
     #[test]

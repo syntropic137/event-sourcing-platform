@@ -288,7 +288,7 @@ $ vsa validate
 
 #### Exit code
 
-`vsa validate` exits non-zero when either of these holds:
+`vsa validate` (without `--watch`, which keeps running) exits non-zero when either of these holds:
 
 - there are errors and `validation.fail_on_errors` is `true` (the default)
 - there are more warnings than `validation.max_warnings`

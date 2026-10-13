@@ -178,9 +178,13 @@ fn print_validation_report(
 
     match report.gate_failure(policy) {
         Some(reason) => term.write_line(&format!("{}", style(format!("❌ {reason}")).red()))?,
-        None => {
+        None if report.errors.is_empty() => {
             term.write_line(&format!("{}", style("✅ Validation passed with warnings").green()))?
         }
+        None => term.write_line(&format!(
+            "{}",
+            style("✅ Validation passed: errors are non-blocking (fail_on_errors: false)").green()
+        ))?,
     }
 
     Ok(())

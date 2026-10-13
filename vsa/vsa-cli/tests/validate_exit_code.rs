@@ -91,3 +91,16 @@ fn errors_fail_the_run() {
     fs::write(&aggregate, format!("use crate::infrastructure;\n{source}")).unwrap();
     validate(dir.path()).failure().stderr(contains("1 error(s)"));
 }
+
+#[test]
+fn non_blocking_errors_pass_but_the_warning_budget_still_binds() {
+    let dir = workspace();
+    set_validation_line(dir.path(), "  fail_on_errors: true", "  fail_on_errors: false");
+    let aggregate = dir.path().join("contexts/orders/domain/aggregate_order/order_aggregate.rs");
+    let source = fs::read_to_string(&aggregate).unwrap();
+    fs::write(&aggregate, format!("use crate::infrastructure;\n{source}")).unwrap();
+    validate(dir.path()).success().stdout(contains("errors are non-blocking"));
+
+    fs::remove_dir_all(dir.path().join("contexts/orders/_shared")).unwrap();
+    validate(dir.path()).failure().stderr(contains("1 warning(s) (max_warnings = 0)"));
+}
