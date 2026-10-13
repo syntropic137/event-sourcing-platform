@@ -572,13 +572,24 @@ where
     }
 }
 
-/// Builder for creating event context with tracing information
-#[derive(Debug, Default)]
+/// Per-command metadata stamped onto every event the command records.
+///
+/// Pass it to [`AggregateInstance::add_events_with`] or
+/// [`AggregateInstance::execute_with`]: who acted (`actor_id`), which message
+/// caused the events (`causation_id`), which conversation they belong to
+/// (`correlation_id`), free-form headers, and, for callers that keep the
+/// clock outside the domain, the event time. Unset fields leave the defaults
+/// in place (the event's own correlation/causation, the current time).
+///
+/// [`AggregateInstance::add_events_with`]: crate::aggregate::AggregateInstance::add_events_with
+/// [`AggregateInstance::execute_with`]: crate::aggregate::AggregateInstance::execute_with
+#[derive(Debug, Clone, Default)]
 pub struct EventContext {
     correlation_id: Option<String>,
     causation_id: Option<String>,
     actor_id: Option<String>,
     tenant_id: Option<String>,
+    timestamp: Option<DateTime<Utc>>,
     metadata: HashMap<String, String>,
 }
 
@@ -618,8 +629,20 @@ impl EventContext {
         self
     }
 
+    /// Stamp events with this time instead of the current time. For callers
+    /// whose clock lives outside the domain (deterministic replays, tests,
+    /// a command that carries its own time). Stored in milliseconds, so
+    /// sub-millisecond precision does not survive a round trip.
+    pub fn with_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
+        self.timestamp = Some(timestamp);
+        self
+    }
+
     /// Apply this context to event metadata
     pub fn apply_to_metadata(&self, metadata: &mut EventMetadata) {
+        if let Some(timestamp) = self.timestamp {
+            metadata.timestamp = timestamp;
+        }
         if let Some(ref correlation_id) = self.correlation_id {
             metadata.correlation_id = Some(correlation_id.clone());
         }
