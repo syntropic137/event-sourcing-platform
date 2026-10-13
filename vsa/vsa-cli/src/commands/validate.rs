@@ -7,7 +7,7 @@ use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
 use std::sync::mpsc::channel;
 use std::time::Duration;
-use vsa_core::{Validator, VsaConfig};
+use vsa_core::{ValidationConfig, Validator, VsaConfig};
 
 pub fn run(config_path: &Path, _fix: bool, watch: bool) -> Result<()> {
     if watch {
@@ -32,6 +32,10 @@ fn run_once(config_path: &Path) -> Result<()> {
     term.write_line(&format!("🗣️  Language: {}", config.language))?;
     term.write_line("")?;
 
+    // The exit policy (fail_on_errors, max_warnings) is read before `config`
+    // moves into the validator.
+    let policy = config.validation.clone();
+
     // Create validator
     let validator = Validator::new(config, root);
 
@@ -39,12 +43,11 @@ fn run_once(config_path: &Path) -> Result<()> {
     let report = validator.validate()?;
 
     // Print results
-    print_validation_report(&term, &report)?;
+    print_validation_report(&term, &report, &policy)?;
 
-    if report.is_valid() {
-        Ok(())
-    } else {
-        anyhow::bail!("Validation failed with {} error(s)", report.errors.len());
+    match report.gate_failure(&policy) {
+        Some(reason) => anyhow::bail!(reason),
+        None => Ok(()),
     }
 }
 
@@ -131,7 +134,7 @@ fn run_validation(term: &Term, config: &VsaConfig, root: &Path) -> Result<()> {
     let report = validator.validate()?;
 
     // Print results
-    print_validation_report(term, &report)?;
+    print_validation_report(term, &report, &config.validation)?;
 
     Ok(())
 }
@@ -139,6 +142,7 @@ fn run_validation(term: &Term, config: &VsaConfig, root: &Path) -> Result<()> {
 fn print_validation_report(
     term: &Term,
     report: &vsa_core::validator::ValidationReport,
+    policy: &ValidationConfig,
 ) -> Result<()> {
     // Print results
     if report.errors.is_empty() && report.warnings.is_empty() {
@@ -172,8 +176,15 @@ fn print_validation_report(
         term.write_line("")?;
     }
 
-    if report.is_valid() {
-        term.write_line(&format!("{}", style("✅ Validation passed with warnings").green()))?;
+    match report.gate_failure(policy) {
+        Some(reason) => term.write_line(&format!("{}", style(format!("❌ {reason}")).red()))?,
+        None if report.errors.is_empty() => {
+            term.write_line(&format!("{}", style("✅ Validation passed with warnings").green()))?
+        }
+        None => term.write_line(&format!(
+            "{}",
+            style("✅ Validation passed: errors are non-blocking (fail_on_errors: false)").green()
+        ))?,
     }
 
     Ok(())
