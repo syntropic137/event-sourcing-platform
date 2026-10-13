@@ -209,7 +209,7 @@ impl<A: Aggregate> AggregateInstance<A> {
         candidate.apply_events(&events)?;
         self.aggregate = candidate;
 
-        for event in events {
+        for (index, event) in events.into_iter().enumerate() {
             self.metadata.increment_version();
             let mut envelope = EventEnvelope::new(
                 event,
@@ -218,6 +218,9 @@ impl<A: Aggregate> AggregateInstance<A> {
                 self.metadata.version,
             );
             context.apply_to_metadata(&mut envelope.metadata);
+            if let Some(event_id) = context.event_id_for(index) {
+                envelope.metadata.event_id = event_id;
+            }
             self.uncommitted_events.push(envelope);
         }
 

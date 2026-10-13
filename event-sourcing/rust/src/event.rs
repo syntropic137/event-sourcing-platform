@@ -590,6 +590,7 @@ pub struct EventContext {
     actor_id: Option<String>,
     tenant_id: Option<String>,
     timestamp: Option<DateTime<Utc>>,
+    command_id: Option<Uuid>,
     metadata: HashMap<String, String>,
 }
 
@@ -655,6 +656,31 @@ impl EventContext {
             ))),
             _ => Ok(()),
         }
+    }
+
+    /// Identify the command that records the events. Event ids become
+    /// deterministic, `Uuid::new_v5(command_id, index)` for the event's index
+    /// in the recorded batch, so re-deciding the same command after a lost
+    /// acknowledgment or a restart yields the same ids. Pair it with
+    /// [`EventStoreRepository::save_with_key`] for command-level
+    /// exactly-once.
+    ///
+    /// [`EventStoreRepository::save_with_key`]: crate::repository::EventStoreRepository::save_with_key
+    pub fn with_command_id(mut self, command_id: Uuid) -> Self {
+        self.command_id = Some(command_id);
+        self
+    }
+
+    /// The command id set by [`Self::with_command_id`].
+    pub fn command_id(&self) -> Option<Uuid> {
+        self.command_id
+    }
+
+    /// The event id for the `index`th event recorded under this context:
+    /// deterministic with a command id, `None` otherwise.
+    pub fn event_id_for(&self, index: usize) -> Option<Uuid> {
+        self.command_id
+            .map(|command| Uuid::new_v5(&command, &(index as u64).to_be_bytes()))
     }
 
     /// Apply this context to event metadata

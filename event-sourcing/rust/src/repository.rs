@@ -264,11 +264,13 @@ where
         })
     }
 
-    /// Append request for the instance's (non-empty) pending batch.
+    /// Append request for the instance's (non-empty) pending batch, under
+    /// `key` when the caller supplied one.
     fn append_request(
         &self,
         aggregate_id: &str,
         instance: &AggregateInstance<A>,
+        key: Option<String>,
     ) -> Result<proto::AppendRequest> {
         let pending = &instance.uncommitted_events;
         let expected = instance.committed_version();
@@ -286,7 +288,8 @@ where
             expected_aggregate_nonce: expected,
             // Same key on every attempt for this batch; a batch that changed
             // (more events recorded) gets a different key.
-            idempotency_key: format!("esp-rs:{expected}:{count}:{first_id}:{last_id}"),
+            idempotency_key: key
+                .unwrap_or_else(|| format!("esp-rs:{expected}:{count}:{first_id}:{last_id}")),
             events,
         })
     }
@@ -342,6 +345,60 @@ where
     }
 
     async fn save(&self, instance: &mut AggregateInstance<A>) -> Result<()> {
+        self.save_keyed(instance, None).await
+    }
+
+    async fn exists(&self, aggregate_id: &str) -> Result<bool> {
+        let page = self.read_page(aggregate_id, 1, 1).await?;
+        match page.events.first().and_then(|e| e.meta.as_ref()) {
+            Some(meta) => {
+                self.check_type(aggregate_id, meta)?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+}
+
+impl<A> EventStoreRepository<A>
+where
+    A: Aggregate + 'static,
+    A::Event: 'static,
+{
+    /// [`save`](Repository::save) under a caller-supplied idempotency key
+    /// that names the command, instead of a key derived from the pending
+    /// batch.
+    ///
+    /// The store answers a committed key with an identical batch with the
+    /// original ack, and a committed key with a different batch with
+    /// `ALREADY_EXISTS` ([`Error::is_idempotency_key_reused`]): the command
+    /// already ran, nothing is written, and pending events are kept. Record
+    /// the events with [`EventContext::with_command_id`] (and a fixed
+    /// [`EventContext::with_timestamp`]) so that re-deciding the same command
+    /// after a restart produces an identical batch.
+    ///
+    /// If reconciliation finds that an earlier attempt committed only a
+    /// prefix of the pending batch, the remainder is appended under
+    /// `"{key}/{expected}"`, so it is not mistaken for a reuse of `key`.
+    ///
+    /// [`EventContext::with_command_id`]: crate::event::EventContext::with_command_id
+    /// [`EventContext::with_timestamp`]: crate::event::EventContext::with_timestamp
+    pub async fn save_with_key(
+        &self,
+        instance: &mut AggregateInstance<A>,
+        key: &str,
+    ) -> Result<()> {
+        if key.is_empty() {
+            return Err(Error::invalid_command("idempotency key must not be empty"));
+        }
+        self.save_keyed(instance, Some(key)).await
+    }
+
+    async fn save_keyed(
+        &self,
+        instance: &mut AggregateInstance<A>,
+        key: Option<&str>,
+    ) -> Result<()> {
         if instance.uncommitted_events.is_empty() {
             return Ok(());
         }
@@ -374,11 +431,20 @@ where
         // events were recorded on the instance). That prefix is cleared and
         // the remainder is appended on top of it. Pending strictly shrinks
         // between passes, so this terminates.
+        let mut first_pass = true;
         'batch: loop {
             if instance.uncommitted_events.is_empty() {
                 return Ok(());
             }
-            let request = self.append_request(&aggregate_id, instance)?;
+            let pass_key = key.map(|k| {
+                if first_pass {
+                    k.to_string()
+                } else {
+                    format!("{k}/{}", instance.committed_version())
+                }
+            });
+            first_pass = false;
+            let request = self.append_request(&aggregate_id, instance, pass_key)?;
             let expected = request.expected_aggregate_nonce;
             let count = request.events.len() as u64;
             loop {
@@ -421,17 +487,6 @@ where
                     Err(err) => return Err(err),
                 }
             }
-        }
-    }
-
-    async fn exists(&self, aggregate_id: &str) -> Result<bool> {
-        let page = self.read_page(aggregate_id, 1, 1).await?;
-        match page.events.first().and_then(|e| e.meta.as_ref()) {
-            Some(meta) => {
-                self.check_type(aggregate_id, meta)?;
-                Ok(true)
-            }
-            None => Ok(false),
         }
     }
 }

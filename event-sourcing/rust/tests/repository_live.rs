@@ -795,3 +795,139 @@ async fn command_context_is_stored_on_every_event() {
         assert_eq!(recorded.timestamp_unix_ms, 1_700_000_000_123);
     }
 }
+
+/// The context a command is recorded under in the idempotency tests: a
+/// command id (deterministic event ids) and a fixed time.
+fn command_context(command: u128) -> EventContext {
+    EventContext::new()
+        .with_command_id(Uuid::from_u128(command))
+        .with_timestamp(DateTime::<Utc>::from_timestamp_millis(1_700_000_000_000).unwrap())
+}
+
+/// Open + deposit recorded as one command on a fresh instance.
+fn opened_by_command(id: &str, command: u128) -> AggregateInstance<Account> {
+    let mut acct = AggregateInstance::new(id.to_string(), Account::default());
+    acct.add_events_with(
+        vec![
+            Opened {
+                id: id.into(),
+                owner: "alice".into(),
+            }
+            .into(),
+            Deposited { amount: 10 }.into(),
+        ],
+        &command_context(command),
+    )
+    .unwrap();
+    acct
+}
+
+/// #427: the instance is lost after an unknown-outcome save (a restart).
+/// Re-deciding the same command yields an identical batch under the same
+/// caller key, which the store acknowledges without writing it twice.
+#[tokio::test]
+async fn command_key_survives_losing_the_instance() {
+    let server = spawn_server().await;
+    let client = connect(&server.addr).await;
+    let faulty = Arc::new(FaultyPort::new(client.clone()));
+    faulty.lose_acks.store(1, Ordering::SeqCst);
+    let tenant = unique_tenant();
+    let repo = EventStoreRepository::<Account>::new(faulty.clone(), &tenant)
+        .with_retry_policy(RetryPolicy::none());
+
+    let mut first = opened_by_command("acct-k", 1);
+    repo.save_with_key(&mut first, "cmd-1")
+        .await
+        .expect_err("ack lost");
+    assert_eq!(stream_len(&client, &tenant, "acct-k").await, 2);
+    drop(first);
+
+    let mut again = opened_by_command("acct-k", 1);
+    repo.save_with_key(&mut again, "cmd-1")
+        .await
+        .expect("store recognises the command");
+    assert!(!again.has_uncommitted_events());
+    assert_eq!(stream_len(&client, &tenant, "acct-k").await, 2);
+
+    // Without a command id the ids are random: the same key is a different
+    // batch, refused as a reuse, and nothing is written.
+    let mut random = AggregateInstance::new("acct-k".to_string(), Account::default());
+    random.execute(open("acct-k")).await.unwrap();
+    random
+        .execute(AccountCommand::Deposit { amount: 10 })
+        .await
+        .unwrap();
+    let err = repo
+        .save_with_key(&mut random, "cmd-1")
+        .await
+        .expect_err("different batch");
+    assert!(err.is_idempotency_key_reused(), "{err:?}");
+    assert_eq!(random.uncommitted_count(), 2, "pending kept");
+    assert_eq!(stream_len(&client, &tenant, "acct-k").await, 2);
+}
+
+/// #427: a command that already ran, re-decided on reloaded state, is a
+/// different batch (later nonces) and is refused as a key reuse.
+#[tokio::test]
+async fn command_key_reused_after_reload_is_refused() {
+    let server = spawn_server().await;
+    let client = connect(&server.addr).await;
+    let tenant = unique_tenant();
+    let repo = EventStoreRepository::<Account>::new(Arc::new(client.clone()), &tenant);
+
+    let mut acct = opened_by_command("acct-r", 1);
+    repo.save_with_key(&mut acct, "cmd-1").await.unwrap();
+
+    let deposit = |acct: &mut AggregateInstance<Account>| {
+        acct.add_events_with(vec![Deposited { amount: 5 }.into()], &command_context(2))
+            .unwrap();
+    };
+    let mut loaded = repo.load("acct-r").await.unwrap().unwrap();
+    deposit(&mut loaded);
+    repo.save_with_key(&mut loaded, "cmd-2").await.unwrap();
+    assert_eq!(stream_len(&client, &tenant, "acct-r").await, 3);
+
+    let mut reloaded = repo.load("acct-r").await.unwrap().unwrap();
+    deposit(&mut reloaded);
+    let err = repo
+        .save_with_key(&mut reloaded, "cmd-2")
+        .await
+        .expect_err("command already ran");
+    assert!(err.is_idempotency_key_reused(), "{err:?}");
+    assert!(!err.is_concurrency_conflict());
+    assert_eq!(stream_len(&client, &tenant, "acct-r").await, 3);
+
+    let err = repo
+        .save_with_key(&mut reloaded, "")
+        .await
+        .expect_err("empty key");
+    assert!(matches!(err, Error::InvalidCommand { .. }), "{err:?}");
+}
+
+/// Event ids are deterministic per command and index, and stored as given.
+#[tokio::test]
+async fn command_id_event_ids_are_deterministic_and_stored() {
+    let server = spawn_server().await;
+    let client = connect(&server.addr).await;
+    let tenant = unique_tenant();
+    let repo = EventStoreRepository::<Account>::new(Arc::new(client.clone()), &tenant);
+
+    let a = opened_by_command("acct-d", 9);
+    let b = opened_by_command("acct-d", 9);
+    let ids = |i: &AggregateInstance<Account>| -> Vec<Uuid> {
+        i.uncommitted_events.iter().map(|e| e.event_id()).collect()
+    };
+    assert_eq!(ids(&a), ids(&b));
+    assert_ne!(ids(&a)[0], ids(&a)[1]);
+    assert_ne!(ids(&a), ids(&opened_by_command("acct-d", 10)));
+
+    let expected = ids(&a);
+    let mut a = a;
+    repo.save(&mut a).await.unwrap();
+    let stored: Vec<Uuid> = read_raw(&client, &tenant, "acct-d")
+        .await
+        .iter()
+        .map(|e| e.meta.as_ref().unwrap().event_id.parse().unwrap())
+        .collect();
+    assert_eq!(stored, expected);
+}
