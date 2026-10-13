@@ -286,6 +286,21 @@ $ vsa validate
      Required by: validation.require_handler = true
 ```
 
+#### Exit code
+
+`vsa validate` (without `--watch`, which keeps running) exits non-zero when either of these holds:
+
+- there are errors and `validation.fail_on_errors` is `true` (the default)
+- there are more warnings than `validation.max_warnings`
+
+`max_warnings` has no default. If it is omitted, warnings are reported but never fail the run. Set `max_warnings: 0` to make every warning blocking, which is what a CI gate usually wants:
+
+```yaml
+validation:
+  max_warnings: 0
+  fail_on_errors: true
+```
+
 #### Validation Rules
 
 VSA validates:

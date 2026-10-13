@@ -251,8 +251,8 @@ impl ValidationRule for RequireAggregatesForBoundedContextRule {
                 // Determine if it has any slices (projections)
                 let has_projections = context.features.iter().any(|f| {
                     matches!(
-                        f.slice_type,
-                        crate::config::SliceType::Query | crate::config::SliceType::Mixed
+                        f.slice_type.pattern(),
+                        crate::config::SliceType::View | crate::config::SliceType::Mixed
                     )
                 });
 

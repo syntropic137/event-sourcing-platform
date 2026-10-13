@@ -358,6 +358,7 @@ mod tests {
             max_lines: Some(100),
             require_tests: true,
             adapters: vec!["rest".to_string()],
+            forbid_commands: None,
         }
     }
 

@@ -218,8 +218,8 @@ impl TemplateContext {
             query_handler_name: Some(query_handler_name),
             controller_name: Some(controller_name),
             read_model_name: Some(read_model_name),
-            slice_type: Some("query".to_string()),
-            subscribed_events: Vec::new(), // To be populated by user
+            slice_type: Some("view".to_string()), // Event Modeling name; "query" is deprecated
+            subscribed_events: Vec::new(),        // To be populated by user
             is_list,
         }
     }

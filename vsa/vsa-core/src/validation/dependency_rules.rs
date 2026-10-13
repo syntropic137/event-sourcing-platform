@@ -16,7 +16,7 @@ use super::{
 use crate::error::Result;
 use crate::scanner::Scanner;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ============================================================================
 // VSA027: Domain Purity Rule
@@ -65,8 +65,12 @@ impl ValidationRule for DomainPurityRule {
 
                 // Check each import
                 for import in imports {
-                    // Detect if import targets forbidden layers
-                    let is_forbidden = Self::is_forbidden_import(&import.module);
+                    // Detect if import targets forbidden layers. A relative
+                    // import is first resolved against the importing file.
+                    let file_in_context =
+                        file_path.strip_prefix(&context.path).unwrap_or(file_path);
+                    let is_forbidden =
+                        Self::is_forbidden_import_from(&import.module, file_in_context);
 
                     if is_forbidden {
                         let relative_path = file_path.strip_prefix(&ctx.root).unwrap_or(file_path);
@@ -102,36 +106,109 @@ impl ValidationRule for DomainPurityRule {
 }
 
 impl DomainPurityRule {
+    /// Check an import written in `file` (a path relative to the context
+    /// root). Relative imports (`super::events`, Python `.events`, TS
+    /// `../events/X`) are resolved against the file first, so `super::events`
+    /// from `domain/order.rs` is `domain/events` (allowed) while
+    /// `super::super::events` from `domain/aggregate_x/order.rs` is the
+    /// context-root `events/` (forbidden).
+    fn is_forbidden_import_from(module: &str, file: &Path) -> bool {
+        match resolve_relative_import(module, file) {
+            Some(resolved) => Self::is_forbidden_import(&resolved),
+            None => Self::is_forbidden_import(module),
+        }
+    }
+
     /// Check if an import module targets a forbidden layer for domain
     fn is_forbidden_import(module: &str) -> bool {
         let normalized = module.replace("::", "/").replace('.', "/");
 
-        // Check for forbidden layers in import path
-        // Per ADR-019: Events should be in domain/events/ (domain cohesion)
-        // Context-root events/ is an old pattern and should not be used
-        // Logic: Allow domain/events/, forbid context-root events/
-        let has_forbidden_events = normalized.contains("/events/")
-            && !normalized.contains("/domain/events/")
-            || normalized.starts_with("events/") && !normalized.starts_with("domain/events/")
-            || (normalized.starts_with("events")
-                && !normalized.starts_with("domain/events")
-                && !normalized.contains('/'));
+        // Rust crate-relative prefixes (crate::, super::, self::) are not layers.
+        // Strip them and any empty segments, then match a forbidden layer as ANY
+        // path segment. This catches `use crate::infrastructure` (normalized to
+        // `crate/infrastructure`), which the old `/layer/`-or-leading-`layer`
+        // substring logic silently allowed, so the dependency-direction gate now
+        // bites on Rust crate-relative imports as well as path- and dotted-style.
+        let segments: Vec<&str> = normalized
+            .split('/')
+            .filter(|s| !s.is_empty() && !matches!(*s, "crate" | "super" | "self"))
+            .collect();
 
-        has_forbidden_events
-            || normalized.contains("/ports/")
-            || normalized.contains("/application/")
-            || normalized.contains("/infrastructure/")
-            || normalized.contains("/slices/")
-            || normalized.starts_with("ports/")
-            || normalized.starts_with("application/")
-            || normalized.starts_with("infrastructure/")
-            || normalized.starts_with("slices/")
-            // Also check for module names without path separators (same-level imports)
-            || normalized.starts_with("ports")
-            || normalized.starts_with("application")
-            || normalized.starts_with("infrastructure")
-            || normalized.starts_with("slices")
+        // Forbidden non-domain layers for the domain layer.
+        const FORBIDDEN_LAYERS: [&str; 4] = ["ports", "application", "infrastructure", "slices"];
+        if segments.iter().any(|s| FORBIDDEN_LAYERS.contains(s)) {
+            return true;
+        }
+
+        // Per ADR-019: domain events live only in domain/events/. Any other
+        // `events` segment (context-root events/, etc.) is a forbidden location.
+        let has_events = segments.contains(&"events");
+        let events_under_domain = segments.windows(2).any(|w| w == ["domain", "events"]);
+        has_events && !events_under_domain
     }
+}
+
+/// Resolve a relative import against the importing file (path relative to
+/// the context root) into a context-root-relative path like
+/// `domain/events/order_placed`. `None` when the import is not relative, or
+/// climbs out of the context.
+///
+/// - Rust: `super::` / `self::` walk the module tree. A file's module is its
+///   directory for `mod.rs` / `lib.rs` / `main.rs`, else directory + stem.
+/// - Python: `.x` is the file's package, each extra dot one level up.
+/// - TypeScript/JavaScript: `./` and `../` are relative to the file's directory.
+fn resolve_relative_import(module: &str, file: &Path) -> Option<String> {
+    let dir: Vec<String> = file
+        .parent()
+        .map(|p| p.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+
+    let (mut base, rest): (Vec<String>, Vec<String>) =
+        if module.starts_with("super::") || module.starts_with("self::") {
+            let stem = file.file_stem()?.to_string_lossy().into_owned();
+            let mut base = dir;
+            if !matches!(stem.as_str(), "mod" | "lib" | "main") {
+                base.push(stem);
+            }
+            let mut parts = module.split("::").map(str::trim).peekable();
+            while let Some(&part) = parts.peek() {
+                match part {
+                    "super" => {
+                        base.pop()?;
+                    }
+                    "self" => {}
+                    _ => break,
+                }
+                parts.next();
+            }
+            (base, parts.map(str::to_string).collect())
+        } else if module.starts_with("./") || module.starts_with("../") {
+            // One stack: `..` after a named segment cancels that segment.
+            let mut path = dir;
+            for part in module.split('/') {
+                match part {
+                    "." | "" => {}
+                    ".." => {
+                        path.pop()?;
+                    }
+                    other => path.push(other.to_string()),
+                }
+            }
+            (path, Vec::new())
+        } else if module.starts_with('.') {
+            let dots = module.chars().take_while(|&c| c == '.').count();
+            let mut base = dir;
+            for _ in 1..dots {
+                base.pop()?;
+            }
+            let rest =
+                module[dots..].split('.').filter(|s| !s.is_empty()).map(str::to_string).collect();
+            (base, rest)
+        } else {
+            return None;
+        };
+    base.extend(rest.into_iter().filter(|s| !s.is_empty()));
+    Some(base.join("/"))
 }
 
 // ============================================================================
@@ -659,6 +736,48 @@ mod tests {
     // ========================================================================
     // VSA027: DOMAIN PURITY TESTS
     // ========================================================================
+
+    #[test]
+    fn test_vsa027_rust_crate_relative_imports_are_layers() {
+        // A bare `use crate::infrastructure;` normalizes to `crate/infrastructure`,
+        // with no trailing slash, which the old substring logic let through.
+        for module in
+            ["crate::infrastructure", "crate::ports", "super::super::slices", "self::application"]
+        {
+            assert!(DomainPurityRule::is_forbidden_import(module), "{module} should be forbidden");
+        }
+        for module in ["crate::domain::events", "crate::domain::item", "std::collections"] {
+            assert!(!DomainPurityRule::is_forbidden_import(module), "{module} should be allowed");
+        }
+        assert!(DomainPurityRule::is_forbidden_import("crate::events::OrderPlaced"));
+    }
+
+    #[test]
+    fn test_vsa027_relative_imports_resolve_against_the_file() {
+        let check = |module: &str, file: &str| {
+            DomainPurityRule::is_forbidden_import_from(module, Path::new(file))
+        };
+        // Reach domain/events: allowed.
+        assert!(!check("super::events", "domain/order.rs"));
+        assert!(!check("super::events::OrderPlaced", "domain/order.rs"));
+        assert!(!check("self::events", "domain/mod.rs"));
+        assert!(!check("super::super::events::OrderPlaced", "domain/aggregate_order/order.rs"));
+        assert!(!check(".events", "domain/aggregate.py"));
+        assert!(!check("./events/OrderPlaced", "domain/aggregate.ts"));
+        assert!(!check("..events", "domain/aggregate_order/aggregate.py"));
+        // Reach the context-root events/: forbidden.
+        assert!(check("super::super::events::OrderPlaced", "domain/order.rs"));
+        assert!(check("super::super::super::events", "domain/aggregate_order/order.rs"));
+        assert!(check("..events", "domain/aggregate.py"));
+        assert!(check("../events/OrderPlaced", "domain/aggregate.ts"));
+        // Reach an outer layer: forbidden.
+        assert!(check("super::super::infrastructure", "domain/order.rs"));
+        assert!(check("..ports.EventStorePort", "domain/aggregate.py"));
+        assert!(check("../ports/EventStorePort", "domain/aggregate.ts"));
+        // `..` after a named segment cancels it.
+        assert!(!check("../events/../events/OrderPlaced", "domain/aggregate_order/order.ts"));
+        assert!(check("./x/../../../events/OrderPlaced", "domain/aggregate.ts"));
+    }
 
     #[test]
     fn test_vsa027_domain_imports_from_ports() {

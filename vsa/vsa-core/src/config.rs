@@ -404,12 +404,12 @@ pub struct SlicesConfig {
     #[serde(default)]
     pub command: Option<CommandSliceConfig>,
 
-    /// Query slice configuration
-    #[serde(default)]
+    /// View (query) slice configuration. `view:` is accepted as an alias.
+    #[serde(default, alias = "view")]
     pub query: Option<QuerySliceConfig>,
 
-    /// Saga slice configuration
-    #[serde(default)]
+    /// Automation (saga) slice configuration. `automation:` is accepted as an alias.
+    #[serde(default, alias = "automation")]
     pub saga: Option<SagaSliceConfig>,
 }
 
@@ -426,21 +426,94 @@ impl Default for SlicesConfig {
     }
 }
 
-/// Slice type
+/// Slice type, named after the Event Modeling patterns
+/// (<https://eventmodeling.org/posts/event-modeling-cheatsheet/>):
+///
+/// | Pattern | Flow | Issues a command? |
+/// |---|---|---|
+/// | `command` | trigger → command → event(s) | yes |
+/// | `view` | event(s) → projection → read model | no |
+/// | `automation` | event(s) → to-do list view → processor → command → event(s) | yes |
+/// | `translation` | as automation, across a system boundary | yes |
+///
+/// `query` and `saga` are the older names for `view` and `automation`. They
+/// still validate, map to the same pattern ([`SliceType::pattern`]) and draw a
+/// deprecation warning (VSA038).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SliceType {
-    /// Command slice (write operations)
+    /// State change: trigger → command → event(s)
     Command,
-    /// Query slice (read operations)
+    /// State view: event(s) → projection → read model. No command.
+    View,
+    /// Automation: a to-do list view of pending work and a processor that
+    /// takes the next entry and issues a command. The event that command
+    /// produces clears the entry. Not event-in/event-out.
+    Automation,
+    /// Translation: an automation whose trigger comes from another system
+    Translation,
+    /// Deprecated name for [`SliceType::View`]
     Query,
-    /// Saga slice (process managers)
+    /// Deprecated name for [`SliceType::Automation`] (a process manager)
     Saga,
-    /// Mixed slice (has both command and query)
+    /// One slice doing more than one pattern (legacy, not an Event Modeling pattern)
     Mixed,
     /// Unknown slice type (neither detected)
     #[default]
     Unknown,
+}
+
+impl SliceType {
+    /// Every name a `slice.yaml` `type:` or `slices.types` entry may use.
+    pub const NAMES: [&'static str; 7] =
+        ["command", "view", "automation", "translation", "query", "saga", "mixed"];
+
+    /// Parse a written type name (case-insensitive). `None` for an unknown name.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name.trim().to_lowercase().as_str() {
+            "command" => Self::Command,
+            "view" => Self::View,
+            "automation" => Self::Automation,
+            "translation" => Self::Translation,
+            "query" => Self::Query,
+            "saga" => Self::Saga,
+            "mixed" => Self::Mixed,
+            _ => return None,
+        })
+    }
+
+    /// The Event Modeling pattern this type stands for: `Query` is `View`,
+    /// `Saga` is `Automation`, everything else is itself.
+    pub fn pattern(&self) -> Self {
+        match self {
+            Self::Query => Self::View,
+            Self::Saga => Self::Automation,
+            other => other.clone(),
+        }
+    }
+
+    /// For a deprecated name, `Some((old, new))`.
+    pub fn deprecated_name(&self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::Query => Some(("query", "view")),
+            Self::Saga => Some(("saga", "automation")),
+            _ => None,
+        }
+    }
+
+    /// The name as written in YAML.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Command => "command",
+            Self::View => "view",
+            Self::Automation => "automation",
+            Self::Translation => "translation",
+            Self::Query => "query",
+            Self::Saga => "saga",
+            Self::Mixed => "mixed",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 /// Context type - classifies whether a directory is a valid bounded context
@@ -485,6 +558,18 @@ pub struct CommandSliceConfig {
     /// Allowed adapter types
     #[serde(default = "default_adapter_types")]
     pub adapters: Vec<String>,
+
+    /// The slice must import the domain layer, where the decision lives
+    /// (VSA034). `None` means the architecture default: on for
+    /// `hexagonal-event-sourced-vsa`, off otherwise.
+    #[serde(default)]
+    pub require_domain_call: Option<bool>,
+
+    /// The slice must import a port, its way to persist what the domain
+    /// decided (VSA035). `None` means the architecture default: on for
+    /// `hexagonal-event-sourced-vsa`, off otherwise.
+    #[serde(default)]
+    pub require_port: Option<bool>,
 }
 
 impl Default for CommandSliceConfig {
@@ -496,6 +581,8 @@ impl Default for CommandSliceConfig {
             require_tests: true,
             no_business_logic: true,
             adapters: default_adapter_types(),
+            require_domain_call: None,
+            require_port: None,
         }
     }
 }
@@ -526,6 +613,11 @@ pub struct QuerySliceConfig {
     /// Allowed adapter types
     #[serde(default = "default_adapter_types")]
     pub adapters: Vec<String>,
+
+    /// A view slice must not issue commands (VSA040). `None` means the
+    /// architecture default: on for `hexagonal-event-sourced-vsa`.
+    #[serde(default)]
+    pub forbid_commands: Option<bool>,
 }
 
 impl Default for QuerySliceConfig {
@@ -537,11 +629,12 @@ impl Default for QuerySliceConfig {
             max_lines: default_max_query_slice_lines(),
             require_tests: true,
             adapters: default_adapter_types(),
+            forbid_commands: None,
         }
     }
 }
 
-/// Saga slice configuration
+/// Automation (saga) slice configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SagaSliceConfig {
     /// Naming pattern for saga slices
@@ -563,6 +656,16 @@ pub struct SagaSliceConfig {
     /// Require tests
     #[serde(default = "default_true")]
     pub require_tests: bool,
+
+    /// An automation slice must keep a to-do list view (VSA039). `None` means
+    /// the architecture default: on for `hexagonal-event-sourced-vsa`.
+    #[serde(default)]
+    pub require_todo_view: Option<bool>,
+
+    /// An automation or translation slice must issue a command (VSA039).
+    /// `None` means the architecture default: on for `hexagonal-event-sourced-vsa`.
+    #[serde(default)]
+    pub require_command: Option<bool>,
 }
 
 impl Default for SagaSliceConfig {
@@ -573,6 +676,8 @@ impl Default for SagaSliceConfig {
             can_send_commands: true,
             require_error_handling: true,
             require_tests: true,
+            require_todo_view: None,
+            require_command: None,
         }
     }
 }
@@ -715,11 +820,14 @@ pub struct ValidationConfig {
     #[serde(default = "default_true")]
     pub allow_nested_features: bool,
 
-    /// Maximum warnings before failing validation
+    /// Warning budget for `vsa validate`: more warnings than this fails the run
+    /// (non-zero exit). `None` (the default when the key is omitted) means no
+    /// budget, so warnings are reported but never fail the run. Set `0` to make
+    /// every warning blocking.
     #[serde(default = "default_max_warnings")]
     pub max_warnings: Option<usize>,
 
-    /// Fail on errors
+    /// Errors fail `vsa validate` (non-zero exit). Defaults to `true`.
     #[serde(default = "default_true")]
     pub fail_on_errors: bool,
 
@@ -749,7 +857,7 @@ impl Default for ValidationConfig {
             require_integration_events_in_shared: true,
             max_nesting_depth: 3,
             allow_nested_features: true,
-            max_warnings: Some(10),
+            max_warnings: default_max_warnings(),
             fail_on_errors: true,
             exclude_from_isolation: Vec::new(),
             domain_level_commands: false,
@@ -1169,8 +1277,16 @@ fn default_allowed_infrastructure() -> Vec<String> {
 }
 
 // Slice defaults
+// Every pattern, plus the legacy `mixed`. A project narrows this list to
+// refuse the patterns it does not use (VSA037).
 fn default_slice_types() -> Vec<SliceType> {
-    vec![SliceType::Command, SliceType::Query, SliceType::Saga]
+    vec![
+        SliceType::Command,
+        SliceType::View,
+        SliceType::Automation,
+        SliceType::Translation,
+        SliceType::Mixed,
+    ]
 }
 
 fn default_slice_metadata_file() -> String {
@@ -1199,8 +1315,11 @@ fn default_max_depth() -> usize {
     3
 }
 
+// No budget unless the config sets one. This used to be `Some(10)`, but the
+// CLI never enforced it, so turning enforcement on with that default would fail
+// consumers on a limit they never wrote.
 fn default_max_warnings() -> Option<usize> {
-    Some(10)
+    None
 }
 
 impl VsaConfig {
@@ -1410,10 +1529,30 @@ mod tests {
     #[test]
     fn test_slice_types() {
         let slices_config = SlicesConfig::default();
-        assert_eq!(slices_config.types.len(), 3);
-        assert!(slices_config.types.contains(&SliceType::Command));
-        assert!(slices_config.types.contains(&SliceType::Query));
-        assert!(slices_config.types.contains(&SliceType::Saga));
+        let patterns: Vec<SliceType> = slices_config.types.iter().map(SliceType::pattern).collect();
+        for pattern in
+            [SliceType::Command, SliceType::View, SliceType::Automation, SliceType::Translation]
+        {
+            assert!(patterns.contains(&pattern), "{pattern:?} allowed by default");
+        }
+    }
+
+    #[test]
+    fn slice_type_names_map_to_the_four_patterns() {
+        assert_eq!(SliceType::from_name("query").unwrap().pattern(), SliceType::View);
+        assert_eq!(SliceType::from_name("View").unwrap(), SliceType::View);
+        assert_eq!(SliceType::from_name("saga").unwrap().pattern(), SliceType::Automation);
+        assert_eq!(SliceType::from_name("translation"), Some(SliceType::Translation));
+        assert_eq!(SliceType::from_name("bogus"), None);
+        assert_eq!(SliceType::Query.deprecated_name(), Some(("query", "view")));
+        assert_eq!(SliceType::Saga.deprecated_name(), Some(("saga", "automation")));
+        assert_eq!(SliceType::View.deprecated_name(), None);
+        for name in SliceType::NAMES {
+            assert_eq!(SliceType::from_name(name).unwrap().name(), name);
+        }
+        let types: Vec<SliceType> =
+            serde_yaml::from_str("[command, view, automation, translation, query, saga]").unwrap();
+        assert_eq!(types.len(), 6);
     }
 
     #[test]
