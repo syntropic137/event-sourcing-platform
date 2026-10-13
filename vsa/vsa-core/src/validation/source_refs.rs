@@ -41,6 +41,20 @@ pub(crate) fn referenced_segments(path: &Path) -> HashSet<String> {
     }
 }
 
+/// Source code with comments and literals blanked, and (Rust) test-only items
+/// removed, so text searches see code only.
+pub(crate) fn code_only(path: &Path) -> String {
+    let Ok(source) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("rs") => rust_code_only(&source),
+        Some("py") => python_code_only(&source),
+        Some("ts" | "tsx" | "js" | "jsx") => js_blank(&source, false),
+        _ => String::new(),
+    }
+}
+
 fn identifiers(text: &str) -> impl Iterator<Item = String> + '_ {
     static IDENT: OnceLock<Regex> = OnceLock::new();
     re(&IDENT, r"[A-Za-z_][A-Za-z0-9_]*").find_iter(text).map(|m| m.as_str().to_string())

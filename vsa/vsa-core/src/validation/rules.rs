@@ -35,17 +35,19 @@ impl ValidationRuleSet {
     /// Create a new rule set with default rules
     pub fn default_rules() -> Self {
         use super::{
-            ApplicationIsolationRule, CommandSliceReachesDomainRule, CommandSliceReachesPortRule,
-            ContextBoundariesRule, ContextPublicApiExistsRule, CrossContextPublicApiRule,
-            DomainPurityRule, EventsIsolationRule, IntegrationEventNamingRule,
-            IntegrationEventsLocationRule, NoCircularDependenciesRule, NoCrossSliceImportsRule,
-            NoDuplicateIntegrationEventsRule, PortIsolationRule, ProcessManagerStructureRule,
-            ProjectionEventSubscriptionRule, ProjectionPurityRule,
-            RequireAggregatesInDomainRootRule, RequireBusesInInfrastructureRule,
-            RequireCommandsInDomainRule, RequireEventsInDomainRule, RequireHandlerForQueryRule,
-            RequirePortSuffixRule, RequirePortsInPortsFolderRule, RequireProjectionForQueryRule,
-            RequireSharedFolderRule, RequireSliceLocationRule, RequireValueObjectsNamingRule,
-            SliceIsolationRule, ThinAdapterRule,
+            ApplicationIsolationRule, AutomationSliceShapeRule, CommandSliceReachesDomainRule,
+            CommandSliceReachesPortRule, ContextBoundariesRule, ContextPublicApiExistsRule,
+            CrossContextPublicApiRule, DeprecatedSliceTypeNameRule, DomainPurityRule,
+            EventsIsolationRule, IntegrationEventNamingRule, IntegrationEventsLocationRule,
+            NoCircularDependenciesRule, NoCrossSliceImportsRule, NoDuplicateIntegrationEventsRule,
+            PortIsolationRule, ProcessManagerStructureRule, ProjectionEventSubscriptionRule,
+            ProjectionPurityRule, RequireAggregatesInDomainRootRule,
+            RequireBusesInInfrastructureRule, RequireCommandsInDomainRule,
+            RequireEventsInDomainRule, RequireHandlerForQueryRule, RequirePortSuffixRule,
+            RequirePortsInPortsFolderRule, RequireProjectionForQueryRule, RequireSharedFolderRule,
+            RequireSliceLocationRule, RequireValueObjectsNamingRule, SliceIsolationRule,
+            ThinAdapterRule, UndeclaredSliceTypeRule, UnknownSliceTypeRule,
+            ViewSliceIssuesNoCommandRule,
         };
 
         let rules: Vec<Box<dyn ValidationRule>> = vec![
@@ -90,6 +92,12 @@ impl ValidationRuleSet {
             // Slice thickness (hexagonal-event-sourced-vsa default)
             Box::new(CommandSliceReachesDomainRule), // VSA034: command slice imports domain
             Box::new(CommandSliceReachesPortRule),   // VSA035: command slice imports a port
+            // Slice types as Event Modeling patterns
+            Box::new(UnknownSliceTypeRule), // VSA036: type: is a known slice type
+            Box::new(UndeclaredSliceTypeRule), // VSA037: type: is in slices.types
+            Box::new(DeprecatedSliceTypeNameRule), // VSA038: query/saga are deprecated names
+            Box::new(AutomationSliceShapeRule), // VSA039: automation = to-do view + command
+            Box::new(ViewSliceIssuesNoCommandRule), // VSA040: a view issues no command
             // Cross-context boundary rules
             Box::new(CrossContextPublicApiRule),  // VSA204
             Box::new(ContextPublicApiExistsRule), // VSA205

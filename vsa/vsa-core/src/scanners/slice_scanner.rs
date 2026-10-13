@@ -115,6 +115,16 @@ impl SliceManifest {
     pub fn from_yaml(value: &serde_yaml::Value) -> Self {
         let get = |key: &str| value.get(key);
         let string = |key: &str| get(key).and_then(|v| v.as_str()).map(str::to_string);
+        // `type:` as written. A present but empty or non-string value is kept
+        // in a form no slice type matches, so VSA036 reports it instead of the
+        // slice silently counting as undeclared.
+        let written_type = match get("type") {
+            None => String::new(),
+            Some(v) => match v.as_str() {
+                Some(t) if !t.trim().is_empty() => t.to_string(),
+                _ => format!("<{}>", serde_yaml::to_string(v).unwrap_or_default().trim()),
+            },
+        };
         // `projection:` is either a name or a mapping with a `name:`.
         let projection = get("projection").and_then(|v| {
             v.as_str().map(str::to_string).or_else(|| v.get("name")?.as_str().map(str::to_string))
@@ -136,7 +146,7 @@ impl SliceManifest {
 
         Self {
             name: string("name").unwrap_or_default(),
-            slice_type: string("type").unwrap_or_default(),
+            slice_type: written_type,
             projection,
             subscribes_to,
             returns: string("returns"),
@@ -377,13 +387,9 @@ impl<'a> SliceScanner<'a> {
         // 1. Explicit: Check slice.yaml first
         if let Some(manifest) = metadata {
             if !manifest.slice_type.is_empty() {
-                let slice_type = match manifest.slice_type.to_lowercase().as_str() {
-                    "command" => SliceType::Command,
-                    "query" => SliceType::Query,
-                    "saga" => SliceType::Saga,
-                    "mixed" => SliceType::Mixed,
-                    _ => SliceType::Unknown, // Default to Unknown for unrecognized types
-                };
+                // Unknown for unrecognized types; VSA036 reports them.
+                let slice_type =
+                    SliceType::from_name(&manifest.slice_type).unwrap_or(SliceType::Unknown);
                 return (slice_type, true);
             }
             // No `type:`: section keys in slice.yaml say what the slice is.

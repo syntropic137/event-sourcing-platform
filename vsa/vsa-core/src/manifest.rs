@@ -351,13 +351,7 @@ impl Manifest {
         // Priority 1: Explicit `type:` field
         if let Some(type_val) = mapping.get(key("type")) {
             if let Some(type_str) = type_val.as_str() {
-                return Some(match type_str.to_lowercase().as_str() {
-                    "command" => SliceType::Command,
-                    "query" => SliceType::Query,
-                    "saga" => SliceType::Saga,
-                    "mixed" => SliceType::Mixed,
-                    _ => SliceType::Unknown,
-                });
+                return Some(SliceType::from_name(type_str).unwrap_or(SliceType::Unknown));
             }
         }
 

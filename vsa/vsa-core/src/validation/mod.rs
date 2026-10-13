@@ -10,6 +10,7 @@ mod isolation_rules;
 mod query_slice_rules;
 mod rules;
 mod slice_location_rules;
+mod slice_pattern_rules;
 mod slice_thickness_rules;
 mod source_refs;
 mod structure_rules;
@@ -35,6 +36,10 @@ pub use query_slice_rules::{
 };
 pub use rules::{ValidationRule, ValidationRuleSet};
 pub use slice_location_rules::RequireSliceLocationRule;
+pub use slice_pattern_rules::{
+    AutomationSliceShapeRule, DeprecatedSliceTypeNameRule, UndeclaredSliceTypeRule,
+    UnknownSliceTypeRule, ViewSliceIssuesNoCommandRule,
+};
 pub use slice_thickness_rules::{CommandSliceReachesDomainRule, CommandSliceReachesPortRule};
 pub use structure_rules::{
     RequireAggregateFolderConventionRule, RequireAggregatesInDomainRootRule,

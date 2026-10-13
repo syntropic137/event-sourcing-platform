@@ -72,7 +72,5 @@ fn view_slice_without_projection_fails() {
         &format!("{SLICES}/list_orders/list_orders_handler_test.rs"),
         "#[test]\nfn t() {}\n",
     );
-    validate(dir.path())
-        .failure()
-        .stdout(contains("Query slice 'list_orders' is missing a projection"));
+    validate(dir.path()).failure().stdout(contains("slice 'list_orders' is missing a projection"));
 }

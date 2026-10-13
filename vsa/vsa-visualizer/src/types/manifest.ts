@@ -184,10 +184,20 @@ export interface Relationships {
 }
 
 /**
- * Slice type - classifies whether a feature/slice is command or query
+ * Slice type - the Event Modeling pattern a slice implements
+ * (command, view, automation, translation). 'query' and 'saga' are the
+ * deprecated names for 'view' and 'automation'; 'mixed' is legacy.
  * NEW in v2.2.0
  */
-export type SliceType = 'command' | 'query' | 'mixed' | 'unknown';
+export type SliceType =
+  | 'command'
+  | 'view'
+  | 'automation'
+  | 'translation'
+  | 'query'
+  | 'saga'
+  | 'mixed'
+  | 'unknown';
 
 /**
  * Context type - classifies whether a directory is a valid bounded context

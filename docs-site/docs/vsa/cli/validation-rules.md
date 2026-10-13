@@ -338,6 +338,18 @@ slices:
 
 A query slice must contain a projection file (`*Projection.*`, `*_projection.*` or `projection.*`). For hexagonal projects this rule now reaches per-context slices.
 
+### VSA036-VSA040: Slice types are Event Modeling patterns
+
+- **VSA036** (error): `slice.yaml` `type:` is not one of `command`, `view`, `automation`, `translation` (or the older `query`, `saga`, or `mixed`).
+- **VSA037** (error): the type is not in `slices.types`.
+- **VSA038** (warning): `query` / `saga`, in `slice.yaml` or in `slices.types`, are deprecated names for `view` / `automation`.
+- **VSA039** (error): an automation slice needs a to-do list view (a projection, or a `*todo*` file) and must issue a command. A translation slice must issue a command.
+- **VSA040** (error): a view slice must not issue a command.
+
+A `view` slice that only keeps a read model current (a projection runner) needs no handler. VSA008 asks for a handler only when the slice defines a query (`*Query` / `*_query` file), or when it uses the older `type: query`.
+
+"Issues a command" means one of two things in non-test source: an import from a `commands` module, or a type name ending in `Command`. Comments, string literals and test-only code are not read. VSA039 and VSA040 are on by default for `hexagonal-event-sourced-vsa`. They are controlled by `slices.saga.require_todo_view`, `slices.saga.require_command` and `slices.query.forbid_commands`. See [Vertical Slices](../concepts/vertical-slices.md).
+
 ### Not checked: business invariants in a handler
 
 No rule detects invariants written in a handler. A handler that imports the domain and still validates on its own passes. Telling a domain invariant apart from input parsing or port error mapping needs a reading of the code, not a pattern. A guard-clause count would flag thin handlers that map errors, and miss fat ones written as `match` arms. VSA034, VSA035, the adapter line budget (VSA011) and slice isolation (VSA010, VSA031) are the structural proxies.
