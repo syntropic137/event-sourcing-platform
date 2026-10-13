@@ -46,7 +46,7 @@ impl ValidationRule for RequireProjectionForQueryRule {
         }
 
         // Scan for slices
-        let scanner = SliceScanner::new(slices_config, &ctx.root);
+        let scanner = SliceScanner::for_config(&ctx.config, &ctx.root);
         let slices = scanner.scan()?;
 
         for slice in slices {
@@ -96,11 +96,8 @@ impl ValidationRule for RequireHandlerForQueryRule {
         ctx: &ValidationContext,
         report: &mut EnhancedValidationReport,
     ) -> Result<()> {
-        // Get slices config if available
-        let slices_config = ctx.config.slices.as_ref();
-
         // Scan for slices
-        let scanner = SliceScanner::new(slices_config, &ctx.root);
+        let scanner = SliceScanner::for_config(&ctx.config, &ctx.root);
         let slices = scanner.scan()?;
 
         for slice in slices {

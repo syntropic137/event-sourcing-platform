@@ -35,11 +35,12 @@ impl ValidationRuleSet {
     /// Create a new rule set with default rules
     pub fn default_rules() -> Self {
         use super::{
-            ApplicationIsolationRule, ContextBoundariesRule, ContextPublicApiExistsRule,
-            CrossContextPublicApiRule, DomainPurityRule, EventsIsolationRule,
-            IntegrationEventNamingRule, IntegrationEventsLocationRule, NoCircularDependenciesRule,
-            NoCrossSliceImportsRule, NoDuplicateIntegrationEventsRule, PortIsolationRule,
-            ProcessManagerStructureRule, ProjectionEventSubscriptionRule, ProjectionPurityRule,
+            ApplicationIsolationRule, CommandSliceReachesDomainRule, CommandSliceReachesPortRule,
+            ContextBoundariesRule, ContextPublicApiExistsRule, CrossContextPublicApiRule,
+            DomainPurityRule, EventsIsolationRule, IntegrationEventNamingRule,
+            IntegrationEventsLocationRule, NoCircularDependenciesRule, NoCrossSliceImportsRule,
+            NoDuplicateIntegrationEventsRule, PortIsolationRule, ProcessManagerStructureRule,
+            ProjectionEventSubscriptionRule, ProjectionPurityRule,
             RequireAggregatesInDomainRootRule, RequireBusesInInfrastructureRule,
             RequireCommandsInDomainRule, RequireEventsInDomainRule, RequireHandlerForQueryRule,
             RequirePortSuffixRule, RequirePortsInPortsFolderRule, RequireProjectionForQueryRule,
@@ -86,6 +87,9 @@ impl ValidationRuleSet {
             // Consumer pattern rules (ADR-025)
             Box::new(ProjectionPurityRule), // VSA032: Projection purity (whitelist)
             Box::new(ProcessManagerStructureRule), // VSA033: ProcessManager structure
+            // Slice thickness (hexagonal-event-sourced-vsa default)
+            Box::new(CommandSliceReachesDomainRule), // VSA034: command slice imports domain
+            Box::new(CommandSliceReachesPortRule),   // VSA035: command slice imports a port
             // Cross-context boundary rules
             Box::new(CrossContextPublicApiRule),  // VSA204
             Box::new(ContextPublicApiExistsRule), // VSA205

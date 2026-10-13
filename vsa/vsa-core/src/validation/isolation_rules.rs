@@ -47,15 +47,19 @@ impl ValidationRule for NoCrossSliceImportsRule {
             return Ok(());
         }
 
-        // Get slices config
-        let slices_config = ctx.config.slices.as_ref();
-
         // Scan for slices
-        let scanner = SliceScanner::new(slices_config, &ctx.root);
+        let scanner = SliceScanner::for_config(&ctx.config, &ctx.root);
         let slices = scanner.scan()?;
 
-        // Collect all slice names for cross-reference
-        let slice_names: Vec<&str> = slices.iter().map(|s| s.name.as_str()).collect();
+        // Collect all slice names for cross-reference. Slices listed in
+        // validation.exclude_from_isolation are shared read models that siblings
+        // may import, the same exemption VSA031 applies.
+        let excluded = &ctx.config.validation.exclude_from_isolation;
+        let slice_names: Vec<&str> = slices
+            .iter()
+            .map(|s| s.name.as_str())
+            .filter(|name| !excluded.iter().any(|e| e == name))
+            .collect();
 
         for slice in &slices {
             for file in &slice.files {
@@ -152,11 +156,8 @@ impl ValidationRule for ThinAdapterRule {
             .and_then(|q| q.max_lines)
             .unwrap_or(100);
 
-        // Get slices config
-        let slices_config = ctx.config.slices.as_ref();
-
         // Scan for slices
-        let scanner = SliceScanner::new(slices_config, &ctx.root);
+        let scanner = SliceScanner::for_config(&ctx.config, &ctx.root);
         let slices = scanner.scan()?;
 
         for slice in &slices {
@@ -703,5 +704,31 @@ export class CreateOrderController {
 
         // Should have no warnings
         assert_eq!(report.warnings.len(), 0);
+    }
+
+    #[test]
+    fn vsa010_honours_exclude_from_isolation_in_per_context_slices() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().to_path_buf();
+        let mut config = create_test_config(root.clone());
+        let slices = root.join("orders/slices");
+        fs::create_dir_all(slices.join("list_orders")).unwrap();
+        fs::create_dir_all(slices.join("create_order")).unwrap();
+        fs::write(slices.join("list_orders/OrderListProjection.ts"), "export class P {}").unwrap();
+        fs::write(
+            slices.join("create_order/CreateOrderHandler.ts"),
+            "import { P } from '../list_orders/OrderListProjection';\n",
+        )
+        .unwrap();
+
+        let run = |config: VsaConfig| {
+            let ctx = ValidationContext::new(config, root.clone());
+            let mut report = EnhancedValidationReport::default();
+            NoCrossSliceImportsRule.validate(&ctx, &mut report).unwrap();
+            report.errors.len()
+        };
+        assert_eq!(run(config.clone()), 1, "per-context slices are now checked");
+        config.validation.exclude_from_isolation = vec!["list_orders".to_string()];
+        assert_eq!(run(config), 0, "an excluded shared read model may be imported");
     }
 }

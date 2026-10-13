@@ -313,6 +313,35 @@ bounded_contexts:
    💡 Create event: vsa generate integration-event ProductAdded --publisher catalog
 ```
 
+## Slice Thickness Rules
+
+These rules check that a slice does its pattern's job, not only what it may not import. With `architecture: hexagonal-event-sourced-vsa`, slices are found in every context (`<root>/<context>/slices/<slice>/`), their files are read recursively (`internal/` counts), and snake_case role names (`place_order_handler.rs`, `projection.py`) are recognised. Other architectures keep scanning only `<root>/slices/` for now.
+
+### VSA034: Command slice reaches the domain
+
+A `type: command` slice must import the domain layer, where the decision lives (an aggregate's `decide`, or a command handler on the aggregate). A slice that never reaches the domain is deciding on its own.
+
+### VSA035: Command slice reaches a port
+
+A `type: command` slice must import a port (`ports/`), its way to persist what the domain decided, such as the event store.
+
+Both are on by default for `hexagonal-event-sourced-vsa` and off for other architectures. Set either one explicitly to override that:
+
+```yaml
+slices:
+  command:
+    require_domain_call: true   # VSA034
+    require_port: true          # VSA035
+```
+
+### VSA007: View (query) slice has a projection
+
+A query slice must contain a projection file (`*Projection.*`, `*_projection.*` or `projection.*`). For hexagonal projects this rule now reaches per-context slices.
+
+### Not checked: business invariants in a handler
+
+No rule detects invariants written in a handler. A handler that imports the domain and still validates on its own passes. Telling a domain invariant apart from input parsing or port error mapping needs a reading of the code, not a pattern. A guard-clause count would flag thin handlers that map errors, and miss fat ones written as `match` arms. VSA034, VSA035, the adapter line budget (VSA011) and slice isolation (VSA010, VSA031) are the structural proxies.
+
 ## Configuration-Based Rules
 
 ### Per-Context Overrides

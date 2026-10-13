@@ -10,6 +10,7 @@ mod isolation_rules;
 mod query_slice_rules;
 mod rules;
 mod slice_location_rules;
+mod slice_thickness_rules;
 mod structure_rules;
 mod suggestions;
 
@@ -33,6 +34,7 @@ pub use query_slice_rules::{
 };
 pub use rules::{ValidationRule, ValidationRuleSet};
 pub use slice_location_rules::RequireSliceLocationRule;
+pub use slice_thickness_rules::{CommandSliceReachesDomainRule, CommandSliceReachesPortRule};
 pub use structure_rules::{
     RequireAggregateFolderConventionRule, RequireAggregatesInDomainRootRule,
     RequireBusesInInfrastructureRule, RequireCommandsInDomainRule, RequireEventsInDomainRule,
