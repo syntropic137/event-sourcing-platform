@@ -23,15 +23,16 @@
 //! "Issues a command" is read from non-test source files, in one of two ways:
 //! an import from a `commands` module (where VSA020 puts commands), or a type
 //! name ending in `Command` (`PlaceOrderCommand`, `ItemCommand::Place`).
-//! Comment lines are skipped. It is a name-based reading, so a command type
-//! named without the suffix is not seen.
+//! Comments, string literals and Rust `#[cfg(test)]` code are not read. It
+//! is a name-based reading, so a command type named without the suffix is not
+//! seen.
 
 use std::path::Path;
 use std::sync::OnceLock;
 
 use regex::Regex;
 
-use super::import_parser::parse_imports;
+use super::source_refs::{code_only, referenced_segments};
 use super::{
     is_test_or_conftest_name, EnhancedValidationReport, Severity, Suggestion, ValidationContext,
     ValidationIssue,
@@ -233,15 +234,8 @@ fn command_type_name() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\b[A-Z][A-Za-z0-9_]*Command\b").expect("valid regex"))
 }
 
-fn is_comment(line: &str) -> bool {
-    let line = line.trim_start();
-    line.starts_with("//")
-        || line.starts_with('#')
-        || line.starts_with('*')
-        || line.starts_with("/*")
-}
-
 /// Where in the slice's non-test source a command is issued, if anywhere.
+/// Comments, string literals and (Rust) `#[cfg(test)]` code are not read.
 fn first_command_reference(slice: &Slice) -> Option<(String, String)> {
     for file in &slice.files {
         if matches!(file.file_type, SliceFileType::Test | SliceFileType::Manifest)
@@ -250,16 +244,11 @@ fn first_command_reference(slice: &Slice) -> Option<(String, String)> {
         {
             continue;
         }
-        for import in parse_imports(&file.path).unwrap_or_default() {
-            if import.module.split([':', '/', '.']).any(|s| s == "commands") {
-                return Some((file.name.clone(), import.module));
-            }
+        if referenced_segments(&file.path).contains("commands") {
+            return Some((file.name.clone(), "commands".to_string()));
         }
-        let Ok(source) = std::fs::read_to_string(&file.path) else { continue };
-        for line in source.lines().filter(|l| !is_comment(l)) {
-            if let Some(m) = command_type_name().find(line) {
-                return Some((file.name.clone(), m.as_str().to_string()));
-            }
+        if let Some(m) = command_type_name().find(&code_only(&file.path)) {
+            return Some((file.name.clone(), m.as_str().to_string()));
         }
     }
     None
@@ -562,7 +551,7 @@ mod tests {
             &[
                 (
                     "totals_projection.rs",
-                    "// folds PlaceCommand outcomes into totals\npub struct T;\n",
+                    "// folds PlaceCommand outcomes into totals\npub const LABEL: &str = \"PlaceCommand\";\npub struct T;\n#[cfg(test)]\nmod t { use crate::domain::commands::PlaceCommand; }\n",
                 ),
                 ("totals_projection_test.rs", "use crate::domain::commands::PlaceCommand;\n"),
             ],
