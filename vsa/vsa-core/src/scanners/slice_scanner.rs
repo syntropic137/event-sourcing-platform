@@ -115,6 +115,16 @@ impl SliceManifest {
     pub fn from_yaml(value: &serde_yaml::Value) -> Self {
         let get = |key: &str| value.get(key);
         let string = |key: &str| get(key).and_then(|v| v.as_str()).map(str::to_string);
+        // `type:` as written. A present but empty or non-string value is kept
+        // in a form no slice type matches, so VSA036 reports it instead of the
+        // slice silently counting as undeclared.
+        let written_type = match get("type") {
+            None => String::new(),
+            Some(v) => match v.as_str() {
+                Some(t) if !t.trim().is_empty() => t.to_string(),
+                _ => format!("<{}>", serde_yaml::to_string(v).unwrap_or_default().trim()),
+            },
+        };
         // `projection:` is either a name or a mapping with a `name:`.
         let projection = get("projection").and_then(|v| {
             v.as_str().map(str::to_string).or_else(|| v.get("name")?.as_str().map(str::to_string))
@@ -136,7 +146,7 @@ impl SliceManifest {
 
         Self {
             name: string("name").unwrap_or_default(),
-            slice_type: string("type").unwrap_or_default(),
+            slice_type: written_type,
             projection,
             subscribes_to,
             returns: string("returns"),

@@ -50,7 +50,7 @@ pub(crate) fn code_only(path: &Path) -> String {
     match path.extension().and_then(|e| e.to_str()) {
         Some("rs") => rust_code_only(&source),
         Some("py") => python_code_only(&source),
-        Some("ts" | "tsx" | "js" | "jsx") => c_like_without_comments(&source),
+        Some("ts" | "tsx" | "js" | "jsx") => js_blank(&source, false),
         _ => String::new(),
     }
 }

@@ -304,21 +304,31 @@ impl ValidationRule for AutomationSliceShapeRule {
             if missing.is_empty() {
                 continue;
             }
+            let (why, suggestion) = if pattern == SliceType::Translation {
+                (
+                    "A translation takes what another system reports and issues a command in \
+                     this system's language; without a command it changes nothing here.",
+                    "Issue the command the external fact translates to",
+                )
+            } else {
+                (
+                    "An automation reads a to-do list view, takes the next entry and issues a \
+                     command; the event that command produces clears the entry. It is not \
+                     event-in/event-out.",
+                    "If the slice only keeps a read model current, it is a view: set type: view",
+                )
+            };
             report.errors.push(ValidationIssue {
                 path: slice.path.clone(),
                 code: self.code().to_string(),
                 severity: Severity::Error,
                 message: format!(
-                    "{} slice '{}' is missing {}. An automation reads a to-do list view, takes \
-                     the next entry and issues a command; the event that command produces clears \
-                     the entry. It is not event-in/event-out.",
+                    "{} slice '{}' is missing {}. {why}",
                     pattern.name(),
                     slice.name,
                     missing.join(" and ")
                 ),
-                suggestions: vec![Suggestion::manual(
-                    "If the slice only keeps a read model current, it is a view: set type: view",
-                )],
+                suggestions: vec![Suggestion::manual(suggestion)],
             });
         }
         Ok(())
@@ -587,5 +597,76 @@ mod tests {
         slice(&ctx.root, "dispatches", "view", &[("runner_projection.rs", PROCESSOR)]);
         assert!(codes(&AutomationSliceShapeRule, &ctx).0.is_empty());
         assert!(codes(&ViewSliceIssuesNoCommandRule, &ctx).0.is_empty());
+    }
+
+    #[test]
+    fn empty_or_non_string_type_is_unknown() {
+        let (_t, ctx) = hex();
+        for (name, value) in [("empty", "\"\""), ("number", "123"), ("list", "[view]")] {
+            let dir = ctx.root.join("orders/slices").join(name);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("slice.yaml"), format!("name: {name}\ntype: {value}\n")).unwrap();
+        }
+        let (errors, _) = codes(&UnknownSliceTypeRule, &ctx);
+        assert_eq!(errors.len(), 3, "{errors:?}");
+    }
+
+    #[test]
+    fn python_and_typescript_literals_are_not_commands() {
+        let (_t, ctx) = hex();
+        slice(
+            &ctx.root,
+            "py_view",
+            "view",
+            &[("projection.py", "label = \"PlaceOrderCommand\"\n")],
+        );
+        slice(
+            &ctx.root,
+            "ts_view",
+            "view",
+            &[("TotalsProjection.ts", "const l = `PlaceOrderCommand`;\nconst u = 'https://x';\n")],
+        );
+        slice(
+            &ctx.root,
+            "ts_runner",
+            "view",
+            &[("RunnerProjection.ts", "const u = 'https://x'; send(new PlaceOrderCommand());\n")],
+        );
+        let (errors, _) = codes(&ViewSliceIssuesNoCommandRule, &ctx);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("'ts_runner'"));
+    }
+
+    #[test]
+    fn projection_only_view_needs_no_handler_but_a_query_does() {
+        use crate::validation::RequireHandlerForQueryRule;
+        let (_t, ctx) = hex();
+        slice(&ctx.root, "totals", "view", &[("totals_projection.rs", "pub struct T;\n")]);
+        slice(
+            &ctx.root,
+            "get_totals",
+            "view",
+            &[
+                ("totals_projection.rs", "pub struct T;\n"),
+                ("get_totals_query.rs", "pub struct Q;\n"),
+            ],
+        );
+        slice(&ctx.root, "legacy", "query", &[("totals_projection.rs", "pub struct T;\n")]);
+        let (errors, _) = codes(&RequireHandlerForQueryRule, &ctx);
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors.iter().any(|e| e.contains("'get_totals'")));
+        assert!(errors.iter().any(|e| e.contains("'legacy'")));
+    }
+
+    #[test]
+    fn translation_diagnostic_is_about_translation() {
+        let (_t, ctx) = hex();
+        slice(&ctx.root, "import_jira", "translation", &[("webhook.rs", "pub fn on() {}\n")]);
+        let (errors, _) = codes(&AutomationSliceShapeRule, &ctx);
+        assert!(
+            errors[0].contains("A translation takes what another system reports"),
+            "{}",
+            errors[0]
+        );
     }
 }
