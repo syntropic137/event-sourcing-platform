@@ -27,7 +27,8 @@ re-dispatches workflows for already-processed PRs, burning user funds.
 ## Decision
 
 Add a `ProcessManager` base class to ESP that implements the Processor
-To-Do List pattern (Martin Dilger, *Understanding Event Sourcing*, Ch. 37).
+To-Do List pattern (Martin Dilger, *Understanding Event Sourcing*, Ch. 37;
+Ch. 35, pp. 495-509, in print).
 
 The ProcessManager has two clearly separated parts:
 
@@ -118,6 +119,6 @@ Consequence: returning from `dispatch_event()` no longer means
 
 ## References
 
-- Martin Dilger, *Understanding Event Sourcing*, Ch. 37
+- Martin Dilger, *Understanding Event Sourcing*, Ch. 37 (Ch. 35, pp. 495-509, in print)
 - [CONSUMER-PATTERNS.md](../CONSUMER-PATTERNS.md) - full guide
 - [ADR-014](ADR-014-projection-checkpoint-architecture.md) - checkpoint architecture

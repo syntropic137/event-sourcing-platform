@@ -10,6 +10,7 @@ A comprehensive event sourcing platform organized around Domain-Driven Design pr
 - [Platform Philosophy](docs/PLATFORM-PHILOSOPHY.md) — What this platform IS and IS NOT
 - [Maintainability Doctrine](docs/MAINTAINABILITY-DOCTRINE.md) — Engineering principles for sustainability
 - [ADR Index](docs/adrs/ADR-INDEX.md) — Architectural decisions
+- [Foundations](docs/FOUNDATIONS.md) — The books the platform is built on (Dilger first), cited to the page
 
 **Requires:** Rust stable, pnpm 10+, protoc 27+, Docker
 
