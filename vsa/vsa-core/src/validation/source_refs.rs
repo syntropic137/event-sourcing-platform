@@ -192,16 +192,22 @@ fn raw_string_end(chars: &[char], i: usize) -> Option<usize> {
     Some(chars.len())
 }
 
-/// Is this attribute body (`cfg(test)`, `test`, `tokio::test`, …) test-only?
+/// Is this attribute body test-only? `test`, `tokio::test`,
+/// `tokio::test(flavor = "multi_thread")`, `cfg(test)` and
+/// `cfg(all(test, ...))` are. `cfg(any(test, ...))` and `cfg(not(test))` are
+/// not: they also compile outside tests.
 fn is_test_attribute(body: &str) -> bool {
     static TEST_WORD: OnceLock<Regex> = OnceLock::new();
     let body: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-    if body == "test" || body.ends_with("::test") {
-        return true;
+    if let Some(cfg) = body.strip_prefix("cfg(").and_then(|b| b.strip_suffix(')')) {
+        return cfg == "test"
+            || (cfg.starts_with("all(")
+                && !cfg.contains("not(")
+                && !cfg.contains("any(")
+                && re(&TEST_WORD, r"\btest\b").is_match(cfg));
     }
-    body.starts_with("cfg(")
-        && !body.contains("not(")
-        && re(&TEST_WORD, r"\btest\b").is_match(&body)
+    let name = body.split('(').next().unwrap_or("");
+    name == "test" || name.ends_with("::test")
 }
 
 /// Blank each item under a test-only attribute: up to its `;`, or through its
@@ -443,7 +449,8 @@ mod tests {
              #[cfg(test)]\nuse crate::ports::Other;\n\
              #[cfg(all(test, feature = \"x\"))]\nmod more { use crate::domain::x; }\n\
              #[test]\nfn t() { crate::domain::decide(); }\n\
-             #[tokio::test]\nasync fn t2() { crate::ports::Store::new(); }\n",
+             #[tokio::test]\nasync fn t2() { crate::ports::Store::new(); }\n\
+             #[tokio::test(flavor = \"multi_thread\")]\nasync fn t3() { crate::domain::x(); }\n",
         );
         assert!(!s.contains("domain"), "{s:?}");
         assert!(!s.contains("ports"), "{s:?}");
@@ -453,9 +460,10 @@ mod tests {
     fn rust_code_after_a_test_module_still_counts() {
         let s = rust(
             "#[cfg(test)]\nmod tests {\n    #[cfg(test)]\n    mod inner { }\n    fn h() {}\n}\n\
-             use crate::domain::decide;\n#[cfg(not(test))]\nuse crate::ports::Store;\n",
+             use crate::domain::decide;\n#[cfg(not(test))]\nuse crate::ports::Store;\n\
+             #[cfg(any(test, feature = \"prod\"))]\nuse crate::application::Svc;\n",
         );
-        assert!(s.contains("domain") && s.contains("ports"), "{s:?}");
+        assert!(s.contains("domain") && s.contains("ports") && s.contains("application"), "{s:?}");
     }
 
     #[test]

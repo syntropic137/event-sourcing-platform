@@ -236,8 +236,12 @@ fn imports_slice(import_path: &str, slice_name: &str) -> bool {
         .filter(|s| !s.is_empty())
         .collect();
     let through_layer = segments.iter().any(|s| LAYERS.contains(s));
+    // A bare package (`uuid`, `react`) is never a sibling slice; only a
+    // relative or crate-rooted path can reach one without naming `slices`.
+    let relative = import_path.starts_with('.')
+        || ["crate", "super", "self"].contains(&segments.first().copied().unwrap_or(""));
     segments.iter().enumerate().any(|(i, s)| {
-        *s == slice_name && ((i > 0 && segments[i - 1] == "slices") || !through_layer)
+        *s == slice_name && ((i > 0 && segments[i - 1] == "slices") || (relative && !through_layer))
     })
 }
 
@@ -763,5 +767,9 @@ export class CreateOrderController {
         assert!(imports_slice("crate::slices::list_orders::handler", "list_orders"));
         assert!(imports_slice("app.contexts.orders.slices.list_orders.handler", "list_orders"));
         assert!(!imports_slice("crate::domain::list_orders", "list_orders"));
+        // A package that shares a slice's name is not the slice.
+        assert!(!imports_slice("uuid", "uuid"));
+        assert!(!imports_slice("uuid/v4", "uuid"));
+        assert!(imports_slice("super::super::uuid::handler", "uuid"));
     }
 }
