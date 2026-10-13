@@ -45,7 +45,8 @@ fn validate(dir: &Path) -> assert_cmd::assert::Assert {
 
 fn set_validation_line(dir: &Path, from: &str, to: &str) {
     let path = dir.join("vsa.yaml");
-    let yaml = fs::read_to_string(&path).unwrap();
+    // A Windows checkout may have CRLF line endings; edit in LF.
+    let yaml = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
     assert!(yaml.contains(from), "fixture vsa.yaml has no line {from:?}");
     fs::write(&path, yaml.replace(from, to)).unwrap();
 }
