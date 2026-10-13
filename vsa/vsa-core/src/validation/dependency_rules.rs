@@ -658,6 +658,20 @@ mod tests {
     // ========================================================================
 
     #[test]
+    fn test_vsa027_rust_crate_relative_imports_are_layers() {
+        // A bare `use crate::infrastructure;` normalizes to `crate/infrastructure`,
+        // with no trailing slash, which the old substring logic let through.
+        for module in
+            ["crate::infrastructure", "crate::ports", "super::super::slices", "self::application"]
+        {
+            assert!(DomainPurityRule::is_forbidden_import(module), "{module} should be forbidden");
+        }
+        for module in ["crate::domain::events", "crate::domain::item", "std::collections"] {
+            assert!(!DomainPurityRule::is_forbidden_import(module), "{module} should be allowed");
+        }
+    }
+
+    #[test]
     fn test_vsa027_domain_imports_from_ports() {
         let (_temp_dir, ctx) = create_test_context();
         let context_path = create_context_structure(ctx.root.as_path(), "workflows");
