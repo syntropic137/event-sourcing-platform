@@ -442,6 +442,12 @@ mod tests {
         let store = FileCheckpointStore::open(&tmp.0).unwrap();
         store.save(&key("a"), 5).await.unwrap();
         store.save(&key("b"), 9).await.unwrap();
+        if !DURABLE_RENAME {
+            // Refused, and nothing changes (see `remove`).
+            assert!(store.delete(&key("a")).await.is_err());
+            assert_eq!(store.load(&key("a")).await.unwrap(), Some(5));
+            return;
+        }
         store.delete(&key("a")).await.unwrap();
         store.delete(&key("missing")).await.unwrap();
         drop(store);

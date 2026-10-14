@@ -134,15 +134,22 @@ async fn a_restarted_runner_resumes_from_the_file_checkpoint() {
         "only events after the persisted checkpoint are redelivered"
     );
 
-    // A rebuild removes the persisted checkpoint too.
-    second.rebuild().await.unwrap();
+    // A rebuild removes the persisted checkpoint too. Without a durable
+    // rename (non-Unix) the store refuses the delete and keeps it.
+    let rebuilt = second.rebuild().await;
     drop(second);
     let store = FileCheckpointStore::open(&dir).unwrap();
-    assert_eq!(
-        store
-            .load(&CheckpointKey::new(&tenant, "seen", 1))
-            .await
-            .unwrap(),
-        None
-    );
+    let stored = store
+        .load(&CheckpointKey::new(&tenant, "seen", 1))
+        .await
+        .unwrap();
+    if cfg!(unix) {
+        rebuilt.unwrap();
+        assert_eq!(stored, None);
+    } else {
+        // Refused before the read model is reset: both are kept.
+        assert!(rebuilt.is_err());
+        assert_eq!(stored, Some(5));
+        assert_eq!(*second_seen.lock().unwrap(), vec![4, 5]);
+    }
 }
