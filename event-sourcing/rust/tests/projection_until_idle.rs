@@ -120,6 +120,11 @@ struct Behaviour {
 enum Hold {
     /// Never finish (only cancellation ends it).
     Forever(Arc<Notify>),
+    /// Wait for `release`, then do the pass normally.
+    ThenComplete {
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+    },
     /// Wait for `release`, then fail.
     ThenFail {
         started: Arc<Notify>,
@@ -175,6 +180,10 @@ impl LiveProcessor for Completer {
             Some(Hold::Forever(started)) => {
                 started.notify_one();
                 std::future::pending::<()>().await;
+            }
+            Some(Hold::ThenComplete { started, release }) => {
+                started.notify_one();
+                release.notified().await;
             }
             Some(Hold::ThenFail { started, release }) => {
                 started.notify_one();
@@ -630,4 +639,42 @@ async fn a_pass_that_fails_within_the_grace_reports_its_error() {
         .unwrap_err();
 
     assert!(err.to_string().contains("failed during grace"), "{err}");
+}
+
+#[tokio::test]
+async fn dropping_the_call_stops_its_pass() {
+    // A caller's timeout drops `run_until_idle` while a pass is held. The
+    // pass must not run on detached and issue commands after the call.
+    let f = fixture().await;
+    request(&f, &["a"]).await;
+    let store = Arc::new(TodoStore::new());
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let held = Completer::new(
+        &f,
+        &store,
+        Behaviour {
+            hold: Some(Hold::ThenComplete {
+                started: started.clone(),
+                release: release.clone(),
+            }),
+            ..Default::default()
+        },
+    );
+    let mut runner = runner(&f, &store, Some(held.clone() as Arc<dyn LiveProcessor>));
+
+    let mut call = Box::pin(runner.run_until_idle(CancellationToken::new()));
+    tokio::select! {
+        _ = &mut call => panic!("the pass is held"),
+        _ = started.notified() => {}
+    }
+    drop(call);
+
+    release.notify_one();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(done_count(&f).await, 0, "no command after the call ended");
+    assert!(
+        held.seen.lock().unwrap().is_empty(),
+        "the pass never resumed"
+    );
 }

@@ -610,6 +610,16 @@ pub enum IdleExit {
 }
 
 const DEFAULT_PAGE_SIZE: u32 = 500;
+/// Aborts the task when dropped, so a pass cannot outlive the call that
+/// started it.
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Default bound on processor passes in one `run_until_idle` call.
 const DEFAULT_IDLE_MAX_PASSES: u32 = 1000;
 /// `read_all` backward from here returns the tenant head. Postgres binds
@@ -885,7 +895,9 @@ where
     /// returns [`Error::LiveProcessorPanicked`] whatever the
     /// [`ProcessorPanicPolicy`]. On cancellation an in-flight pass gets the
     /// [`with_processor_shutdown_grace`](Self::with_processor_shutdown_grace)
-    /// before it is cancelled. The checkpoint, capability guard, upcasting
+    /// before it is cancelled; dropping the call (e.g. a caller's timeout)
+    /// cancels an in-flight pass at its next `.await`, with no grace, and no
+    /// pass ever runs on past the call. The checkpoint, capability guard, upcasting
     /// and filters are those of [`catch_up`](Self::catch_up). Does not
     /// subscribe.
     pub async fn run_until_idle(&mut self, cancel: CancellationToken) -> Result<IdleExit> {
@@ -938,27 +950,35 @@ where
 
     /// One processor pass on its own task, so a panic is reported rather
     /// than unwinding through the caller. `None` if cancelled.
+    ///
+    /// The task never outlives the call: it is aborted if this future is
+    /// dropped (a caller's timeout), and after the grace it is aborted and
+    /// awaited, so no pass of an earlier call overlaps the next one.
     async fn idle_pass(
         &self,
         processor: Arc<dyn LiveProcessor>,
         cancel: &CancellationToken,
     ) -> Result<Option<usize>> {
-        let mut task = tokio::spawn(async move { processor.process_pending().await });
+        let mut task = AbortOnDrop(tokio::spawn(
+            async move { processor.process_pending().await },
+        ));
         let joined = tokio::select! {
             biased;
             _ = cancel.cancelled() => {
                 // The pass may finish within the grace: its error or panic is
                 // still reported; a clean finish is a cancellation.
-                match tokio::time::timeout(self.processor_shutdown_grace, &mut task).await {
+                match tokio::time::timeout(self.processor_shutdown_grace, &mut task.0).await {
                     Ok(Ok(Ok(_))) => return Ok(None),
                     Ok(joined) => joined,
                     Err(_) => {
-                        task.abort();
+                        task.0.abort();
+                        // Resolves once the task has actually stopped.
+                        let _ = (&mut task.0).await;
                         return Ok(None);
                     }
                 }
             }
-            joined = &mut task => joined,
+            joined = &mut task.0 => joined,
         };
         match joined {
             Ok(pass) => pass.map(Some),
