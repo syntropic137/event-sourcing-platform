@@ -831,3 +831,44 @@ async fn two_dropped_calls_in_a_row_still_never_overlap_a_pass() {
     );
     assert_eq!(done_count(&f).await, 1);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn catch_up_and_rebuild_wait_for_a_dropped_pass() {
+    // A dropped call's pass is still in a synchronous stretch. catch_up and
+    // rebuild must not replay or reset the view beside it.
+    let f = fixture().await;
+    request(&f, &["a"]).await;
+    let store = Arc::new(TodoStore::new());
+    let started = Arc::new(Notify::new());
+    let held = Completer::new(
+        &f,
+        &store,
+        Behaviour {
+            hold: Some(Hold::BlockThenComplete {
+                started: started.clone(),
+                block: Duration::from_millis(500),
+            }),
+            ..Default::default()
+        },
+    );
+    let mut runner = runner(&f, &store, Some(held.clone() as Arc<dyn LiveProcessor>));
+
+    for op in ["catch_up", "rebuild"] {
+        let mut call = Box::pin(runner.run_until_idle(CancellationToken::new()));
+        tokio::select! {
+            _ = &mut call => panic!("the pass is blocked"),
+            _ = started.notified() => {}
+        }
+        drop(call);
+        if op == "catch_up" {
+            runner.catch_up().await.unwrap();
+        } else {
+            runner.rebuild().await.unwrap();
+        }
+        assert_eq!(
+            held.active.load(Ordering::SeqCst),
+            0,
+            "{op} ran beside the dropped pass"
+        );
+    }
+}

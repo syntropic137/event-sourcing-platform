@@ -850,6 +850,7 @@ where
     /// Transactional stores clear data and checkpoint atomically. Stop any
     /// other runner on this key first: an empty checkpoint cannot fence it.
     pub async fn rebuild(&mut self) -> Result<()> {
+        self.settle_dropped_pass().await;
         let mut tx = self.store.begin_reset(&self.key).await?;
         self.projection.reset(&mut tx, &self.key).await?;
         self.store.commit_reset(tx, &self.key).await?;
@@ -861,6 +862,7 @@ where
     /// Process every event up to the current head, then return the
     /// committed position. Does not subscribe.
     pub async fn catch_up(&mut self) -> Result<u64> {
+        self.settle_dropped_pass().await;
         let never = CancellationToken::new();
         let result = async {
             self.check_capabilities(&never).await?;
@@ -908,7 +910,7 @@ where
     /// cancels an in-flight pass with no grace. Cancellation is cooperative:
     /// the pass stops when it next yields to the runtime, so it can run on
     /// after the call is gone; the next `run_until_idle` or `run` on this runner
-    /// waits for it to finish before starting a pass of its own. The
+    /// (and `catch_up` and `rebuild`) waits for it to finish first. The
     /// checkpoint, capability guard, upcasting
     /// and filters are those of [`catch_up`](Self::catch_up). Does not
     /// subscribe.
