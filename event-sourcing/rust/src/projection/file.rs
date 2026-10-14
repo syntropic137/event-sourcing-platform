@@ -1,6 +1,6 @@
 //! Durable local [`CheckpointStore`]; see [`FileCheckpointStore`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -34,6 +34,14 @@ struct Document {
 
 type Positions = BTreeMap<CheckpointKey, u64>;
 
+type Change = Box<dyn FnOnce(&mut Positions) -> Result<()> + Send>;
+
+/// A queued `save` or `delete` and where to report its outcome.
+struct QueuedWrite {
+    change: Change,
+    done: tokio::sync::oneshot::Sender<Result<()>>,
+}
+
 struct Inner {
     dir: PathBuf,
     /// Current positions (what is on disk). Locked only briefly, never
@@ -41,6 +49,11 @@ struct Inner {
     positions: Mutex<Positions>,
     /// Serializes writers across the whole read-modify-write-flush.
     writer: Mutex<()>,
+    /// Writes in call order. A write is queued before its blocking task is
+    /// spawned, and every task drains the queue in order, so a write whose
+    /// caller was dropped (a timeout) is still applied in its place and can
+    /// never land after a later `delete` and resurrect the checkpoint.
+    queue: Mutex<VecDeque<QueuedWrite>>,
     /// Held for the life of the store; dropping it releases the OS lock.
     _lock: File,
     /// Test seam: fail the next directory flush after a rename.
@@ -161,6 +174,7 @@ impl FileCheckpointStore {
                 dir,
                 positions: Mutex::new(positions),
                 writer: Mutex::new(()),
+                queue: Mutex::new(VecDeque::new()),
                 _lock: lock,
                 #[cfg(test)]
                 fail_next_dir_sync: std::sync::atomic::AtomicBool::new(false),
@@ -179,28 +193,55 @@ impl FileCheckpointStore {
 
     /// Apply `change` to a copy of the positions, persist it, and make it
     /// current once it is on disk. A failed write before the rename changes
-    /// nothing.
+    /// nothing. Writes apply in call order, even when a caller stops waiting.
     async fn update(
         &self,
         change: impl FnOnce(&mut Positions) -> Result<()> + Send + 'static,
     ) -> Result<()> {
+        let (done, result) = tokio::sync::oneshot::channel();
+        self.inner
+            .queue
+            .lock()
+            .expect("poisoned")
+            .push_back(QueuedWrite {
+                change: Box::new(change),
+                done,
+            });
         let store = self.clone();
-        tokio::task::spawn_blocking(move || {
-            let _writer = store.inner.writer.lock().expect("poisoned");
-            let mut next = store.current();
-            change(&mut next)?;
-            let replaced = persist(
-                &store.inner.dir,
-                &next,
-                store.inner.inject_dir_sync_failure(),
-            );
-            if replaced.renamed {
-                *store.inner.positions.lock().expect("poisoned") = next;
-            }
-            replaced.result
-        })
-        .await
-        .map_err(|e| Error::Repository(anyhow::anyhow!("checkpoint store task: {e}")))?
+        let drained = tokio::task::spawn_blocking(move || store.drain());
+        match result.await {
+            Ok(result) => result,
+            // The write was taken off the queue but never answered: the
+            // draining task panicked.
+            Err(_) => Err(Error::Repository(anyhow::anyhow!(
+                "checkpoint store task: {}",
+                match drained.await {
+                    Err(e) => e.to_string(),
+                    Ok(()) => "write was not applied".to_string(),
+                }
+            ))),
+        }
+    }
+
+    /// Apply every queued write, oldest first.
+    fn drain(&self) {
+        let _writer = self.inner.writer.lock().expect("poisoned");
+        loop {
+            let Some(write) = self.inner.queue.lock().expect("poisoned").pop_front() else {
+                return;
+            };
+            let _ = write.done.send(self.apply(write.change));
+        }
+    }
+
+    fn apply(&self, change: Change) -> Result<()> {
+        let mut next = self.current();
+        change(&mut next)?;
+        let replaced = persist(&self.inner.dir, &next, self.inner.inject_dir_sync_failure());
+        if replaced.renamed {
+            *self.inner.positions.lock().expect("poisoned") = next;
+        }
+        replaced.result
     }
 }
 
@@ -574,5 +615,67 @@ mod tests {
         remove(&mut positions, &key("missing"), false).unwrap();
         remove(&mut positions, &key("a"), true).unwrap();
         assert!(positions.is_empty());
+    }
+
+    /// A save whose caller stopped waiting (a timeout) is still applied in
+    /// call order, so a later delete wins and the checkpoint stays gone.
+    #[cfg(unix)]
+    #[tokio::test]
+    // Holding the writer across awaits is the point: it parks the save's
+    // blocking task while the caller drops it and queues a delete.
+    #[allow(clippy::await_holding_lock)]
+    async fn a_dropped_save_never_lands_after_a_later_delete() {
+        let tmp = TempDir::new();
+        let store = FileCheckpointStore::open(&tmp.0).unwrap();
+        store.save(&key("a"), 5).await.unwrap();
+
+        // Hold the writer so the save is queued but cannot run yet.
+        let writer = store.inner.writer.lock().unwrap();
+        let a = key("a");
+        let mut save = Box::pin(store.save(&a, 9));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut save)
+                .await
+                .is_err(),
+            "the save waits for the writer"
+        );
+        drop(save);
+        let delete = tokio::spawn({
+            let store = store.clone();
+            async move { store.delete(&key("a")).await }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        drop(writer);
+        delete.await.unwrap().unwrap();
+
+        assert_eq!(store.load(&key("a")).await.unwrap(), None);
+        drop(store);
+        let store = FileCheckpointStore::open(&tmp.0).unwrap();
+        assert_eq!(store.load(&key("a")).await.unwrap(), None);
+    }
+
+    /// A queued write whose own task never ran (its caller and task are
+    /// gone) is applied, in order, by the next write's task.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_orphaned_queued_write_is_applied_before_later_ones() {
+        let tmp = TempDir::new();
+        let store = FileCheckpointStore::open(&tmp.0).unwrap();
+        store.save(&key("a"), 5).await.unwrap();
+        let (done, _) = tokio::sync::oneshot::channel();
+        store.inner.queue.lock().unwrap().push_back(QueuedWrite {
+            change: Box::new(|positions: &mut Positions| {
+                positions.insert(key("a"), 9);
+                Ok(())
+            }),
+            done,
+        });
+
+        // The delete comes after the orphaned save: it wins.
+        store.delete(&key("a")).await.unwrap();
+        assert_eq!(store.load(&key("a")).await.unwrap(), None);
+        drop(store);
+        let store = FileCheckpointStore::open(&tmp.0).unwrap();
+        assert_eq!(store.load(&key("a")).await.unwrap(), None);
     }
 }
