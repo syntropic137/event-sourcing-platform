@@ -31,7 +31,7 @@ side effects, zero external calls, zero network traffic.
 
 A ProcessManager reacts to events with side effects. It uses the
 Processor To-Do List pattern (Martin Dilger, *Understanding Event
-Sourcing*, Ch. 37) which splits the work into two parts with a hard
+Sourcing*, Ch. 37; Ch. 35, pp. 495-509, in print) which splits the work into two parts with a hard
 boundary between them.
 
 **Base class:** `ProcessManager`
@@ -330,7 +330,7 @@ See `event-sourcing/rust/examples/supervised_projection.rs` and the
 
 ## References
 
-- Martin Dilger, *Understanding Event Sourcing*, Ch. 37: Processor To-Do List
+- Martin Dilger, *Understanding Event Sourcing*, Ch. 37 (Ch. 35, pp. 495-509, in print): Processor To-Do List
 - Event Modeling: https://eventmodeling.org/posts/what-is-event-modeling/
 - To-Do List + Passage of Time: https://event-driven.io/en/to_do_list_and_passage_of_time_patterns_combined/
 - ADR-025: ProcessManager Pattern (this repo)

@@ -311,6 +311,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 This platform draws inspiration from and builds upon the work of leading event sourcing practitioners:
 
 - **[Understanding Event Sourcing](https://leanpub.com/eventsourcing)** by Martin Dilger - A comprehensive book combining Event Modeling and Event Sourcing to plan and build software systems of any size and complexity. [Sample code on GitHub](https://github.com/dilgerma/eventsourcing-book).
+- Concept-to-page breadcrumbs for Dilger, Vernon and Evans: [docs/FOUNDATIONS.md](docs/FOUNDATIONS.md). Dilger's book is the primary foundation.
 - **Event Modeling** - [The original Event Modeling article](https://eventmodeling.org/) provides foundational concepts for our approach.
 
 ---

@@ -572,13 +572,25 @@ where
     }
 }
 
-/// Builder for creating event context with tracing information
-#[derive(Debug, Default)]
+/// Per-command metadata stamped onto every event the command records.
+///
+/// Pass it to [`AggregateInstance::add_events_with`] or
+/// [`AggregateInstance::execute_with`]: who acted (`actor_id`), which message
+/// caused the events (`causation_id`), which conversation they belong to
+/// (`correlation_id`), free-form headers, and, for callers that keep the
+/// clock outside the domain, the event time. Unset fields leave the defaults
+/// in place (the event's own correlation/causation, the current time).
+///
+/// [`AggregateInstance::add_events_with`]: crate::aggregate::AggregateInstance::add_events_with
+/// [`AggregateInstance::execute_with`]: crate::aggregate::AggregateInstance::execute_with
+#[derive(Debug, Clone, Default)]
 pub struct EventContext {
     correlation_id: Option<String>,
     causation_id: Option<String>,
     actor_id: Option<String>,
     tenant_id: Option<String>,
+    timestamp: Option<DateTime<Utc>>,
+    command_id: Option<Uuid>,
     metadata: HashMap<String, String>,
 }
 
@@ -618,8 +630,66 @@ impl EventContext {
         self
     }
 
+    /// Stamp events with this time instead of the current time. For callers
+    /// whose clock lives outside the domain (deterministic replays, tests,
+    /// a command that carries its own time). Stored in milliseconds, so
+    /// sub-millisecond precision does not survive a round trip. A time
+    /// before the Unix epoch cannot be stored; recording events under it
+    /// fails with [`Error::InvalidCommand`].
+    pub fn with_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
+        self.timestamp = Some(timestamp);
+        self
+    }
+
+    /// The event time this context stamps, if any.
+    pub fn timestamp(&self) -> Option<DateTime<Utc>> {
+        self.timestamp
+    }
+
+    /// Reject a context the wire cannot carry faithfully: the stored event
+    /// time is unsigned milliseconds since the Unix epoch, so a pre-epoch
+    /// timestamp would be silently clamped to 1970.
+    pub(crate) fn validate(&self) -> Result<()> {
+        match self.timestamp {
+            Some(ts) if ts.timestamp_millis() < 0 => Err(Error::invalid_command(format!(
+                "event timestamp {ts} is before the Unix epoch and cannot be stored"
+            ))),
+            _ => Ok(()),
+        }
+    }
+
+    /// Identify the command that records the events. Event ids become
+    /// deterministic, `Uuid::new_v5(command_id, index)` for the event's index
+    /// in the recorded batch, so re-deciding the same command after a lost
+    /// acknowledgment or a restart yields the same ids. Pair it with
+    /// [`EventStoreRepository::save_with_key`] for command-level
+    /// exactly-once. The index restarts at 0 on every recording call, so
+    /// record all of a command's events in one call; recording twice under
+    /// the same command id repeats event ids.
+    ///
+    /// [`EventStoreRepository::save_with_key`]: crate::repository::EventStoreRepository::save_with_key
+    pub fn with_command_id(mut self, command_id: Uuid) -> Self {
+        self.command_id = Some(command_id);
+        self
+    }
+
+    /// The command id set by [`Self::with_command_id`].
+    pub fn command_id(&self) -> Option<Uuid> {
+        self.command_id
+    }
+
+    /// The event id for the `index`th event recorded under this context:
+    /// deterministic with a command id, `None` otherwise.
+    pub fn event_id_for(&self, index: usize) -> Option<Uuid> {
+        self.command_id
+            .map(|command| Uuid::new_v5(&command, &(index as u64).to_be_bytes()))
+    }
+
     /// Apply this context to event metadata
     pub fn apply_to_metadata(&self, metadata: &mut EventMetadata) {
+        if let Some(timestamp) = self.timestamp {
+            metadata.timestamp = timestamp;
+        }
         if let Some(ref correlation_id) = self.correlation_id {
             metadata.correlation_id = Some(correlation_id.clone());
         }
@@ -861,5 +931,53 @@ mod tests {
         assert_eq!(metadata.correlation_id, Some("corr-123".to_string()));
         assert_eq!(metadata.actor_id, Some("user-456".to_string()));
         assert_eq!(metadata.metadata.get("custom"), Some(&"value".to_string()));
+    }
+
+    /// An event that carries its own correlation and causation, to check
+    /// how a context composes with them.
+    #[derive(Debug, Clone)]
+    struct Traced;
+
+    impl DomainEvent for Traced {
+        fn event_type(&self) -> &'static str {
+            "Traced"
+        }
+        fn to_payload(&self) -> Result<Vec<u8>> {
+            Ok(b"{}".to_vec())
+        }
+        fn from_payload(_event: &SerializedEvent<'_>) -> Result<Self> {
+            Ok(Traced)
+        }
+        fn correlation_id(&self) -> Option<&str> {
+            Some("event-corr")
+        }
+        fn causation_id(&self) -> Option<&str> {
+            Some("event-cause")
+        }
+    }
+
+    fn traced_with(context: &EventContext) -> EventMetadata {
+        let mut envelope = EventEnvelope::new(Traced, "t-1".into(), "T".into(), 1);
+        context.apply_to_metadata(&mut envelope.metadata);
+        envelope.metadata
+    }
+
+    #[test]
+    fn context_overrides_event_ids_and_unset_fields_keep_them() {
+        let empty = traced_with(&EventContext::new());
+        assert_eq!(empty.correlation_id.as_deref(), Some("event-corr"));
+        assert_eq!(empty.causation_id.as_deref(), Some("event-cause"));
+
+        let partial = traced_with(&EventContext::new().with_causation_id("cmd-1".into()));
+        assert_eq!(partial.correlation_id.as_deref(), Some("event-corr"));
+        assert_eq!(partial.causation_id.as_deref(), Some("cmd-1"));
+
+        let full = traced_with(
+            &EventContext::new()
+                .with_correlation_id("conv-9".into())
+                .with_causation_id("cmd-1".into()),
+        );
+        assert_eq!(full.correlation_id.as_deref(), Some("conv-9"));
+        assert_eq!(full.causation_id.as_deref(), Some("cmd-1"));
     }
 }
