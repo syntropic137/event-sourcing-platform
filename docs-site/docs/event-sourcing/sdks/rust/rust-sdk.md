@@ -193,7 +193,7 @@ The process-manager support above implements Dilger's Processor-TODO-List patter
 | Projection runner | Keeps one view current from its checkpoint; never issues a command | `ProjectionRunner` |
 | Background runner | Platform hosting plumbing, not a book term: runs a context's projection runners and processors and owns no list or command, keeping Dilger's ownership rule (pp. 506-509) | Proposed: [#436](https://github.com/syntropic137/event-sourcing-platform/issues/436) |
 
-A service follows the log with `run` / `run_supervised`. A batch job (an import, a backfill) that must finish and report will use `run_until_idle`, pending [#440](https://github.com/syntropic137/event-sourcing-platform/pull/440): catch up, one processor pass, repeat until a pass takes nothing and no new event arrived, then return `IdleExit::Idle`.
+A service follows the log with `run` / `run_supervised`. A batch job (an import, a backfill) that must finish and report uses `run_until_idle` ([#440](https://github.com/syntropic137/event-sourcing-platform/pull/440)): catch up, one processor pass, repeat until a pass takes nothing and no new event arrived, then return `IdleExit::Idle`.
 
 ### Supervision
 
