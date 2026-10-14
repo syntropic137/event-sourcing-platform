@@ -204,6 +204,7 @@ impl<A: Aggregate> AggregateInstance<A> {
     where
         A: Clone,
     {
+        context.validate()?;
         let mut candidate = self.aggregate.clone();
         candidate.apply_events(&events)?;
         self.aggregate = candidate;
@@ -434,5 +435,28 @@ mod tests {
         assert_eq!(m.causation_id, None);
         assert!(m.metadata.is_empty());
         assert_eq!(instance.aggregate.value, 3);
+    }
+
+    #[test]
+    fn pre_epoch_timestamp_is_rejected_and_changes_nothing() {
+        let before_epoch = chrono::DateTime::from_timestamp_millis(-1).unwrap();
+        let context = EventContext::new().with_timestamp(before_epoch);
+        let mut instance = AggregateInstance::new("test-1".into(), TestAggregate::default());
+        let err = instance
+            .add_events_with(vec![Updated { value: 3 }.into()], &context)
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidCommand { .. }), "{err:?}");
+        assert!(instance.uncommitted_events.is_empty());
+        assert_eq!(instance.aggregate.value, 0);
+        assert_eq!(instance.committed_version(), 0);
+
+        let epoch = chrono::DateTime::from_timestamp_millis(0).unwrap();
+        instance
+            .add_events_with(
+                vec![Updated { value: 3 }.into()],
+                &EventContext::new().with_timestamp(epoch),
+            )
+            .unwrap();
+        assert_eq!(instance.uncommitted_events[0].metadata.timestamp, epoch);
     }
 }

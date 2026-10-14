@@ -632,10 +632,29 @@ impl EventContext {
     /// Stamp events with this time instead of the current time. For callers
     /// whose clock lives outside the domain (deterministic replays, tests,
     /// a command that carries its own time). Stored in milliseconds, so
-    /// sub-millisecond precision does not survive a round trip.
+    /// sub-millisecond precision does not survive a round trip. A time
+    /// before the Unix epoch cannot be stored; recording events under it
+    /// fails with [`Error::InvalidCommand`].
     pub fn with_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
         self.timestamp = Some(timestamp);
         self
+    }
+
+    /// The event time this context stamps, if any.
+    pub fn timestamp(&self) -> Option<DateTime<Utc>> {
+        self.timestamp
+    }
+
+    /// Reject a context the wire cannot carry faithfully: the stored event
+    /// time is unsigned milliseconds since the Unix epoch, so a pre-epoch
+    /// timestamp would be silently clamped to 1970.
+    pub(crate) fn validate(&self) -> Result<()> {
+        match self.timestamp {
+            Some(ts) if ts.timestamp_millis() < 0 => Err(Error::invalid_command(format!(
+                "event timestamp {ts} is before the Unix epoch and cannot be stored"
+            ))),
+            _ => Ok(()),
+        }
     }
 
     /// Apply this context to event metadata
@@ -884,5 +903,53 @@ mod tests {
         assert_eq!(metadata.correlation_id, Some("corr-123".to_string()));
         assert_eq!(metadata.actor_id, Some("user-456".to_string()));
         assert_eq!(metadata.metadata.get("custom"), Some(&"value".to_string()));
+    }
+
+    /// An event that carries its own correlation and causation, to check
+    /// how a context composes with them.
+    #[derive(Debug, Clone)]
+    struct Traced;
+
+    impl DomainEvent for Traced {
+        fn event_type(&self) -> &'static str {
+            "Traced"
+        }
+        fn to_payload(&self) -> Result<Vec<u8>> {
+            Ok(b"{}".to_vec())
+        }
+        fn from_payload(_event: &SerializedEvent<'_>) -> Result<Self> {
+            Ok(Traced)
+        }
+        fn correlation_id(&self) -> Option<&str> {
+            Some("event-corr")
+        }
+        fn causation_id(&self) -> Option<&str> {
+            Some("event-cause")
+        }
+    }
+
+    fn traced_with(context: &EventContext) -> EventMetadata {
+        let mut envelope = EventEnvelope::new(Traced, "t-1".into(), "T".into(), 1);
+        context.apply_to_metadata(&mut envelope.metadata);
+        envelope.metadata
+    }
+
+    #[test]
+    fn context_overrides_event_ids_and_unset_fields_keep_them() {
+        let empty = traced_with(&EventContext::new());
+        assert_eq!(empty.correlation_id.as_deref(), Some("event-corr"));
+        assert_eq!(empty.causation_id.as_deref(), Some("event-cause"));
+
+        let partial = traced_with(&EventContext::new().with_causation_id("cmd-1".into()));
+        assert_eq!(partial.correlation_id.as_deref(), Some("event-corr"));
+        assert_eq!(partial.causation_id.as_deref(), Some("cmd-1"));
+
+        let full = traced_with(
+            &EventContext::new()
+                .with_correlation_id("conv-9".into())
+                .with_causation_id("cmd-1".into()),
+        );
+        assert_eq!(full.correlation_id.as_deref(), Some("conv-9"));
+        assert_eq!(full.causation_id.as_deref(), Some("cmd-1"));
     }
 }

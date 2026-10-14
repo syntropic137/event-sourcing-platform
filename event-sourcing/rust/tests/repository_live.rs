@@ -791,5 +791,7 @@ async fn command_context_is_stored_on_every_event() {
         assert_eq!(recorded.actor_id.as_deref(), Some("actor-7"));
         assert_eq!(recorded.causation_id.as_deref(), Some("cmd-1"));
         assert_eq!(recorded.correlation_id.as_deref(), Some("conv-9"));
+        assert_eq!(recorded.headers.get("x-key").map(String::as_str), Some("v"));
+        assert_eq!(recorded.timestamp_unix_ms, 1_700_000_000_123);
     }
 }
