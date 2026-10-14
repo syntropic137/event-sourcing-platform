@@ -133,7 +133,7 @@ pub mod prelude {
     pub use crate::command::{Command, CommandHandler};
     pub use crate::error::{Error, Result};
     pub use crate::event::{
-        DomainEvent, EventEnvelope, EventMetadata, EventSchema, SerializedEvent,
+        DomainEvent, EventContext, EventEnvelope, EventMetadata, EventSchema, SerializedEvent,
     };
     pub use crate::projection::{
         BackoffPolicy, CheckpointKey, CheckpointStore, CheckpointedProjection, DispatchContext,
