@@ -268,6 +268,27 @@ async fn request(f: &Fixture, ids: &[&str]) {
     }
 }
 
+/// Global position of the last event of stream `id`. Positions are global
+/// across tenants (shared Postgres in CI), so tests compare against these,
+/// never against literals.
+async fn stream_head(f: &Fixture, id: &str) -> u64 {
+    f.client
+        .read_stream(proto::ReadStreamRequest {
+            tenant_id: f.tenant.clone(),
+            aggregate_id: id.into(),
+            from_aggregate_nonce: u64::MAX >> 1,
+            max_count: 1,
+            forward: false,
+        })
+        .await
+        .expect("stream head")
+        .events
+        .first()
+        .and_then(|e| e.meta.as_ref())
+        .map(|m| m.global_nonce)
+        .unwrap_or(0)
+}
+
 async fn head(f: &Fixture) -> u64 {
     f.client
         .read_all(proto::ReadAllRequest {
@@ -336,7 +357,7 @@ async fn drains_the_list_and_returns_idle_with_the_back_channel_folded_in() {
     assert_eq!(
         exit,
         IdleExit::Idle {
-            position: 6,
+            position: head(&f).await,
             processed: 3,
             passes: 2
         }
@@ -394,7 +415,7 @@ async fn without_a_processor_it_is_a_catch_up() {
     assert_eq!(
         exit,
         IdleExit::Idle {
-            position: 2,
+            position: head(&f).await,
             processed: 0,
             passes: 0
         }
@@ -425,7 +446,7 @@ async fn a_failed_pass_returns_its_error_and_the_next_call_finishes_once() {
     assert_eq!(done_count(&f).await, 0, "nothing done before the failure");
     assert_eq!(
         runner.position(),
-        2,
+        head(&f).await,
         "the catch-up before the pass committed"
     );
 
@@ -463,7 +484,7 @@ async fn a_processor_that_never_clears_its_list_hits_the_pass_bound() {
     assert_eq!(
         exit,
         IdleExit::PassLimit {
-            position: 1,
+            position: head(&f).await,
             processed: 3
         }
     );
@@ -542,7 +563,7 @@ async fn an_event_appended_during_an_empty_pass_is_not_mistaken_for_idle() {
     assert_eq!(
         exit,
         IdleExit::Idle {
-            position: 2,
+            position: head(&f).await,
             processed: 1,
             passes: 3
         }
@@ -585,16 +606,17 @@ async fn a_feed_prefix_below_the_tenant_head_still_reaches_idle() {
         .await
         .unwrap();
 
-    assert!(
-        matches!(
-            exit,
-            IdleExit::Idle {
-                processed: 1,
-                passes: 2,
-                position: 3,
-            }
-        ),
-        "{exit:?}"
+    // The checkpoint is the feed's last event (w-a's Done), below the
+    // tenant head (x-2).
+    let feed_last = stream_head(&f, "w-a").await;
+    assert!(feed_last < head(&f).await);
+    assert_eq!(
+        exit,
+        IdleExit::Idle {
+            processed: 1,
+            passes: 2,
+            position: feed_last,
+        }
     );
     assert_eq!(done_count(&f).await, 1);
 }
@@ -627,7 +649,12 @@ async fn cancelling_a_held_pass_returns_after_the_grace() {
         .expect("returns after the grace")
         .unwrap();
 
-    assert_eq!(exit, IdleExit::Cancelled { position: 1 });
+    assert_eq!(
+        exit,
+        IdleExit::Cancelled {
+            position: head(&f).await
+        }
+    );
     assert_eq!(done_count(&f).await, 0);
 }
 
