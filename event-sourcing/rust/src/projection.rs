@@ -41,6 +41,8 @@
 //!   external store directly and the checkpoint is saved afterwards. A crash
 //!   between the two redelivers the event on restart, so the handler **must**
 //!   be idempotent (upsert keyed by event id or aggregate id + nonce).
+//!   For a durable local checkpoint without Postgres, wrap a
+//!   [`FileCheckpointStore`] (one locked directory, atomic rewrites).
 //! * **Errors propagate**: a failing handler, a failing commit, a failing or
 //!   ended subscription stream stops [`ProjectionRunner::run`] with an error.
 //!   The runner never skips an event it failed to process.
@@ -89,11 +91,13 @@ use crate::upcast::Upcasters;
 use crate::wire;
 
 mod drain;
+mod file;
 #[cfg(feature = "postgres")]
 mod postgres;
 mod supervisor;
 use drain::Drain;
 pub use drain::ProcessorPanicPolicy;
+pub use file::FileCheckpointStore;
 #[cfg(feature = "postgres")]
 pub use postgres::PostgresProjectionStore;
 pub use supervisor::{BackoffPolicy, RunnerHealth, RunnerState};
