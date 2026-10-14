@@ -310,6 +310,18 @@ pub trait CheckpointedProjection<S: ProjectionStore>: Send {
     /// Schema version. Bump to build a new read model from zero.
     fn version(&self) -> u32;
 
+    /// Whether this projection wants events of `aggregate_type`. Checked
+    /// before [`handles`](Self::handles) and before any upcasting, so an
+    /// event of another aggregate family sharing the tenant is never decoded
+    /// and cannot fail, even when its `event_type` collides with one this
+    /// projection handles. Unwanted events still advance the checkpoint.
+    /// Not part of the checkpoint identity: changing it means bumping
+    /// [`version`](Self::version). Defaults to all aggregate types.
+    fn handles_aggregate_type(&self, aggregate_type: &str) -> bool {
+        let _ = aggregate_type;
+        true
+    }
+
     /// Whether this projection wants `event_type`. Unwanted events still
     /// advance the checkpoint. Defaults to all events.
     fn handles(&self, event_type: &str) -> bool {
@@ -1129,14 +1141,19 @@ where
         };
         // Filter on the type after upcasting, known without running the
         // chain, so an ignored event is never upcast and cannot fail
-        // (ADR-027, #396). A cycle has no target: upcast it to fail.
-        let wanted = match self
-            .upcasters
-            .target(&event.event_type, event.event_version)
-        {
-            Some((ty, _)) => self.projection.handles(ty),
-            None => true,
-        };
+        // (ADR-027, #396). A cycle has no target: upcast it to fail. Another
+        // aggregate family is rejected first, by aggregate type, so a
+        // colliding event type from it is never upcast either.
+        let wanted = self
+            .projection
+            .handles_aggregate_type(&event.aggregate_type)
+            && match self
+                .upcasters
+                .target(&event.event_type, event.event_version)
+            {
+                Some((ty, _)) => self.projection.handles(ty),
+                None => true,
+            };
         let upcast = if wanted {
             Some(self.upcasters.upcast_recorded(event).map_err(failed)?)
         } else {
