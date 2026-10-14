@@ -260,7 +260,7 @@ impl<T> Future for CatchUnwind<'_, T> {
     }
 }
 
-fn panic_message(payload: &(dyn Any + Send)) -> String {
+pub(super) fn panic_message(payload: &(dyn Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {
