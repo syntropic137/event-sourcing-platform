@@ -11,13 +11,15 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use tokio::sync::Notify;
+
 use async_trait::async_trait;
 use common::{connect, spawn_server, take, unique_tenant};
 use event_sourcing_rust::client::{proto, EventStoreClient, EventStorePort};
 use event_sourcing_rust::error::{Error, Result};
 use event_sourcing_rust::projection::{
     CheckpointKey, CheckpointedProjection, DispatchContext, IdleExit, InMemoryProjectionStore,
-    InMemoryTx, LiveProcessor, ProjectionRunner, RecordedEvent,
+    InMemoryTx, LiveProcessor, ProjectionRunner, RecordedEvent, RunnerState,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -108,6 +110,21 @@ struct Behaviour {
     runaway: bool,
     /// Panic in the pass.
     panic: bool,
+    /// Another writer: during the first pass, append a request for this id
+    /// (after the pass read its list), as if concurrently.
+    inject_once: Mutex<Option<String>>,
+    /// Signal `started`, then hold the pass.
+    hold: Option<Hold>,
+}
+
+enum Hold {
+    /// Never finish (only cancellation ends it).
+    Forever(Arc<Notify>),
+    /// Wait for `release`, then fail.
+    ThenFail {
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+    },
 }
 
 /// Completes each pending entry by appending `Done` after the request.
@@ -134,6 +151,14 @@ impl Completer {
             seen: Mutex::new(Vec::new()),
         })
     }
+
+    /// For a runner whose feed is narrowed: the list lives under that key.
+    fn for_feed(f: &Fixture, store: &Arc<TodoStore>, feed: &str) -> Arc<Self> {
+        let mut completer = Self::new(f, store, Behaviour::default());
+        Arc::get_mut(&mut completer).expect("unshared").key =
+            CheckpointKey::new(&f.tenant, "work-todo", 1).with_feed(feed);
+        completer
+    }
 }
 
 #[async_trait]
@@ -146,8 +171,24 @@ impl LiveProcessor for Completer {
         if take(&self.behaviour.fail_passes) {
             return Err(Error::from(tonic::Status::unavailable("downstream down")));
         }
+        match &self.behaviour.hold {
+            Some(Hold::Forever(started)) => {
+                started.notify_one();
+                std::future::pending::<()>().await;
+            }
+            Some(Hold::ThenFail { started, release }) => {
+                started.notify_one();
+                release.notified().await;
+                return Err(Error::from(tonic::Status::internal("failed during grace")));
+            }
+            None => {}
+        }
         let pending = self.store.state(&self.key).pending;
         self.seen.lock().unwrap().push(pending.len());
+        let injected = self.behaviour.inject_once.lock().unwrap().take();
+        if let Some(id) = injected {
+            append(&self.client, &self.tenant, &id, 1, REQUESTED).await?;
+        }
         if self.behaviour.runaway {
             return Ok(pending.len().max(1));
         }
@@ -438,4 +479,146 @@ async fn a_cancelled_call_returns_cancelled_and_commits_nothing() {
     assert_eq!(exit, IdleExit::Cancelled { position: 0 });
     assert_eq!(completer.passes.load(Ordering::SeqCst), 0);
     assert_eq!(done_count(&f).await, 0);
+}
+
+#[tokio::test]
+async fn an_event_appended_during_an_empty_pass_is_not_mistaken_for_idle() {
+    let f = fixture().await;
+    let store = Arc::new(TodoStore::new());
+    let completer = Completer::new(
+        &f,
+        &store,
+        Behaviour {
+            inject_once: Mutex::new(Some("late".into())),
+            ..Default::default()
+        },
+    );
+    let mut runner = runner(&f, &store, Some(completer.clone()));
+
+    let exit = runner
+        .run_until_idle(CancellationToken::new())
+        .await
+        .unwrap();
+
+    // Pass 1 saw an empty list and took nothing, but a request arrived
+    // meanwhile: the next catch-up sees it, pass 2 takes it, pass 3 is empty.
+    assert_eq!(
+        exit,
+        IdleExit::Idle {
+            position: 2,
+            processed: 1,
+            passes: 3
+        }
+    );
+    assert_eq!(*completer.seen.lock().unwrap(), vec![0, 1, 0]);
+    assert_eq!(done_count(&f).await, 1);
+    assert_eq!(
+        runner.health().borrow().state,
+        RunnerState::Stopped,
+        "idle is a clean stop"
+    );
+}
+
+#[tokio::test]
+async fn a_feed_prefix_below_the_tenant_head_still_reaches_idle() {
+    let f = fixture().await;
+    request(&f, &["w-a"]).await;
+    // Another family after it: outside the feed, so the checkpoint stays
+    // below the tenant head.
+    append(&f.client, &f.tenant, "x-1", 1, "Other")
+        .await
+        .unwrap();
+    let store = Arc::new(TodoStore::new());
+    let completer = Completer::for_feed(&f, &store, "w-");
+    let mut runner = ProjectionRunner::new(f.port.clone(), store.clone(), TodoList, &f.tenant)
+        .with_feed_prefix("w-")
+        .with_live_processor(completer)
+        .with_idle_max_passes(5);
+
+    let exit = runner
+        .run_until_idle(CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(
+            exit,
+            IdleExit::Idle {
+                processed: 1,
+                passes: 2,
+                ..
+            }
+        ),
+        "{exit:?}"
+    );
+    assert_eq!(done_count(&f).await, 1);
+}
+
+#[tokio::test]
+async fn cancelling_a_held_pass_returns_after_the_grace() {
+    let f = fixture().await;
+    request(&f, &["a"]).await;
+    let store = Arc::new(TodoStore::new());
+    let started = Arc::new(Notify::new());
+    let held = Completer::new(
+        &f,
+        &store,
+        Behaviour {
+            hold: Some(Hold::Forever(started.clone())),
+            ..Default::default()
+        },
+    );
+    let mut runner =
+        runner(&f, &store, Some(held)).with_processor_shutdown_grace(Duration::from_millis(50));
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        started.notified().await;
+        trigger.cancel();
+    });
+
+    let exit = tokio::time::timeout(Duration::from_secs(5), runner.run_until_idle(cancel))
+        .await
+        .expect("returns after the grace")
+        .unwrap();
+
+    assert_eq!(exit, IdleExit::Cancelled { position: 1 });
+    assert_eq!(done_count(&f).await, 0);
+}
+
+#[tokio::test]
+async fn a_pass_that_fails_within_the_grace_reports_its_error() {
+    let f = fixture().await;
+    request(&f, &["a"]).await;
+    let store = Arc::new(TodoStore::new());
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let held = Completer::new(
+        &f,
+        &store,
+        Behaviour {
+            hold: Some(Hold::ThenFail {
+                started: started.clone(),
+                release: release.clone(),
+            }),
+            ..Default::default()
+        },
+    );
+    let mut runner =
+        runner(&f, &store, Some(held)).with_processor_shutdown_grace(Duration::from_secs(5));
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        started.notified().await;
+        trigger.cancel();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        release.notify_one();
+    });
+
+    let err = tokio::time::timeout(Duration::from_secs(5), runner.run_until_idle(cancel))
+        .await
+        .expect("returns")
+        .unwrap_err();
+
+    assert!(err.to_string().contains("failed during grace"), "{err}");
 }

@@ -947,9 +947,11 @@ where
         let joined = tokio::select! {
             biased;
             _ = cancel.cancelled() => {
+                // The pass may finish within the grace: its error or panic is
+                // still reported; a clean finish is a cancellation.
                 match tokio::time::timeout(self.processor_shutdown_grace, &mut task).await {
-                    Ok(Err(join)) if join.is_panic() => Err(join),
-                    Ok(_) => return Ok(None),
+                    Ok(Ok(Ok(_))) => return Ok(None),
+                    Ok(joined) => joined,
                     Err(_) => {
                         task.abort();
                         return Ok(None);
