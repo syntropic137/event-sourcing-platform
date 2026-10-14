@@ -612,9 +612,9 @@ pub enum IdleExit {
 const DEFAULT_PAGE_SIZE: u32 = 500;
 /// Aborts the task when dropped, so a pass cannot outlive the call that
 /// started it.
-struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+struct AbortOnDrop(tokio::task::AbortHandle);
 
-impl<T> Drop for AbortOnDrop<T> {
+impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
     }
@@ -638,6 +638,9 @@ pub struct ProjectionRunner<P, S: ProjectionStore> {
     processor_retry: Duration,
     processor_shutdown_grace: Duration,
     idle_max_passes: u32,
+    /// The pass of a `run_until_idle` call that was dropped mid-pass:
+    /// aborted, and awaited before the next pass can start.
+    idle_pass_task: Option<tokio::task::JoinHandle<Result<usize>>>,
     upcasters: Upcasters,
     position: u64,
     progress: watch::Sender<RunnerProgress>,
@@ -680,6 +683,7 @@ where
             processor_retry: Duration::from_secs(1),
             processor_shutdown_grace: Duration::from_secs(10),
             idle_max_passes: DEFAULT_IDLE_MAX_PASSES,
+            idle_pass_task: None,
             upcasters: Upcasters::new(),
             position: 0,
             progress,
@@ -910,6 +914,7 @@ where
     }
 
     async fn run_until_idle_attempt(&mut self, cancel: &CancellationToken) -> Result<IdleExit> {
+        self.settle_dropped_pass().await;
         let cancelled = |position| Ok(IdleExit::Cancelled { position });
         if !self.check_capabilities(cancel).await? {
             return cancelled(self.position);
@@ -953,33 +958,42 @@ where
     ///
     /// The task never outlives the call: it is aborted if this future is
     /// dropped (a caller's timeout), and after the grace it is aborted and
-    /// awaited, so no pass of an earlier call overlaps the next one.
+    /// awaited. A dropped call's task may still be finishing its current
+    /// poll on another worker, so its handle stays on the runner and the
+    /// next `run_until_idle` or `run` awaits it first: no pass of an
+    /// earlier call overlaps a later one.
     async fn idle_pass(
-        &self,
+        &mut self,
         processor: Arc<dyn LiveProcessor>,
         cancel: &CancellationToken,
     ) -> Result<Option<usize>> {
-        let mut task = AbortOnDrop(tokio::spawn(
-            async move { processor.process_pending().await },
-        ));
+        let grace = self.processor_shutdown_grace;
+        let spawned = tokio::spawn(async move { processor.process_pending().await });
+        let _abort_on_drop = AbortOnDrop(spawned.abort_handle());
+        let task = self.idle_pass_task.insert(spawned);
         let joined = tokio::select! {
             biased;
             _ = cancel.cancelled() => {
                 // The pass may finish within the grace: its error or panic is
                 // still reported; a clean finish is a cancellation.
-                match tokio::time::timeout(self.processor_shutdown_grace, &mut task.0).await {
-                    Ok(Ok(Ok(_))) => return Ok(None),
+                match tokio::time::timeout(grace, &mut *task).await {
+                    Ok(Ok(Ok(_))) => {
+                        self.idle_pass_task = None;
+                        return Ok(None);
+                    }
                     Ok(joined) => joined,
                     Err(_) => {
-                        task.0.abort();
+                        task.abort();
                         // Resolves once the task has actually stopped.
-                        let _ = (&mut task.0).await;
+                        let _ = (&mut *task).await;
+                        self.idle_pass_task = None;
                         return Ok(None);
                     }
                 }
             }
-            joined = &mut task.0 => joined,
+            joined = &mut *task => joined,
         };
+        self.idle_pass_task = None;
         match joined {
             Ok(pass) => pass.map(Some),
             Err(join) => Err(Error::LiveProcessorPanicked {
@@ -1005,8 +1019,18 @@ where
         result
     }
 
+    /// Wait out the pass of a dropped `run_until_idle` call (already
+    /// aborted), so it cannot overlap the next processor pass.
+    async fn settle_dropped_pass(&mut self) {
+        if let Some(task) = self.idle_pass_task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+
     /// One attempt of [`run`](Self::run): capability check, catch-up, live.
     async fn run_attempt(&mut self, cancel: &CancellationToken) -> Result<RunExit> {
+        self.settle_dropped_pass().await;
         self.loaded_position = self.position;
         self.live_since = None;
         if !self.check_capabilities(cancel).await? {

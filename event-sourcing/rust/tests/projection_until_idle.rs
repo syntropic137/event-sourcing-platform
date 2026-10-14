@@ -120,6 +120,12 @@ struct Behaviour {
 enum Hold {
     /// Never finish (only cancellation ends it).
     Forever(Arc<Notify>),
+    /// Block the worker thread (a long synchronous stretch inside one
+    /// poll) after signalling `started`, then do the pass normally.
+    BlockThenComplete {
+        started: Arc<Notify>,
+        block: Duration,
+    },
     /// Wait for `release`, then do the pass normally.
     ThenComplete {
         started: Arc<Notify>,
@@ -140,6 +146,9 @@ struct Completer {
     key: CheckpointKey,
     behaviour: Behaviour,
     passes: AtomicUsize,
+    /// Passes running right now, and the most ever running at once.
+    active: AtomicUsize,
+    max_active: AtomicUsize,
     /// Pending entries each pass saw, in order.
     seen: Mutex<Vec<usize>>,
 }
@@ -153,6 +162,8 @@ impl Completer {
             key: CheckpointKey::new(&f.tenant, "work-todo", 1),
             behaviour,
             passes: AtomicUsize::new(0),
+            active: AtomicUsize::new(0),
+            max_active: AtomicUsize::new(0),
             seen: Mutex::new(Vec::new()),
         })
     }
@@ -170,6 +181,9 @@ impl Completer {
 impl LiveProcessor for Completer {
     async fn process_pending(&self) -> Result<usize> {
         self.passes.fetch_add(1, Ordering::SeqCst);
+        let running = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_active.fetch_max(running, Ordering::SeqCst);
+        let _running = Running(&self.active);
         if self.behaviour.panic {
             panic!("processor bug");
         }
@@ -180,6 +194,10 @@ impl LiveProcessor for Completer {
             Some(Hold::Forever(started)) => {
                 started.notify_one();
                 std::future::pending::<()>().await;
+            }
+            Some(Hold::BlockThenComplete { started, block }) => {
+                started.notify_one();
+                std::thread::sleep(*block);
             }
             Some(Hold::ThenComplete { started, release }) => {
                 started.notify_one();
@@ -212,6 +230,15 @@ impl LiveProcessor for Completer {
             append(&self.client, &self.tenant, &id, 1, REQUESTED).await?;
         }
         Ok(done)
+    }
+}
+
+/// Counts a pass as finished when its future completes or is dropped.
+struct Running<'a>(&'a AtomicUsize);
+
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -677,4 +704,49 @@ async fn dropping_the_call_stops_its_pass() {
         held.seen.lock().unwrap().is_empty(),
         "the pass never resumed"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_retry_after_a_dropped_call_never_overlaps_its_pass() {
+    // The dropped call's pass is mid-poll on another worker when it is
+    // aborted, so it runs on until its next `.await`. The retry must wait
+    // for it before running a pass of its own.
+    let f = fixture().await;
+    request(&f, &["a"]).await;
+    let store = Arc::new(TodoStore::new());
+    let started = Arc::new(Notify::new());
+    let held = Completer::new(
+        &f,
+        &store,
+        Behaviour {
+            hold: Some(Hold::BlockThenComplete {
+                started: started.clone(),
+                block: Duration::from_millis(300),
+            }),
+            ..Default::default()
+        },
+    );
+    let mut runner = runner(&f, &store, Some(held.clone() as Arc<dyn LiveProcessor>));
+
+    let mut call = Box::pin(runner.run_until_idle(CancellationToken::new()));
+    tokio::select! {
+        _ = &mut call => panic!("the pass is blocked"),
+        _ = started.notified() => {}
+    }
+    drop(call);
+
+    let exit = tokio::time::timeout(
+        Duration::from_secs(10),
+        runner.run_until_idle(CancellationToken::new()),
+    )
+    .await
+    .expect("retry finishes")
+    .unwrap();
+    assert!(matches!(exit, IdleExit::Idle { .. }), "{exit:?}");
+    assert_eq!(
+        held.max_active.load(Ordering::SeqCst),
+        1,
+        "passes overlapped"
+    );
+    assert_eq!(done_count(&f).await, 1);
 }
