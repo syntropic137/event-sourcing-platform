@@ -10,6 +10,8 @@ The SDK is alpha: breaking changes may land in minor versions and are listed und
 
 ### Added
 
+- `ProjectionRunner::run_until_idle(cancel)`: batch mode for a to-do list automation (#435). Catches up, runs one `LiveProcessor` pass, and repeats until a pass takes nothing and the following catch-up finds no new event; returns `IdleExit::Idle { position, processed, passes }`, `IdleExit::Cancelled` or `IdleExit::PassLimit` (bound with `with_idle_max_passes`, default 1000). Passes never run during replay; the view is caught up before every pass, so events the processor's commands produced are folded back before the next pass. A failed pass returns its error; a panicking pass returns `Error::LiveProcessorPanicked`. Additive: `run`, `catch_up` and `run_supervised` are unchanged.
+
 - `client::EventStorePort` trait and `EventStoreClient::connect`, layered on the low-level `eventstore-sdk-rs` client (#352).
 - `EventStoreRepository`: `load` (paged replay), `save` (expected stream revision, typed `Error::ConcurrencyConflict`), `exists` (#352).
 - Idempotent retry of unknown-outcome saves (`RetryPolicy`, stable event ids and idempotency key, reconciliation by event id and payload) (#352).
