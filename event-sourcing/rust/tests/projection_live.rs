@@ -491,6 +491,51 @@ async fn other_aggregate_types_are_skipped_before_decoding() {
 }
 
 #[tokio::test]
+async fn other_aggregate_types_are_never_upcast_and_still_checkpointed() {
+    // #428: the foreign family's types have upcasters that would fail (one
+    // errors, one is a cycle). Rejected by aggregate type, neither runs, and
+    // the checkpoint advances past a foreign event that comes last.
+    let f = fixture().await;
+    append(&f.client, &f.tenant, "a", 1, "Deposited", 10).await;
+    append_foreign(&f.client, &f.tenant, "l1", "Credited", b"{}".to_vec()).await;
+    let last = append_foreign(&f.client, &f.tenant, "l2", "Ping", b"{}".to_vec()).await;
+
+    let upcasters = Upcasters::new()
+        .rename("Credited", 1, "Deposited", 1, |_| {
+            Err(Error::domain("foreign event must not be upcast"))
+        })
+        .rename("Ping", 1, "Pong", 1, Ok)
+        .rename("Pong", 1, "Ping", 1, Ok);
+    let store = Arc::new(MemStore::new());
+    let mut runner = ProjectionRunner::new(
+        f.port.clone(),
+        store.clone(),
+        AccountsOnly(BalanceProjection::new(&Probe::default())),
+        &f.tenant,
+    )
+    .with_upcasters(upcasters.clone());
+    assert_eq!(runner.catch_up().await.unwrap(), last);
+    assert_eq!(
+        store.load_checkpoint(runner.key()).await.unwrap(),
+        Some(last)
+    );
+    assert_eq!(store.state(runner.key()).by_account["a"], 10);
+
+    // Without the filter the same upcasters stop the runner.
+    let mut unfiltered = ProjectionRunner::new(
+        f.port.clone(),
+        Arc::new(MemStore::new()),
+        BalanceProjection::new(&Probe::default()),
+        &f.tenant,
+    )
+    .with_upcasters(upcasters);
+    unfiltered
+        .catch_up()
+        .await
+        .expect_err("foreign upcaster runs");
+}
+
+#[tokio::test]
 async fn upcast_cycle_on_an_unhandled_type_still_stops_the_runner() {
     // A cycle has no target, so the chain runs and fails (parity with
     // Python `Upcasters.target()` returning None).
