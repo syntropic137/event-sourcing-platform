@@ -73,16 +73,16 @@ fn next_cursor(
     Ok(Some(next))
 }
 
-/// Where a finished read leaves its cursor. The server's cursor after the
-/// final non-empty page is one past its last event (forward: where the next
-/// append lands), so keep it when it moved the right way. An empty page keeps
-/// the cursor where it was.
-fn final_cursor(forward: bool, from: u64, page_len: usize, next: u64) -> u64 {
-    let advanced = if forward { next > from } else { next < from };
-    if page_len > 0 && advanced {
-        next
+/// Where a finished read leaves its cursor: the server's cursor, unless it
+/// moved against the read's direction. After the final non-empty page that
+/// is one past its last event (forward: where the next append lands). An
+/// empty page carries the server's normalized position: forward its start
+/// (a read from 0 starts at 1), backward 0, before every event.
+fn final_cursor(forward: bool, from: u64, next: u64) -> u64 {
+    if forward {
+        next.max(from)
     } else {
-        from
+        next.min(from)
     }
 }
 
@@ -131,7 +131,6 @@ impl StreamPages {
                 self.request.from_aggregate_nonce = final_cursor(
                     self.request.forward,
                     self.request.from_aggregate_nonce,
-                    page.events.len(),
                     page.next_from_aggregate_nonce,
                 );
             }
@@ -210,7 +209,6 @@ impl AllPages {
                 self.request.from_global_nonce = final_cursor(
                     self.request.forward,
                     self.request.from_global_nonce,
-                    page.events.len(),
                     page.next_from_global_nonce,
                 );
             }
@@ -318,11 +316,16 @@ mod tests {
 
     #[test]
     fn a_finished_read_keeps_the_server_cursor_only_when_it_moved() {
-        assert_eq!(final_cursor(true, 1, 3, 4), 4);
-        assert_eq!(final_cursor(true, 4, 0, 4), 4);
-        assert_eq!(final_cursor(true, 4, 2, 4), 4);
-        assert_eq!(final_cursor(false, 10, 2, 8), 8);
-        assert_eq!(final_cursor(false, 10, 2, 11), 10);
+        assert_eq!(final_cursor(true, 1, 4), 4);
+        assert_eq!(final_cursor(true, 4, 4), 4);
+        // Empty forward page from 0: the server's normalized start.
+        assert_eq!(final_cursor(true, 0, 1), 1);
+        // A forward cursor that moved backward is ignored.
+        assert_eq!(final_cursor(true, 4, 2), 4);
+        assert_eq!(final_cursor(false, 10, 8), 8);
+        // Empty backward page: 0, before every event.
+        assert_eq!(final_cursor(false, 10, 0), 0);
+        assert_eq!(final_cursor(false, 10, 11), 10);
     }
 
     #[test]

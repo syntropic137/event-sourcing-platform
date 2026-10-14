@@ -206,6 +206,15 @@ async fn stream_pages_read_every_event_including_the_final_page() {
         .expect("read missing");
     assert!(none.is_empty());
 
+    // An empty page leaves the server's normalized cursor: forward from 0
+    // starts at 1, backward ends at 0.
+    let mut empty = client.stream_pages(stream_request("missing", 2, true, 0));
+    assert!(empty.next_page().await.expect("empty").is_none());
+    assert_eq!(empty.cursor(), 1);
+    let mut empty = client.stream_pages(stream_request("missing", 2, false, u64::MAX));
+    assert!(empty.next_page().await.expect("empty").is_none());
+    assert_eq!(empty.cursor(), 0);
+
     drop(client);
     let _ = shutdown.send(());
     let _ = handle.await;
