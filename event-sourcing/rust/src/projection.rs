@@ -614,8 +614,9 @@ pub enum IdleExit {
 }
 
 const DEFAULT_PAGE_SIZE: u32 = 500;
-/// Aborts the task when dropped, so a pass cannot outlive the call that
-/// started it.
+/// Requests cancellation of the task when dropped. Cancellation is
+/// cooperative: the task stops at its next `.await`, so code it is running
+/// synchronously finishes first.
 struct AbortOnDrop(tokio::task::AbortHandle);
 
 impl Drop for AbortOnDrop {
@@ -903,9 +904,12 @@ where
     /// returns [`Error::LiveProcessorPanicked`] whatever the
     /// [`ProcessorPanicPolicy`]. On cancellation an in-flight pass gets the
     /// [`with_processor_shutdown_grace`](Self::with_processor_shutdown_grace)
-    /// before it is cancelled; dropping the call (e.g. a caller's timeout)
-    /// cancels an in-flight pass at its next `.await`, with no grace, and no
-    /// pass ever runs on past the call. The checkpoint, capability guard, upcasting
+    /// before it is cancelled. Dropping the call (e.g. a caller's timeout)
+    /// cancels an in-flight pass with no grace. Cancellation is cooperative:
+    /// the pass stops at its next `.await`, so it can run on briefly after
+    /// the call is gone; the next `run_until_idle` or `run` on this runner
+    /// waits for it to finish before starting a pass of its own. The
+    /// checkpoint, capability guard, upcasting
     /// and filters are those of [`catch_up`](Self::catch_up). Does not
     /// subscribe.
     pub async fn run_until_idle(&mut self, cancel: CancellationToken) -> Result<IdleExit> {
@@ -960,12 +964,12 @@ where
     /// One processor pass on its own task, so a panic is reported rather
     /// than unwinding through the caller. `None` if cancelled.
     ///
-    /// The task never outlives the call: it is aborted if this future is
-    /// dropped (a caller's timeout), and after the grace it is aborted and
-    /// awaited. A dropped call's task may still be finishing its current
-    /// poll on another worker, so its handle stays on the runner and the
-    /// next `run_until_idle` or `run` awaits it first: no pass of an
-    /// earlier call overlaps a later one.
+    /// The task is aborted if this future is dropped (a caller's timeout),
+    /// and after the grace it is aborted and awaited. Abort is cooperative:
+    /// a dropped call's task may still be finishing its current poll on
+    /// another worker. Its handle stays on the runner until the task has
+    /// stopped, and the next `run_until_idle` or `run` awaits it first, so
+    /// no pass of an earlier call overlaps a later one.
     async fn idle_pass(
         &mut self,
         processor: Arc<dyn LiveProcessor>,
@@ -1023,12 +1027,15 @@ where
         result
     }
 
-    /// Wait out the pass of a dropped `run_until_idle` call (already
-    /// aborted), so it cannot overlap the next processor pass.
+    /// Wait out the pass of a dropped `run_until_idle` call, so it cannot
+    /// overlap the next processor pass. The handle is cleared only once the
+    /// task has stopped: if this wait is itself dropped, the next call
+    /// waits again instead of finding no handle.
     async fn settle_dropped_pass(&mut self) {
-        if let Some(task) = self.idle_pass_task.take() {
+        if let Some(task) = self.idle_pass_task.as_mut() {
             task.abort();
             let _ = task.await;
+            self.idle_pass_task = None;
         }
     }
 

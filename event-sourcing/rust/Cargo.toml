@@ -2,6 +2,7 @@
 name = "event-sourcing-rust"
 version = "0.21.0"
 edition = "2021"
+rust-version = "1.89"
 authors = ["Event Sourcing Platform Team"]
 description = "Rust SDK for Event Sourcing patterns and abstractions"
 license = "MIT"
