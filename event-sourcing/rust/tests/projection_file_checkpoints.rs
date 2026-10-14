@@ -46,7 +46,8 @@ impl CheckpointedProjection<Store> for Seen {
     }
 }
 
-async fn append(client: &EventStoreClient, tenant: &str, id: &str, nonce: u64) {
+/// Append one event; returns its global position.
+async fn append(client: &EventStoreClient, tenant: &str, id: &str, nonce: u64) -> u64 {
     client
         .append(proto::AppendRequest {
             tenant_id: tenant.into(),
@@ -70,7 +71,8 @@ async fn append(client: &EventStoreClient, tenant: &str, id: &str, nonce: u64) {
             }],
         })
         .await
-        .expect("append");
+        .expect("append")
+        .last_global_nonce
 }
 
 /// A temporary directory removed on drop, even when an assertion fails.
@@ -111,26 +113,31 @@ async fn a_restarted_runner_resumes_from_the_file_checkpoint() {
     let tenant = unique_tenant();
     let tmp = temp_dir();
     let dir = tmp.0.clone();
+    // Global positions are shared across tenants on the CI Postgres
+    // backend: compare against what the store assigned, never literals.
+    let mut first_positions = Vec::new();
     for nonce in 1..=3 {
-        append(&client, &tenant, "a", nonce).await;
+        first_positions.push(append(&client, &tenant, "a", nonce).await);
     }
 
     let first_seen = Arc::new(Mutex::new(Vec::new()));
     {
         let mut first = runner(&port, &dir, &tenant, &first_seen);
-        assert_eq!(first.catch_up().await.unwrap(), 3);
+        assert_eq!(first.catch_up().await.unwrap(), first_positions[2]);
     } // runner and store dropped: the "process" exits, releasing the lock
-    assert_eq!(*first_seen.lock().unwrap(), vec![1, 2, 3]);
+    assert_eq!(*first_seen.lock().unwrap(), first_positions);
 
-    append(&client, &tenant, "a", 4).await;
-    append(&client, &tenant, "b", 1).await;
+    let later = vec![
+        append(&client, &tenant, "a", 4).await,
+        append(&client, &tenant, "b", 1).await,
+    ];
 
     let second_seen = Arc::new(Mutex::new(Vec::new()));
     let mut second = runner(&port, &dir, &tenant, &second_seen);
-    assert_eq!(second.catch_up().await.unwrap(), 5);
+    assert_eq!(second.catch_up().await.unwrap(), later[1]);
     assert_eq!(
         *second_seen.lock().unwrap(),
-        vec![4, 5],
+        later,
         "only events after the persisted checkpoint are redelivered"
     );
 
@@ -149,7 +156,7 @@ async fn a_restarted_runner_resumes_from_the_file_checkpoint() {
     } else {
         // Refused before the read model is reset: both are kept.
         assert!(rebuilt.is_err());
-        assert_eq!(stored, Some(5));
-        assert_eq!(*second_seen.lock().unwrap(), vec![4, 5]);
+        assert_eq!(stored, Some(later[1]));
+        assert_eq!(*second_seen.lock().unwrap(), later);
     }
 }
