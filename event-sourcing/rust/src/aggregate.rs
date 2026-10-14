@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 
 use crate::error::{Error, Result};
-use crate::event::{DomainEvent, EventEnvelope};
+use crate::event::{DomainEvent, EventContext, EventEnvelope};
 
 /// Core trait for event-sourced aggregates
 ///
@@ -192,18 +192,33 @@ impl<A: Aggregate> AggregateInstance<A> {
     where
         A: Clone,
     {
+        self.add_events_with(events, &EventContext::default())
+    }
+
+    /// [`add_events`](Self::add_events), stamping every event with `context`:
+    /// actor, causation and correlation ids, headers, and optionally the
+    /// event time. Context fields override the event's own
+    /// [`correlation_id`](DomainEvent::correlation_id) and
+    /// [`causation_id`](DomainEvent::causation_id). Atomic like `add_events`.
+    pub fn add_events_with(&mut self, events: Vec<A::Event>, context: &EventContext) -> Result<()>
+    where
+        A: Clone,
+    {
+        context.validate()?;
         let mut candidate = self.aggregate.clone();
         candidate.apply_events(&events)?;
         self.aggregate = candidate;
 
         for event in events {
             self.metadata.increment_version();
-            self.uncommitted_events.push(EventEnvelope::new(
+            let mut envelope = EventEnvelope::new(
                 event,
                 self.metadata.aggregate_id.clone(),
                 self.metadata.aggregate_type.clone(),
                 self.metadata.version,
-            ));
+            );
+            context.apply_to_metadata(&mut envelope.metadata);
+            self.uncommitted_events.push(envelope);
         }
 
         Ok(())
@@ -217,9 +232,22 @@ impl<A: Aggregate> AggregateInstance<A> {
     where
         A: AggregateRoot + Clone,
     {
+        self.execute_with(command, &EventContext::default()).await
+    }
+
+    /// [`execute`](Self::execute), stamping the recorded events with
+    /// `context` (see [`add_events_with`](Self::add_events_with)).
+    pub async fn execute_with(
+        &mut self,
+        command: A::Command,
+        context: &EventContext,
+    ) -> Result<usize>
+    where
+        A: AggregateRoot + Clone,
+    {
         let events = self.aggregate.handle_command(command).await?;
         let count = events.len();
-        self.add_events(events)?;
+        self.add_events_with(events, context)?;
         Ok(count)
     }
 
@@ -361,5 +389,74 @@ mod tests {
             .unwrap();
         assert_eq!(instance.committed_version(), 2);
         assert_eq!(instance.uncommitted_events[0].aggregate_nonce(), 3);
+    }
+
+    #[test]
+    fn add_events_with_stamps_every_event_with_the_context() {
+        let at = chrono::DateTime::from_timestamp_millis(1_700_000_000_123).unwrap();
+        let context = EventContext::new()
+            .with_actor_id("actor-7".into())
+            .with_causation_id("cmd-1".into())
+            .with_correlation_id("conv-9".into())
+            .with_metadata("x-key".into(), "v".into())
+            .with_timestamp(at);
+        let mut instance = AggregateInstance::new("test-1".into(), TestAggregate::default());
+        instance
+            .add_events_with(
+                vec![
+                    Created {
+                        id: "test-1".into(),
+                    }
+                    .into(),
+                    Updated { value: 1 }.into(),
+                ],
+                &context,
+            )
+            .unwrap();
+
+        for envelope in &instance.uncommitted_events {
+            let m = &envelope.metadata;
+            assert_eq!(m.actor_id.as_deref(), Some("actor-7"));
+            assert_eq!(m.causation_id.as_deref(), Some("cmd-1"));
+            assert_eq!(m.correlation_id.as_deref(), Some("conv-9"));
+            assert_eq!(m.metadata.get("x-key").map(String::as_str), Some("v"));
+            assert_eq!(m.timestamp, at);
+        }
+    }
+
+    #[test]
+    fn add_events_with_is_atomic_and_default_context_changes_nothing() {
+        let mut instance = AggregateInstance::new("test-1".into(), TestAggregate::default());
+        instance
+            .add_events_with(vec![Updated { value: 3 }.into()], &EventContext::default())
+            .unwrap();
+        let m = &instance.uncommitted_events[0].metadata;
+        assert_eq!(m.actor_id, None);
+        assert_eq!(m.causation_id, None);
+        assert!(m.metadata.is_empty());
+        assert_eq!(instance.aggregate.value, 3);
+    }
+
+    #[test]
+    fn pre_epoch_timestamp_is_rejected_and_changes_nothing() {
+        let before_epoch = chrono::DateTime::from_timestamp_millis(-1).unwrap();
+        let context = EventContext::new().with_timestamp(before_epoch);
+        let mut instance = AggregateInstance::new("test-1".into(), TestAggregate::default());
+        let err = instance
+            .add_events_with(vec![Updated { value: 3 }.into()], &context)
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidCommand { .. }), "{err:?}");
+        assert!(instance.uncommitted_events.is_empty());
+        assert_eq!(instance.aggregate.value, 0);
+        assert_eq!(instance.committed_version(), 0);
+
+        let epoch = chrono::DateTime::from_timestamp_millis(0).unwrap();
+        instance
+            .add_events_with(
+                vec![Updated { value: 3 }.into()],
+                &EventContext::new().with_timestamp(epoch),
+            )
+            .unwrap();
+        assert_eq!(instance.uncommitted_events[0].metadata.timestamp, epoch);
     }
 }

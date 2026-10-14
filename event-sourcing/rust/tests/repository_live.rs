@@ -754,3 +754,44 @@ async fn undecodable_events_fail_the_load() {
     let err = repo.load("acct-m").await.expect_err("bad payload");
     assert!(matches!(err, Error::EventDecode { .. }), "{err:?}");
 }
+
+/// Per-command metadata reaches the store on every event and is read back
+/// by projections (#376).
+#[tokio::test]
+async fn command_context_is_stored_on_every_event() {
+    let server = spawn_server().await;
+    let client = connect(&server.addr).await;
+    let tenant = unique_tenant();
+    let repo = EventStoreRepository::<Account>::new(Arc::new(client.clone()), &tenant);
+
+    let at = DateTime::<Utc>::from_timestamp_millis(1_700_000_000_123).unwrap();
+    let context = EventContext::new()
+        .with_actor_id("actor-7".into())
+        .with_causation_id("cmd-1".into())
+        .with_correlation_id("conv-9".into())
+        .with_metadata("x-key".into(), "v".into())
+        .with_timestamp(at);
+    let mut acct = AggregateInstance::new("acct-ctx".to_string(), Account::default());
+    acct.execute_with(open("acct-ctx"), &context).await.unwrap();
+    acct.execute_with(AccountCommand::Deposit { amount: 3 }, &context)
+        .await
+        .unwrap();
+    repo.save(&mut acct).await.unwrap();
+
+    let stored = read_raw(&client, &tenant, "acct-ctx").await;
+    assert_eq!(stored.len(), 2);
+    for data in stored {
+        let m = data.meta.clone().unwrap();
+        assert_eq!(m.actor_id, "actor-7");
+        assert_eq!(m.causation_id, "cmd-1");
+        assert_eq!(m.correlation_id, "conv-9");
+        assert_eq!(m.headers.get("x-key").map(String::as_str), Some("v"));
+        assert_eq!(m.timestamp_unix_ms, 1_700_000_000_123);
+        let recorded = RecordedEvent::from_proto(data).unwrap();
+        assert_eq!(recorded.actor_id.as_deref(), Some("actor-7"));
+        assert_eq!(recorded.causation_id.as_deref(), Some("cmd-1"));
+        assert_eq!(recorded.correlation_id.as_deref(), Some("conv-9"));
+        assert_eq!(recorded.headers.get("x-key").map(String::as_str), Some("v"));
+        assert_eq!(recorded.timestamp_unix_ms, 1_700_000_000_123);
+    }
+}
