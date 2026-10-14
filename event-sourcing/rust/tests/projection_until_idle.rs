@@ -185,10 +185,6 @@ impl LiveProcessor for Completer {
         }
         let pending = self.store.state(&self.key).pending;
         self.seen.lock().unwrap().push(pending.len());
-        let injected = self.behaviour.inject_once.lock().unwrap().take();
-        if let Some(id) = injected {
-            append(&self.client, &self.tenant, &id, 1, REQUESTED).await?;
-        }
         if self.behaviour.runaway {
             return Ok(pending.len().max(1));
         }
@@ -200,6 +196,11 @@ impl LiveProcessor for Completer {
                 Err(Error::ConcurrencyConflict { .. }) => {}
                 Err(e) => return Err(e),
             }
+        }
+        // Another writer, after this pass's own commands.
+        let injected = self.behaviour.inject_once.lock().unwrap().take();
+        if let Some(id) = injected {
+            append(&self.client, &self.tenant, &id, 1, REQUESTED).await?;
         }
         Ok(done)
     }
@@ -529,7 +530,15 @@ async fn a_feed_prefix_below_the_tenant_head_still_reaches_idle() {
         .await
         .unwrap();
     let store = Arc::new(TodoStore::new());
-    let completer = Completer::for_feed(&f, &store, "w-");
+    let mut completer = Completer::for_feed(&f, &store, "w-");
+    // During the first pass another family writes again, so the tenant head
+    // ends above the feed's last event: the checkpoint lags the head at idle.
+    *Arc::get_mut(&mut completer)
+        .expect("unshared")
+        .behaviour
+        .inject_once
+        .get_mut()
+        .unwrap() = Some("x-2".into());
     let mut runner = ProjectionRunner::new(f.port.clone(), store.clone(), TodoList, &f.tenant)
         .with_feed_prefix("w-")
         .with_live_processor(completer)
@@ -546,7 +555,7 @@ async fn a_feed_prefix_below_the_tenant_head_still_reaches_idle() {
             IdleExit::Idle {
                 processed: 1,
                 passes: 2,
-                ..
+                position: 3,
             }
         ),
         "{exit:?}"
