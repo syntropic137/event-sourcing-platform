@@ -43,7 +43,7 @@ print. The printed pages were checked against scans of the paper editions.
 | Processor To-Do List: the list is a view; the processor issues a command; the event clears the entry | Dilger | 495-509 | `ProcessManager`, [ADR-025](./adrs/ADR-025-process-manager-pattern.md) |
 | Never update projections from a side-effecting handler; never replay a command-issuing handler | Dilger | 414-416, 461-462 | [Consumer patterns](./CONSUMER-PATTERNS.md) |
 | Reservation pattern: a rule across streams via an aggregate keyed by the scarce value | Dilger | 510-516 | [ADR-021](./adrs/ADR-021-expected-version-and-set-based-validation.md) (set-based validation) |
-| Internal vs integration events: internal events belong to one context; integration events are the versioned contract | Dilger; Vernon | Dilger 34-35, 91-95, 234-240, 436; Vernon 452-460 | Not yet documented here |
+| Internal vs integration events: internal events belong to one context; integration events are the versioned contract | Dilger; Vernon | Dilger 34-35, 91-95, 234-240, 436; Vernon 452-460 | [Integration events](../docs-site/docs/vsa/concepts/integration-events.md) |
 | Event versioning and upcasters | Dilger | 95-100, 452-456 | [ADR-007](./adrs/ADR-007-event-versioning-upcasters.md) |
 | Aggregate: a transactional consistency boundary; keep it small | Dilger; Vernon; Evans | Dilger 108, 139-146; Vernon 353-358; Evans 125-129 | [ADR-004](./adrs/ADR-004-command-handlers-in-aggregates.md) |
 | Event-sourced aggregate: load, fold, decide, append at expected version | Vernon | 539-549 | SDK repositories |
