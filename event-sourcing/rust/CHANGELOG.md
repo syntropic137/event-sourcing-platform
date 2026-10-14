@@ -10,6 +10,8 @@ The SDK is alpha: breaking changes may land in minor versions and are listed und
 
 ### Added
 
+- `projection::FileCheckpointStore` (#438): a durable local `CheckpointStore` for processes without Postgres. Checkpoints live in one `checkpoints.json` per directory, rewritten atomically (temp file, fsync, rename, directory fsync) on every `save`/`delete`; saves are fenced like `InMemoryCheckpointStore` (`Error::CheckpointFenced`); an exclusive OS lock on the directory refuses a second store in this or another process; an unreadable or ambiguous file is an error at `open`, never a silent reset; a write that fails before the rename changes nothing. On Windows the rename is not flushed separately, so a power loss may roll a saved checkpoint back (redelivery only), never tear the file; `delete` of a stored key is refused there, since a rolled-back delete would skip history after `rebuild`. Wrap it in `ExternalCheckpoints` so an external read model resumes across restarts. Additive; uses `std::fs::File::try_lock` (Rust 1.89+).
+
 - `client::EventStorePort` trait and `EventStoreClient::connect`, layered on the low-level `eventstore-sdk-rs` client (#352).
 - `EventStoreRepository`: `load` (paged replay), `save` (expected stream revision, typed `Error::ConcurrencyConflict`), `exists` (#352).
 - Idempotent retry of unknown-outcome saves (`RetryPolicy`, stable event ids and idempotency key, reconciliation by event id and payload) (#352).
