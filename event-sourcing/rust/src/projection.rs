@@ -615,8 +615,8 @@ pub enum IdleExit {
 
 const DEFAULT_PAGE_SIZE: u32 = 500;
 /// Requests cancellation of the task when dropped. Cancellation is
-/// cooperative: the task stops at its next `.await`, so code it is running
-/// synchronously finishes first.
+/// cooperative: the task stops when it next yields to the runtime, so
+/// code it is running synchronously finishes first, however long it takes.
 struct AbortOnDrop(tokio::task::AbortHandle);
 
 impl Drop for AbortOnDrop {
@@ -906,8 +906,8 @@ where
     /// [`with_processor_shutdown_grace`](Self::with_processor_shutdown_grace)
     /// before it is cancelled. Dropping the call (e.g. a caller's timeout)
     /// cancels an in-flight pass with no grace. Cancellation is cooperative:
-    /// the pass stops at its next `.await`, so it can run on briefly after
-    /// the call is gone; the next `run_until_idle` or `run` on this runner
+    /// the pass stops when it next yields to the runtime, so it can run on
+    /// after the call is gone; the next `run_until_idle` or `run` on this runner
     /// waits for it to finish before starting a pass of its own. The
     /// checkpoint, capability guard, upcasting
     /// and filters are those of [`catch_up`](Self::catch_up). Does not
