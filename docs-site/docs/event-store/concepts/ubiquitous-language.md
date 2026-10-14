@@ -80,8 +80,8 @@ This glossary defines the shared vocabulary used across this experiment so engin
   - **To-do list**: the view of pending work, computed from the state of the system (pp. 496-498). It is a projection: it records entries and never acts.
   - **Processor**: takes each open entry and issues one command; the resulting event flows back into the to-do list and clears the entry (pp. 499-505). It must be idempotent: the list may lag (pp. 505-506), and a failed entry stays open and is retried (p. 508).
   - **Projection runner**: keeps one view current from its checkpoint and never issues a command (pp. 469-476, 502-505).
-  - **Background runner**: hosts a context's projection runners and processors off the request path. Plumbing only: the to-do list, the processor and the command belong to the context that owns the command (pp. 506-509).
-  - Rust SDK: `CheckpointedProjection` (to-do list), `LiveProcessor` (processor), `ProjectionRunner` (projection runner; batch mode `run_until_idle`, #440).
+  - **Background runner** (platform term, not the book's): hosts a context's projection runners and processors off the request path. Plumbing only: the to-do list, the processor and the command belong to the context that owns the command, as in Dilger's ownership example (pp. 506-509). Proposed in [#436](https://github.com/syntropic137/event-sourcing-platform/issues/436).
+  - Rust SDK: `CheckpointedProjection` (to-do list), `LiveProcessor` (processor), `ProjectionRunner` (projection runner; batch mode `run_until_idle`, pending [#440](https://github.com/syntropic137/event-sourcing-platform/pull/440)).
 
 - **Snapshot**
   - A persisted capture of an aggregate's state at a point in time to speed up rehydration.
