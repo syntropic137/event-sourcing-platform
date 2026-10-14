@@ -24,11 +24,14 @@
 //!   the new positions (what is on disk) and returns the error.
 //! * Each write costs one or two `fsync`s, so a checkpoint per event during a
 //!   long catch-up is slow on some disks; the position is what you pay for.
-//! * Windows: the rename is not flushed to disk separately (std has no
-//!   directory flush there). A power loss can then restore the previous file,
-//!   which rolls a checkpoint back and redelivers events; handlers behind
-//!   `ExternalCheckpoints` are idempotent by contract. A file is still never
-//!   torn.
+//! * Windows (any non-Unix target): the rename is not flushed to disk
+//!   separately (std has no directory flush there). A power loss can then
+//!   restore the previous file. For `save` that rolls a checkpoint back and
+//!   redelivers events; handlers behind `ExternalCheckpoints` are idempotent
+//!   by contract. A file is still never torn. A rolled-back `delete` would
+//!   resurrect a position after `rebuild` cleared the read model, skipping
+//!   history, so there `delete` of a stored key is refused: to rebuild,
+//!   remove the directory while no store holds it.
 //!
 //! Requires Rust 1.89+ (`std::fs::File::try_lock`).
 
@@ -75,7 +78,25 @@ struct Inner {
     writer: Mutex<()>,
     /// Held for the life of the store; dropping it releases the OS lock.
     _lock: File,
+    /// Test seam: fail the next directory flush after a rename.
+    #[cfg(test)]
+    fail_next_dir_sync: std::sync::atomic::AtomicBool,
 }
+
+impl Inner {
+    fn inject_dir_sync_failure(&self) -> bool {
+        #[cfg(test)]
+        {
+            self.fail_next_dir_sync
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+        }
+        #[cfg(not(test))]
+        false
+    }
+}
+
+/// Whether a rename is flushed to disk before `save`/`delete` return.
+const DURABLE_RENAME: bool = cfg!(unix);
 
 /// [`CheckpointStore`] persisted to a local directory. See the
 /// [module docs](self) for the on-disk guarantees.
@@ -142,6 +163,8 @@ impl FileCheckpointStore {
                 positions: Mutex::new(positions),
                 writer: Mutex::new(()),
                 _lock: lock,
+                #[cfg(test)]
+                fail_next_dir_sync: std::sync::atomic::AtomicBool::new(false),
             }),
         })
     }
@@ -167,7 +190,11 @@ impl FileCheckpointStore {
             let _writer = store.inner.writer.lock().expect("poisoned");
             let mut next = store.current();
             change(&mut next)?;
-            let replaced = persist(&store.inner.dir, &next);
+            let replaced = persist(
+                &store.inner.dir,
+                &next,
+                store.inner.inject_dir_sync_failure(),
+            );
             if replaced.renamed {
                 *store.inner.positions.lock().expect("poisoned") = next;
             }
@@ -222,7 +249,7 @@ struct Persisted {
     result: Result<()>,
 }
 
-fn persist(dir: &Path, positions: &Positions) -> Persisted {
+fn persist(dir: &Path, positions: &Positions, fail_dir_sync: bool) -> Persisted {
     let before = |result| Persisted {
         renamed: false,
         result,
@@ -260,7 +287,11 @@ fn persist(dir: &Path, positions: &Positions) -> Persisted {
     }
     Persisted {
         renamed: true,
-        result: sync_dir(dir),
+        result: if fail_dir_sync {
+            Err(invalid(dir, "injected directory flush failure"))
+        } else {
+            sync_dir(dir)
+        },
     }
 }
 
@@ -275,6 +306,20 @@ fn sync_dir(dir: &Path) -> Result<()> {
     }
     #[cfg(not(unix))]
     let _ = dir;
+    Ok(())
+}
+
+/// Remove `key`. Without a durable rename a power loss could bring the
+/// position back after the caller cleared its read model, so a stored key
+/// is refused there (see the module docs).
+fn remove(positions: &mut Positions, key: &CheckpointKey, durable_rename: bool) -> Result<()> {
+    if !durable_rename && positions.contains_key(key) {
+        return Err(Error::Repository(anyhow::anyhow!(
+            "checkpoint store: deleting {key} is not crash-safe on this platform; \
+             remove the store's directory while no store holds it"
+        )));
+    }
+    positions.remove(key);
     Ok(())
 }
 
@@ -306,11 +351,8 @@ impl CheckpointStore for FileCheckpointStore {
 
     async fn delete(&self, key: &CheckpointKey) -> Result<()> {
         let key = key.clone();
-        self.update(move |positions| {
-            positions.remove(&key);
-            Ok(())
-        })
-        .await
+        self.update(move |positions| remove(positions, &key, DURABLE_RENAME))
+            .await
     }
 }
 
@@ -488,5 +530,44 @@ mod tests {
         drop(store);
         let store = FileCheckpointStore::open(&tmp.0).unwrap();
         assert_eq!(store.load(&key("a")).await.unwrap(), Some(4));
+    }
+
+    /// Only the directory flush after the rename fails: the new file is in
+    /// place, so memory follows it, the error is returned, later saves are
+    /// fenced against it, and a reopen reads it.
+    #[tokio::test]
+    async fn a_failed_flush_after_the_rename_keeps_what_is_on_disk() {
+        let tmp = TempDir::new();
+        let store = FileCheckpointStore::open(&tmp.0).unwrap();
+        store.save(&key("a"), 5).await.unwrap();
+        store
+            .inner
+            .fail_next_dir_sync
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let err = store.save(&key("a"), 7).await.unwrap_err();
+        assert!(err.to_string().contains("injected"), "{err}");
+        assert_eq!(store.load(&key("a")).await.unwrap(), Some(7));
+        assert!(matches!(
+            store.save(&key("a"), 6).await.unwrap_err(),
+            Error::CheckpointFenced { stored: 7, .. }
+        ));
+
+        drop(store);
+        let store = FileCheckpointStore::open(&tmp.0).unwrap();
+        assert_eq!(store.load(&key("a")).await.unwrap(), Some(7));
+        store.save(&key("a"), 8).await.unwrap();
+    }
+
+    #[test]
+    fn without_a_durable_rename_deleting_a_stored_key_is_refused() {
+        let mut positions = Positions::new();
+        positions.insert(key("a"), 5);
+        let err = remove(&mut positions, &key("a"), false).unwrap_err();
+        assert!(err.to_string().contains("not crash-safe"), "{err}");
+        assert_eq!(positions.get(&key("a")), Some(&5));
+        remove(&mut positions, &key("missing"), false).unwrap();
+        remove(&mut positions, &key("a"), true).unwrap();
+        assert!(positions.is_empty());
     }
 }
