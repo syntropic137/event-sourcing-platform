@@ -394,10 +394,8 @@ where
     /// stream. If an earlier save failed with an unknown outcome and the
     /// instance has since recorded another command's events, save them under
     /// that command's key: the stale expected revision is a concurrency
-    /// conflict, reconciliation finds the committed prefix, and the
-    /// remainder is appended under `"{key}/{expected}"`. If that append
-    /// fails, the instance is left as the call found it, so retrying with
-    /// the same `key` reconciles again and continues.
+    /// conflict (the key is still unused), reconciliation clears the
+    /// committed prefix, and the remainder is appended under `key`.
     ///
     /// [`EventContext::with_command_id`]: crate::event::EventContext::with_command_id
     /// [`EventContext::with_timestamp`]: crate::event::EventContext::with_timestamp
@@ -440,29 +438,6 @@ where
         }
         instance.metadata.aggregate_type = self.aggregate_type.to_string();
 
-        // Keyed saves only: events found committed by reconciliation. If a
-        // later pass fails they go back on the front of the pending batch, so
-        // the instance is left as the call found it and a retry under the
-        // same key re-runs the reconciliation that finds the continuation
-        // (`"{key}/{expected}"`) instead of reusing `key` for the remainder.
-        let mut reconciled: Vec<EventEnvelope<A::Event>> = Vec::new();
-        let result = self
-            .save_passes(instance, &aggregate_id, key, &mut reconciled)
-            .await;
-        if result.is_err() && key.is_some() && !reconciled.is_empty() {
-            reconciled.append(&mut instance.uncommitted_events);
-            instance.uncommitted_events = reconciled;
-        }
-        result
-    }
-
-    async fn save_passes(
-        &self,
-        instance: &mut AggregateInstance<A>,
-        aggregate_id: &str,
-        key: Option<&str>,
-        reconciled: &mut Vec<EventEnvelope<A::Event>>,
-    ) -> Result<()> {
         let max_attempts = self.retry.max_attempts.max(1);
         let mut backoff = self.retry.initial_backoff;
         let mut attempt = 1u32;
@@ -472,20 +447,16 @@ where
         // events were recorded on the instance). That prefix is cleared and
         // the remainder is appended on top of it. Pending strictly shrinks
         // between passes, so this terminates.
-        let mut first_pass = true;
         'batch: loop {
             if instance.uncommitted_events.is_empty() {
                 return Ok(());
             }
-            let pass_key = key.map(|k| {
-                if first_pass {
-                    k.to_string()
-                } else {
-                    format!("{k}/{}", instance.committed_version())
-                }
-            });
-            first_pass = false;
-            let request = self.append_request(aggregate_id, instance, pass_key)?;
+            // A caller key is used on every pass. A later pass follows a
+            // concurrency conflict, and the store checks the key first
+            // (ADR-028), so the key is still unused: the remainder commits
+            // under the command's own key, and a retry or a re-decision
+            // under that key is recognised.
+            let request = self.append_request(&aggregate_id, instance, key.map(str::to_string))?;
             let expected = request.expected_aggregate_nonce;
             let count = request.events.len() as u64;
             loop {
@@ -514,12 +485,12 @@ where
                             || err.status_code() == Some(tonic::Code::AlreadyExists) =>
                     {
                         let committed = self
-                            .committed_prefix_len(aggregate_id, expected, &request.events)
+                            .committed_prefix_len(&aggregate_id, expected, &request.events)
                             .await?;
                         if committed == 0 {
                             return Err(err);
                         }
-                        reconciled.extend(instance.uncommitted_events.drain(..committed));
+                        instance.uncommitted_events.drain(..committed);
                         continue 'batch;
                     }
                     Err(err) if err.is_transient() && attempt < max_attempts => {

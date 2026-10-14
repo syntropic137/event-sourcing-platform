@@ -663,7 +663,9 @@ impl EventContext {
     /// in the recorded batch, so re-deciding the same command after a lost
     /// acknowledgment or a restart yields the same ids. Pair it with
     /// [`EventStoreRepository::save_with_key`] for command-level
-    /// exactly-once.
+    /// exactly-once. The index restarts at 0 on every recording call, so
+    /// record all of a command's events in one call; recording twice under
+    /// the same command id repeats event ids.
     ///
     /// [`EventStoreRepository::save_with_key`]: crate::repository::EventStoreRepository::save_with_key
     pub fn with_command_id(mut self, command_id: Uuid) -> Self {

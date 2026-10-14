@@ -960,11 +960,12 @@ async fn command_key_with_changed_metadata_is_refused() {
     assert_eq!(stream_len(&client, &tenant, "acct-m2").await, 2);
 }
 
-/// The continuation of a partly committed keyed batch fails before it
-/// commits. The instance is left as the call found it, so retrying under the
-/// same key reconciles again and appends the remainder exactly once.
+/// A keyed save after an unknown outcome: the next command's key conflicts
+/// on the stale revision, the committed prefix is reconciled, and the
+/// remainder commits under that same key. A failed continuation is retried
+/// under it, and re-deciding that command after a reload is refused.
 #[tokio::test]
-async fn failed_continuation_is_retried_under_the_same_key() {
+async fn continuation_commits_under_the_commands_own_key() {
     let server = spawn_server().await;
     let client = connect(&server.addr).await;
     let faulty = Arc::new(FaultyPort::new(client.clone()));
@@ -978,8 +979,11 @@ async fn failed_continuation_is_retried_under_the_same_key() {
         .await
         .expect_err("ack lost");
     assert_eq!(stream_len(&client, &tenant, "acct-cont").await, 2);
-    acct.add_events_with(vec![Deposited { amount: 5 }.into()], &command_context(3))
-        .unwrap();
+    let deposit = |acct: &mut AggregateInstance<Account>| {
+        acct.add_events_with(vec![Deposited { amount: 5 }.into()], &command_context(3))
+            .unwrap();
+    };
+    deposit(&mut acct);
 
     // cmd-1's key does not cover the extended batch: refused, not reconciled.
     let err = repo
@@ -989,24 +993,34 @@ async fn failed_continuation_is_retried_under_the_same_key() {
     assert!(err.is_idempotency_key_reused(), "{err:?}");
     assert_eq!(acct.uncommitted_count(), 3);
 
-    // Under cmd-3's key the stale revision conflicts, the committed prefix
-    // is reconciled, and the continuation is dropped.
+    // Under cmd-3's key the stale revision conflicts and the committed
+    // prefix is reconciled; the continuation is then dropped.
     faulty.pass_appends.store(1, Ordering::SeqCst);
     faulty.drop_requests.store(1, Ordering::SeqCst);
     repo.save_with_key(&mut acct, "cmd-3")
         .await
         .expect_err("continuation dropped");
-    assert_eq!(acct.uncommitted_count(), 3, "instance as the call found it");
+    assert_eq!(acct.uncommitted_count(), 1, "committed prefix cleared");
     assert_eq!(stream_len(&client, &tenant, "acct-cont").await, 2);
 
     repo.save_with_key(&mut acct, "cmd-3")
         .await
-        .expect("remainder appended under the continuation key");
+        .expect("remainder appended under cmd-3");
     assert!(!acct.has_uncommitted_events());
     assert_eq!(acct.committed_version(), 3);
     assert_eq!(stream_len(&client, &tenant, "acct-cont").await, 3);
-    let loaded = repo.load("acct-cont").await.unwrap().unwrap();
-    assert_eq!(loaded.aggregate.balance, 15);
+
+    // cmd-3 is bound to what it committed: re-deciding it after a reload is
+    // refused, nothing is written twice.
+    let mut reloaded = repo.load("acct-cont").await.unwrap().unwrap();
+    assert_eq!(reloaded.aggregate.balance, 15);
+    deposit(&mut reloaded);
+    let err = repo
+        .save_with_key(&mut reloaded, "cmd-3")
+        .await
+        .expect_err("cmd-3 already ran");
+    assert!(err.is_idempotency_key_reused(), "{err:?}");
+    assert_eq!(stream_len(&client, &tenant, "acct-cont").await, 3);
 }
 
 /// #427: a command that already ran, re-decided on reloaded state, is a
