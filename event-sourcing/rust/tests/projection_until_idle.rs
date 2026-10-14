@@ -777,3 +777,57 @@ async fn a_retry_after_a_dropped_call_never_overlaps_its_pass() {
     );
     assert_eq!(done_count(&f).await, 1);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_dropped_calls_in_a_row_still_never_overlap_a_pass() {
+    // Call A is dropped mid-pass (the pass is in a synchronous stretch on
+    // another worker, so it runs on). Call B waits for A's pass and is
+    // dropped too, while still waiting. Call C must still wait for A's
+    // pass, not find the handle gone and start a pass beside it.
+    let f = fixture().await;
+    request(&f, &["a"]).await;
+    let store = Arc::new(TodoStore::new());
+    let started = Arc::new(Notify::new());
+    let held = Completer::new(
+        &f,
+        &store,
+        Behaviour {
+            hold: Some(Hold::BlockThenComplete {
+                started: started.clone(),
+                block: Duration::from_millis(800),
+            }),
+            ..Default::default()
+        },
+    );
+    let mut runner = runner(&f, &store, Some(held.clone() as Arc<dyn LiveProcessor>));
+
+    let mut call_a = Box::pin(runner.run_until_idle(CancellationToken::new()));
+    tokio::select! {
+        _ = &mut call_a => panic!("the pass is blocked"),
+        _ = started.notified() => {}
+    }
+    drop(call_a);
+
+    // B is still waiting for A's pass when its caller gives up.
+    let call_b = tokio::time::timeout(
+        Duration::from_millis(50),
+        runner.run_until_idle(CancellationToken::new()),
+    )
+    .await;
+    assert!(call_b.is_err(), "B waits for A's pass");
+
+    let exit = tokio::time::timeout(
+        Duration::from_secs(10),
+        runner.run_until_idle(CancellationToken::new()),
+    )
+    .await
+    .expect("C finishes")
+    .unwrap();
+    assert!(matches!(exit, IdleExit::Idle { .. }), "{exit:?}");
+    assert_eq!(
+        held.max_active.load(Ordering::SeqCst),
+        1,
+        "passes overlapped"
+    );
+    assert_eq!(done_count(&f).await, 1);
+}
