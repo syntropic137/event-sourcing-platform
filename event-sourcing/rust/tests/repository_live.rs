@@ -867,8 +867,9 @@ async fn command_key_survives_losing_the_instance() {
 }
 
 /// A re-decided command can repeat deterministic ids, nonces and payloads
-/// while changing its metadata (here the actor). That is a different batch:
-/// reconciliation must not mistake it for a lost ack of the original.
+/// while changing its metadata (actor, aggregate type), or decide fewer or
+/// more events. Each is a different batch, refused under the command's key,
+/// never mistaken for a lost ack of the original.
 #[tokio::test]
 async fn command_key_with_changed_metadata_is_refused() {
     let server = spawn_server().await;
@@ -905,6 +906,58 @@ async fn command_key_with_changed_metadata_is_refused() {
     assert!(err.is_idempotency_key_reused(), "{err:?}");
     assert_eq!(changed.uncommitted_count(), 2, "pending kept");
     assert_eq!(stream_len(&client, &tenant, "acct-m2").await, 2);
+
+    // Re-decided with fewer events (a prefix of what ran): refused.
+    let mut shorter = AggregateInstance::new("acct-m2".to_string(), Account::default());
+    shorter
+        .add_events_with(
+            vec![Opened {
+                id: "acct-m2".into(),
+                owner: "alice".into(),
+            }
+            .into()],
+            &command_context(1),
+        )
+        .unwrap();
+    let err = repo
+        .save_with_key(&mut shorter, "cmd-1")
+        .await
+        .expect_err("fewer events is a different batch");
+    assert!(err.is_idempotency_key_reused(), "{err:?}");
+    assert_eq!(shorter.uncommitted_count(), 1);
+
+    // Re-decided with more events (extends what ran): refused, nothing written.
+    let mut longer = opened_by_command("acct-m2", 1);
+    longer
+        .add_events_with(vec![Deposited { amount: 1 }.into()], &command_context(9))
+        .unwrap();
+    let err = repo
+        .save_with_key(&mut longer, "cmd-1")
+        .await
+        .expect_err("more events is a different batch");
+    assert!(err.is_idempotency_key_reused(), "{err:?}");
+    assert_eq!(longer.uncommitted_count(), 3);
+    assert_eq!(stream_len(&client, &tenant, "acct-m2").await, 2);
+
+    // Same events, ids and key from another aggregate type: refused.
+    let savings_repo = EventStoreRepository::<Savings>::new(Arc::new(client.clone()), &tenant);
+    let mut savings = AggregateInstance::new("acct-m2".to_string(), Savings::default());
+    savings
+        .add_events_with(
+            opened_by_command("acct-m2", 1)
+                .uncommitted_events
+                .into_iter()
+                .map(|e| e.event)
+                .collect(),
+            &command_context(1),
+        )
+        .unwrap();
+    savings_repo
+        .save_with_key(&mut savings, "cmd-1")
+        .await
+        .expect_err("another aggregate type's batch");
+    assert_eq!(savings.uncommitted_count(), 2);
+    assert_eq!(stream_len(&client, &tenant, "acct-m2").await, 2);
 }
 
 /// The continuation of a partly committed keyed batch fails before it
@@ -928,16 +981,25 @@ async fn failed_continuation_is_retried_under_the_same_key() {
     acct.add_events_with(vec![Deposited { amount: 5 }.into()], &command_context(3))
         .unwrap();
 
-    // The keyed append is refused and reconciled; the continuation is dropped.
+    // cmd-1's key does not cover the extended batch: refused, not reconciled.
+    let err = repo
+        .save_with_key(&mut acct, "cmd-1")
+        .await
+        .expect_err("extended batch under cmd-1");
+    assert!(err.is_idempotency_key_reused(), "{err:?}");
+    assert_eq!(acct.uncommitted_count(), 3);
+
+    // Under cmd-3's key the stale revision conflicts, the committed prefix
+    // is reconciled, and the continuation is dropped.
     faulty.pass_appends.store(1, Ordering::SeqCst);
     faulty.drop_requests.store(1, Ordering::SeqCst);
-    repo.save_with_key(&mut acct, "cmd-1")
+    repo.save_with_key(&mut acct, "cmd-3")
         .await
         .expect_err("continuation dropped");
     assert_eq!(acct.uncommitted_count(), 3, "instance as the call found it");
     assert_eq!(stream_len(&client, &tenant, "acct-cont").await, 2);
 
-    repo.save_with_key(&mut acct, "cmd-1")
+    repo.save_with_key(&mut acct, "cmd-3")
         .await
         .expect("remainder appended under the continuation key");
     assert!(!acct.has_uncommitted_events());

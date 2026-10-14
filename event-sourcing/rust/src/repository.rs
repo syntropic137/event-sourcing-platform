@@ -224,8 +224,7 @@ where
 }
 
 /// Whether a stored event carries exactly the metadata we sent, ignoring
-/// what the store assigns or fills in (commit time, global position, and the
-/// tenant/aggregate scope it copies from the request). This is the same
+/// what the store assigns (commit time, global position). This is the same
 /// comparison the store makes for an idempotency key (ADR-028): with
 /// deterministic event ids (`EventContext::with_command_id`) a re-decided
 /// command can repeat ids, nonces and payloads while changing its actor,
@@ -234,9 +233,6 @@ fn same_client_metadata(stored: &proto::EventMetadata, ours: &proto::EventMetada
     let scrub = |m: &proto::EventMetadata| proto::EventMetadata {
         recorded_time_unix_ms: 0,
         global_nonce: 0,
-        tenant_id: String::new(),
-        aggregate_id: String::new(),
-        aggregate_type: String::new(),
         ..m.clone()
     };
     scrub(stored) == scrub(ours)
@@ -393,11 +389,15 @@ where
     /// [`EventContext::with_timestamp`]) so that re-deciding the same command
     /// after a restart produces an identical batch.
     ///
-    /// If reconciliation finds that an earlier attempt committed only a
-    /// prefix of the pending batch, the remainder is appended under
-    /// `"{key}/{expected}"`, so it is not mistaken for a reuse of `key`.
-    /// If that append fails, the instance is left as the call found it, so
-    /// retrying with the same `key` reconciles again and continues.
+    /// Any different batch under a committed `key` is refused, including one
+    /// that shortens or extends it: the key is not reconciled against the
+    /// stream. If an earlier save failed with an unknown outcome and the
+    /// instance has since recorded another command's events, save them under
+    /// that command's key: the stale expected revision is a concurrency
+    /// conflict, reconciliation finds the committed prefix, and the
+    /// remainder is appended under `"{key}/{expected}"`. If that append
+    /// fails, the instance is left as the call found it, so retrying with
+    /// the same `key` reconciles again and continues.
     ///
     /// [`EventContext::with_command_id`]: crate::event::EventContext::with_command_id
     /// [`EventContext::with_timestamp`]: crate::event::EventContext::with_timestamp
@@ -500,6 +500,14 @@ where
                         }
                         instance.mark_committed();
                         return Ok(());
+                    }
+                    // A caller key names one command. `ALREADY_EXISTS` under it
+                    // means the key committed a different batch: the command
+                    // already ran, possibly decided differently (fewer or
+                    // more events). That is final; a stream prefix cannot
+                    // tell it apart from a lost ack, so it is not reconciled.
+                    Err(err) if key.is_some() && err.is_idempotency_key_reused() => {
+                        return Err(err);
                     }
                     Err(err)
                         if err.is_concurrency_conflict()
