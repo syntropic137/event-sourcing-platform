@@ -182,6 +182,19 @@ runner.run(cancel.clone()).await?; // catch-up, then live, until cancelled or an
 - **Side effects**: projections must be pure. Write to-do records in `handle` and attach a `LiveProcessor` with `with_live_processor`; it runs on its own task and is woken only by committed live events, never during replay (process-manager pattern, ADR-025). Failed passes retry with backoff, and one pass runs when going live (after replay) to resume items stranded by a crash; disable with `drain_pending_on_live_start(false)`. `process_pending` must be idempotent.
 - **Processor panics** never go unnoticed: by default a panicking pass (or a processor task that ends unexpectedly) stops the runner with `Error::LiveProcessorPanicked`; `on_processor_panic(ProcessorPanicPolicy::Restart)` logs it and retries the pass with the processor backoff instead. On cancellation the in-flight pass may finish within `with_processor_shutdown_grace` (default 10 s), then it is cancelled; when the runner fails or halts it is cancelled at once (idempotency makes this safe), so a pass blocked on an external service cannot delay a halt.
 
+### Processor-TODO-List
+
+The process-manager support above implements Dilger's Processor-TODO-List pattern (*Understanding Eventsourcing*, pp. 495-509; see [Foundations](https://github.com/syntropic137/event-sourcing-platform/blob/main/docs/FOUNDATIONS.md)):
+
+| Term | Meaning | Rust SDK |
+|------|---------|----------|
+| To-do list | View of pending work, computed from the system's state (pp. 496-498) | A `CheckpointedProjection` that only writes to-do records |
+| Processor | Takes each open entry and issues one command; the resulting event clears the entry (pp. 499-505) | `LiveProcessor` |
+| Projection runner | Keeps one view current from its checkpoint; never issues a command | `ProjectionRunner` |
+| Background runner | Hosts a context's projection runners and processors; owns no list or command (pp. 506-509) | Proposed: #436 |
+
+A service follows the log with `run` / `run_supervised`. A batch job (an import, a backfill) that must finish and report uses `run_until_idle` (#440): catch up, one processor pass, repeat until a pass takes nothing and no new event arrived, then return `IdleExit::Idle`.
+
 ### Supervision
 
 Services run the runner under `run_supervised`, which owns reconnects:

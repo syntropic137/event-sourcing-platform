@@ -40,7 +40,11 @@ print. The printed pages were checked against scans of the paper editions.
 | Every state change, view and process step is its own slice | Dilger | 161, 166-176 | [Vertical slices](../docs-site/docs/vsa/concepts/vertical-slices.md); [ADR-008](./adrs/ADR-008-vertical-slices-hexagonal-adapters.md) |
 | No direct dependencies between slices; events are their API | Dilger | 172-173, 287-288 | `vsa validate` isolation rules |
 | Given/When/Then: When is always a command; views and automations use Given/Then | Dilger | 64, 209-210 | [ADR-015](./adrs/ADR-015-es-test-kit-architecture.md) |
-| Processor To-Do List: the list is a view; the processor issues a command; the event clears the entry | Dilger | 495-509 | `ProcessManager`, [ADR-025](./adrs/ADR-025-process-manager-pattern.md) |
+| Processor To-Do List (Dilger's chapter title: "Processor-TODO-List"): the list is a view; the processor issues a command; the event clears the entry | Dilger | 495-509 | `ProcessManager`, [ADR-025](./adrs/ADR-025-process-manager-pattern.md); Rust: `ProjectionRunner` + `LiveProcessor`, batch mode `run_until_idle` (#440) |
+| To-do list: the view of pending work, computed from the state of the system; how an entry gets on, what checks it off | Dilger | 496-498 | A `CheckpointedProjection` that only writes to-do records |
+| Processor: takes each open entry and issues one command; the resulting event flows back and clears the entry (the back channel) | Dilger | 499-505 | `LiveProcessor` (Rust), `ProcessManager` |
+| Projection runner: keeps one view current from its checkpoint and never issues a command | Dilger | 469-476, 502-505 | `ProjectionRunner` (Rust), [ADR-014](./adrs/ADR-014-projection-checkpoint-architecture.md) |
+| Background runner: hosts a context's projection runners and processors off the request path; plumbing that owns no context's list or command | Dilger | 506-509 (ownership) | Proposed: #436 (`RunnerGroup`). Beyond the book, see below |
 | Never update projections from a side-effecting handler; never replay a command-issuing handler | Dilger | 414-416, 461-462 | [Consumer patterns](./CONSUMER-PATTERNS.md) |
 | Reservation pattern: a rule across streams via an aggregate keyed by the scarce value | Dilger | 510-516 | [ADR-021](./adrs/ADR-021-expected-version-and-set-based-validation.md) (set-based validation) |
 | Internal vs integration events: internal events belong to one context; integration events are the versioned contract | Dilger; Vernon | Dilger 34-35, 91-95, 234-240, 436; Vernon 452-460 | [Integration events](../docs-site/docs/vsa/concepts/integration-events.md) |
@@ -56,5 +60,11 @@ print. The printed pages were checked against scans of the paper editions.
 - **Deletion and privacy.** Dilger does not cover them, and keeps payloads in
   events (p. 22). Consumers that need erasure must design it themselves, for
   example by keeping content out of the log.
+- **Shared runners.** Dilger gives each processor its own processing group
+  (pp. 270, 418) and no shared runner; in his cross-module example the
+  reacting module owns the to-do list, the processor and the command
+  (pp. 506-509). A background runner here is hosting plumbing only, so it
+  keeps that ownership: each job lives in the context whose command it
+  issues.
 - **Hash-chained log.** Not in any of the three books;
   [ADR-029](./adrs/ADR-029-hash-chained-event-log.md) is the platform's own.

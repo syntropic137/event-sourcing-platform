@@ -75,6 +75,14 @@ This glossary defines the shared vocabulary used across this experiment so engin
   - A derived read model built from events, optimized for queries, not commands.
   - Examples: reporting views, search indexes, materialized views.
 
+- **Processor-TODO-List** (Processor To-Do List; Dilger, *Understanding Eventsourcing*, pp. 495-509)
+  - The pattern behind every automation: a to-do list, a processor, a command, and the event that clears the entry.
+  - **To-do list**: the view of pending work, computed from the state of the system (pp. 496-498). It is a projection: it records entries and never acts.
+  - **Processor**: takes each open entry and issues one command; the resulting event flows back into the to-do list and clears the entry (pp. 499-505). It must be idempotent: the list may lag (pp. 505-506), and a failed entry stays open and is retried (p. 508).
+  - **Projection runner**: keeps one view current from its checkpoint and never issues a command (pp. 469-476, 502-505).
+  - **Background runner**: hosts a context's projection runners and processors off the request path. Plumbing only: the to-do list, the processor and the command belong to the context that owns the command (pp. 506-509).
+  - Rust SDK: `CheckpointedProjection` (to-do list), `LiveProcessor` (processor), `ProjectionRunner` (projection runner; batch mode `run_until_idle`, #440).
+
 - **Snapshot**
   - A persisted capture of an aggregate's state at a point in time to speed up rehydration.
   - Use when streams are long and replays are costly.
