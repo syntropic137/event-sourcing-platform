@@ -195,6 +195,16 @@ impl Error {
         }
     }
 
+    /// True when an append was refused because its idempotency key already
+    /// names a different committed batch (`ALREADY_EXISTS`, ADR-028). With a
+    /// caller key ([`EventStoreRepository::save_with_key`]) this means the
+    /// command already ran; nothing was written. Not retryable.
+    ///
+    /// [`EventStoreRepository::save_with_key`]: crate::repository::EventStoreRepository::save_with_key
+    pub fn is_idempotency_key_reused(&self) -> bool {
+        self.status_code() == Some(tonic::Code::AlreadyExists)
+    }
+
     /// Create a new concurrency conflict error
     pub fn concurrency_conflict(expected: u64, actual: u64) -> Self {
         Self::ConcurrencyConflict { expected, actual }
