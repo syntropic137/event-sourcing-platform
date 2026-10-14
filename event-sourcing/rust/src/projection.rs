@@ -66,6 +66,10 @@
 //!   manager): the projection writes to-do records in `handle`, and the
 //!   runner wakes the processor only after committing a *live* event, never
 //!   while catching up.
+//! * **Batch mode**: [`ProjectionRunner::run_until_idle`] runs a to-do list
+//!   automation to rest and returns: catch up, one processor pass, repeat
+//!   until a pass takes nothing and no event arrived since. For jobs that
+//!   must report "done" (an import, a backfill) instead of following the log.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -577,7 +581,51 @@ pub enum RunExit {
     },
 }
 
+/// Why [`ProjectionRunner::run_until_idle`] returned without error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IdleExit {
+    /// The view is at the log head observed by the last catch-up, and the
+    /// processor's last pass (if any) took nothing, with no event appended
+    /// in between.
+    Idle {
+        /// Last committed position.
+        position: u64,
+        /// Items the processor reported over the whole call.
+        processed: usize,
+        /// Processor passes run (0 without a processor).
+        passes: u32,
+    },
+    /// The cancellation token fired first.
+    Cancelled {
+        /// Last committed position.
+        position: u64,
+    },
+    /// The processor still reported work after the pass bound
+    /// ([`ProjectionRunner::with_idle_max_passes`]): it never clears its own
+    /// to-do items, or another writer keeps adding them. The checkpoint is
+    /// where the last catch-up committed.
+    PassLimit {
+        /// Last committed position.
+        position: u64,
+        /// Items the processor reported over the whole call.
+        processed: usize,
+    },
+}
+
 const DEFAULT_PAGE_SIZE: u32 = 500;
+/// Aborts the task when dropped, so a pass cannot outlive the call that
+/// started it.
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Default bound on processor passes in one `run_until_idle` call.
+const DEFAULT_IDLE_MAX_PASSES: u32 = 1000;
 /// `read_all` backward from here returns the tenant head. Postgres binds
 /// positions as `i64`, so stay within its range.
 const HEAD_PROBE: u64 = i64::MAX as u64;
@@ -593,6 +641,10 @@ pub struct ProjectionRunner<P, S: ProjectionStore> {
     drain_on_live_start: bool,
     processor_retry: Duration,
     processor_shutdown_grace: Duration,
+    idle_max_passes: u32,
+    /// The pass of a `run_until_idle` call that was dropped mid-pass:
+    /// aborted, and awaited before the next pass can start.
+    idle_pass_task: Option<tokio::task::JoinHandle<Result<usize>>>,
     upcasters: Upcasters,
     position: u64,
     progress: watch::Sender<RunnerProgress>,
@@ -634,6 +686,8 @@ where
             drain_on_live_start: true,
             processor_retry: Duration::from_secs(1),
             processor_shutdown_grace: Duration::from_secs(10),
+            idle_max_passes: DEFAULT_IDLE_MAX_PASSES,
+            idle_pass_task: None,
             upcasters: Upcasters::new(),
             position: 0,
             progress,
@@ -824,6 +878,139 @@ where
         }
     }
 
+    /// Bound the processor passes of one
+    /// [`run_until_idle`](Self::run_until_idle) call (at least 1, default
+    /// 1000). Reaching it returns [`IdleExit::PassLimit`].
+    pub fn with_idle_max_passes(mut self, passes: u32) -> Self {
+        self.idle_max_passes = passes.max(1);
+        self
+    }
+
+    /// Batch mode for a to-do list automation: drain it, then return.
+    ///
+    /// Repeats until rest: catch up to the head, then (with a
+    /// [`LiveProcessor`]) run one processor pass. Returns
+    /// [`IdleExit::Idle`] once a pass took nothing and the following
+    /// catch-up found no new event, so every event the processor's commands
+    /// produced has been folded back into the view (the back channel is
+    /// synchronous here: the view is caught up before every pass). Without a
+    /// processor it is a catch-up that reports [`IdleExit`].
+    ///
+    /// Passes run only after catch-up, never during replay, exactly like the
+    /// pass [`run`](Self::run) makes on going live; `process_pending` must be
+    /// idempotent for the same reason. A failed pass returns its error at
+    /// once (the item stays on the list for the next call); a panicking pass
+    /// returns [`Error::LiveProcessorPanicked`] whatever the
+    /// [`ProcessorPanicPolicy`]. On cancellation an in-flight pass gets the
+    /// [`with_processor_shutdown_grace`](Self::with_processor_shutdown_grace)
+    /// before it is cancelled; dropping the call (e.g. a caller's timeout)
+    /// cancels an in-flight pass at its next `.await`, with no grace, and no
+    /// pass ever runs on past the call. The checkpoint, capability guard, upcasting
+    /// and filters are those of [`catch_up`](Self::catch_up). Does not
+    /// subscribe.
+    pub async fn run_until_idle(&mut self, cancel: CancellationToken) -> Result<IdleExit> {
+        let result = self.run_until_idle_attempt(&cancel).await;
+        match &result {
+            Ok(_) => self.set_state(RunnerState::Stopped),
+            Err(err) => self.record_failure(err),
+        }
+        result
+    }
+
+    async fn run_until_idle_attempt(&mut self, cancel: &CancellationToken) -> Result<IdleExit> {
+        self.settle_dropped_pass().await;
+        let cancelled = |position| Ok(IdleExit::Cancelled { position });
+        if !self.check_capabilities(cancel).await? {
+            return cancelled(self.position);
+        }
+        let mut processed = 0usize;
+        let mut passes = 0u32;
+        // Head observed before the last pass, and what that pass took.
+        let mut last: Option<(u64, usize)> = None;
+        loop {
+            let Some(boundary) = self.catch_up_until(cancel).await? else {
+                return cancelled(self.position);
+            };
+            let idle = IdleExit::Idle {
+                position: self.position,
+                processed,
+                passes,
+            };
+            let Some(processor) = self.processor.clone() else {
+                return Ok(idle);
+            };
+            if last == Some((boundary, 0)) {
+                return Ok(idle);
+            }
+            if passes >= self.idle_max_passes {
+                return Ok(IdleExit::PassLimit {
+                    position: self.position,
+                    processed,
+                });
+            }
+            let Some(n) = self.idle_pass(processor, cancel).await? else {
+                return cancelled(self.position);
+            };
+            passes += 1;
+            processed += n;
+            last = Some((boundary, n));
+        }
+    }
+
+    /// One processor pass on its own task, so a panic is reported rather
+    /// than unwinding through the caller. `None` if cancelled.
+    ///
+    /// The task never outlives the call: it is aborted if this future is
+    /// dropped (a caller's timeout), and after the grace it is aborted and
+    /// awaited. A dropped call's task may still be finishing its current
+    /// poll on another worker, so its handle stays on the runner and the
+    /// next `run_until_idle` or `run` awaits it first: no pass of an
+    /// earlier call overlaps a later one.
+    async fn idle_pass(
+        &mut self,
+        processor: Arc<dyn LiveProcessor>,
+        cancel: &CancellationToken,
+    ) -> Result<Option<usize>> {
+        let grace = self.processor_shutdown_grace;
+        let spawned = tokio::spawn(async move { processor.process_pending().await });
+        let _abort_on_drop = AbortOnDrop(spawned.abort_handle());
+        let task = self.idle_pass_task.insert(spawned);
+        let joined = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                // The pass may finish within the grace: its error or panic is
+                // still reported; a clean finish is a cancellation.
+                match tokio::time::timeout(grace, &mut *task).await {
+                    Ok(Ok(Ok(_))) => {
+                        self.idle_pass_task = None;
+                        return Ok(None);
+                    }
+                    Ok(joined) => joined,
+                    Err(_) => {
+                        task.abort();
+                        // Resolves once the task has actually stopped.
+                        let _ = (&mut *task).await;
+                        self.idle_pass_task = None;
+                        return Ok(None);
+                    }
+                }
+            }
+            joined = &mut *task => joined,
+        };
+        self.idle_pass_task = None;
+        match joined {
+            Ok(pass) => pass.map(Some),
+            Err(join) => Err(Error::LiveProcessorPanicked {
+                projection: self.key.to_string(),
+                message: if join.is_panic() {
+                    drain::panic_message(join.into_panic().as_ref())
+                } else {
+                    join.to_string()
+                },
+            }),
+        }
+    }
+
     /// Catch up, then consume live events until `cancel` fires or an error
     /// occurs. Errors are returned, never swallowed; the checkpoint stays at
     /// the last event that committed.
@@ -836,8 +1023,18 @@ where
         result
     }
 
+    /// Wait out the pass of a dropped `run_until_idle` call (already
+    /// aborted), so it cannot overlap the next processor pass.
+    async fn settle_dropped_pass(&mut self) {
+        if let Some(task) = self.idle_pass_task.take() {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+
     /// One attempt of [`run`](Self::run): capability check, catch-up, live.
     async fn run_attempt(&mut self, cancel: &CancellationToken) -> Result<RunExit> {
+        self.settle_dropped_pass().await;
         self.loaded_position = self.position;
         self.live_since = None;
         if !self.check_capabilities(cancel).await? {
