@@ -207,15 +207,24 @@ impl FileCheckpointStore {
                 change: Box::new(change),
                 done,
             });
-        let store = self.clone();
-        let drained = tokio::task::spawn_blocking(move || store.drain());
-        match result.await {
+        // The task holds the store only while it drains, and the call
+        // waits for it: once a write returns, its task has released the
+        // store, so dropping the last handle releases the OS lock.
+        let store = Arc::downgrade(&self.inner);
+        let drained = tokio::task::spawn_blocking(move || {
+            if let Some(inner) = store.upgrade() {
+                FileCheckpointStore { inner }.drain();
+            }
+        });
+        let outcome = result.await;
+        let joined = drained.await;
+        match outcome {
             Ok(result) => result,
             // The write was taken off the queue but never answered: the
             // draining task panicked.
             Err(_) => Err(Error::Repository(anyhow::anyhow!(
                 "checkpoint store task: {}",
-                match drained.await {
+                match joined {
                     Err(e) => e.to_string(),
                     Ok(()) => "write was not applied".to_string(),
                 }
@@ -677,5 +686,19 @@ mod tests {
         drop(store);
         let store = FileCheckpointStore::open(&tmp.0).unwrap();
         assert_eq!(store.load(&key("a")).await.unwrap(), None);
+    }
+
+    /// A returned write has released the store: dropping the last handle
+    /// right after it frees the lock for an immediate reopen.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_store_can_be_reopened_right_after_its_last_write() {
+        let tmp = TempDir::new();
+        for position in 1..=50u64 {
+            let store = FileCheckpointStore::open(&tmp.0).unwrap();
+            store.save(&key("a"), position).await.unwrap();
+            drop(store);
+        }
+        let store = FileCheckpointStore::open(&tmp.0).unwrap();
+        assert_eq!(store.load(&key("a")).await.unwrap(), Some(50));
     }
 }
