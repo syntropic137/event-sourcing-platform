@@ -214,16 +214,32 @@ where
             .take_while(
                 |(stored, ours)| match (stored.meta.as_ref(), ours.meta.as_ref()) {
                     (Some(s), Some(o)) => {
-                        s.event_id == o.event_id
-                            && s.aggregate_nonce == o.aggregate_nonce
-                            && s.event_type == o.event_type
-                            && stored.payload == ours.payload
+                        same_client_metadata(s, o) && stored.payload == ours.payload
                     }
                     _ => false,
                 },
             )
             .count())
     }
+}
+
+/// Whether a stored event carries exactly the metadata we sent, ignoring
+/// what the store assigns or fills in (commit time, global position, and the
+/// tenant/aggregate scope it copies from the request). This is the same
+/// comparison the store makes for an idempotency key (ADR-028): with
+/// deterministic event ids (`EventContext::with_command_id`) a re-decided
+/// command can repeat ids, nonces and payloads while changing its actor,
+/// headers or time, and that is a different batch, not a lost ack.
+fn same_client_metadata(stored: &proto::EventMetadata, ours: &proto::EventMetadata) -> bool {
+    let scrub = |m: &proto::EventMetadata| proto::EventMetadata {
+        recorded_time_unix_ms: 0,
+        global_nonce: 0,
+        tenant_id: String::new(),
+        aggregate_id: String::new(),
+        aggregate_type: String::new(),
+        ..m.clone()
+    };
+    scrub(stored) == scrub(ours)
 }
 
 impl<A> EventStoreRepository<A>
@@ -380,6 +396,8 @@ where
     /// If reconciliation finds that an earlier attempt committed only a
     /// prefix of the pending batch, the remainder is appended under
     /// `"{key}/{expected}"`, so it is not mistaken for a reuse of `key`.
+    /// If that append fails, the instance is left as the call found it, so
+    /// retrying with the same `key` reconciles again and continues.
     ///
     /// [`EventContext::with_command_id`]: crate::event::EventContext::with_command_id
     /// [`EventContext::with_timestamp`]: crate::event::EventContext::with_timestamp
@@ -422,6 +440,29 @@ where
         }
         instance.metadata.aggregate_type = self.aggregate_type.to_string();
 
+        // Keyed saves only: events found committed by reconciliation. If a
+        // later pass fails they go back on the front of the pending batch, so
+        // the instance is left as the call found it and a retry under the
+        // same key re-runs the reconciliation that finds the continuation
+        // (`"{key}/{expected}"`) instead of reusing `key` for the remainder.
+        let mut reconciled: Vec<EventEnvelope<A::Event>> = Vec::new();
+        let result = self
+            .save_passes(instance, &aggregate_id, key, &mut reconciled)
+            .await;
+        if result.is_err() && key.is_some() && !reconciled.is_empty() {
+            reconciled.append(&mut instance.uncommitted_events);
+            instance.uncommitted_events = reconciled;
+        }
+        result
+    }
+
+    async fn save_passes(
+        &self,
+        instance: &mut AggregateInstance<A>,
+        aggregate_id: &str,
+        key: Option<&str>,
+        reconciled: &mut Vec<EventEnvelope<A::Event>>,
+    ) -> Result<()> {
         let max_attempts = self.retry.max_attempts.max(1);
         let mut backoff = self.retry.initial_backoff;
         let mut attempt = 1u32;
@@ -444,7 +485,7 @@ where
                 }
             });
             first_pass = false;
-            let request = self.append_request(&aggregate_id, instance, pass_key)?;
+            let request = self.append_request(aggregate_id, instance, pass_key)?;
             let expected = request.expected_aggregate_nonce;
             let count = request.events.len() as u64;
             loop {
@@ -465,12 +506,12 @@ where
                             || err.status_code() == Some(tonic::Code::AlreadyExists) =>
                     {
                         let committed = self
-                            .committed_prefix_len(&aggregate_id, expected, &request.events)
+                            .committed_prefix_len(aggregate_id, expected, &request.events)
                             .await?;
                         if committed == 0 {
                             return Err(err);
                         }
-                        instance.uncommitted_events.drain(..committed);
+                        reconciled.extend(instance.uncommitted_events.drain(..committed));
                         continue 'batch;
                     }
                     Err(err) if err.is_transient() && attempt < max_attempts => {

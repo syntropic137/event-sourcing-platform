@@ -866,6 +866,87 @@ async fn command_key_survives_losing_the_instance() {
     assert_eq!(stream_len(&client, &tenant, "acct-k").await, 2);
 }
 
+/// A re-decided command can repeat deterministic ids, nonces and payloads
+/// while changing its metadata (here the actor). That is a different batch:
+/// reconciliation must not mistake it for a lost ack of the original.
+#[tokio::test]
+async fn command_key_with_changed_metadata_is_refused() {
+    let server = spawn_server().await;
+    let client = connect(&server.addr).await;
+    let tenant = unique_tenant();
+    let repo = EventStoreRepository::<Account>::new(Arc::new(client.clone()), &tenant);
+
+    let mut first = opened_by_command("acct-m2", 1);
+    repo.save_with_key(&mut first, "cmd-1").await.unwrap();
+
+    let mut changed = AggregateInstance::new("acct-m2".to_string(), Account::default());
+    changed
+        .add_events_with(
+            vec![
+                Opened {
+                    id: "acct-m2".into(),
+                    owner: "alice".into(),
+                }
+                .into(),
+                Deposited { amount: 10 }.into(),
+            ],
+            &command_context(1).with_actor_id("someone-else".into()),
+        )
+        .unwrap();
+    assert_eq!(
+        changed.uncommitted_events[0].event_id(),
+        opened_by_command("acct-m2", 1).uncommitted_events[0].event_id(),
+        "same deterministic ids"
+    );
+    let err = repo
+        .save_with_key(&mut changed, "cmd-1")
+        .await
+        .expect_err("different metadata is a different batch");
+    assert!(err.is_idempotency_key_reused(), "{err:?}");
+    assert_eq!(changed.uncommitted_count(), 2, "pending kept");
+    assert_eq!(stream_len(&client, &tenant, "acct-m2").await, 2);
+}
+
+/// The continuation of a partly committed keyed batch fails before it
+/// commits. The instance is left as the call found it, so retrying under the
+/// same key reconciles again and appends the remainder exactly once.
+#[tokio::test]
+async fn failed_continuation_is_retried_under_the_same_key() {
+    let server = spawn_server().await;
+    let client = connect(&server.addr).await;
+    let faulty = Arc::new(FaultyPort::new(client.clone()));
+    faulty.lose_acks.store(1, Ordering::SeqCst);
+    let tenant = unique_tenant();
+    let repo = EventStoreRepository::<Account>::new(faulty.clone(), &tenant)
+        .with_retry_policy(RetryPolicy::none());
+
+    let mut acct = opened_by_command("acct-cont", 1);
+    repo.save_with_key(&mut acct, "cmd-1")
+        .await
+        .expect_err("ack lost");
+    assert_eq!(stream_len(&client, &tenant, "acct-cont").await, 2);
+    acct.add_events_with(vec![Deposited { amount: 5 }.into()], &command_context(3))
+        .unwrap();
+
+    // The keyed append is refused and reconciled; the continuation is dropped.
+    faulty.pass_appends.store(1, Ordering::SeqCst);
+    faulty.drop_requests.store(1, Ordering::SeqCst);
+    repo.save_with_key(&mut acct, "cmd-1")
+        .await
+        .expect_err("continuation dropped");
+    assert_eq!(acct.uncommitted_count(), 3, "instance as the call found it");
+    assert_eq!(stream_len(&client, &tenant, "acct-cont").await, 2);
+
+    repo.save_with_key(&mut acct, "cmd-1")
+        .await
+        .expect("remainder appended under the continuation key");
+    assert!(!acct.has_uncommitted_events());
+    assert_eq!(acct.committed_version(), 3);
+    assert_eq!(stream_len(&client, &tenant, "acct-cont").await, 3);
+    let loaded = repo.load("acct-cont").await.unwrap().unwrap();
+    assert_eq!(loaded.aggregate.balance, 15);
+}
+
 /// #427: a command that already ran, re-decided on reloaded state, is a
 /// different batch (later nonces) and is refused as a key reuse.
 #[tokio::test]

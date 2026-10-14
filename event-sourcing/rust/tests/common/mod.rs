@@ -98,6 +98,9 @@ pub struct FaultyPort {
     pub inner: EventStoreClient,
     pub lose_acks: AtomicU32,
     pub drop_requests: AtomicU32,
+    /// Appends let through untouched before `drop_requests` or `lose_acks`
+    /// apply, to fail a later append in one save.
+    pub pass_appends: AtomicU32,
     pub appends_sent: AtomicU32,
     /// `read_stream` calls (the repository reads only to reconcile or to
     /// check an existing stream's type).
@@ -110,6 +113,7 @@ impl FaultyPort {
             inner,
             lose_acks: AtomicU32::new(0),
             drop_requests: AtomicU32::new(0),
+            pass_appends: AtomicU32::new(0),
             appends_sent: AtomicU32::new(0),
             reads_sent: AtomicU32::new(0),
         }
@@ -134,12 +138,13 @@ pub fn take(counter: &AtomicU32) -> bool {
 #[async_trait]
 impl EventStorePort for FaultyPort {
     async fn append(&self, req: proto::AppendRequest) -> Result<proto::AppendResponse> {
-        if take(&self.drop_requests) {
+        let passed = take(&self.pass_appends);
+        if !passed && take(&self.drop_requests) {
             return Err(Error::from(tonic::Status::unavailable("request dropped")));
         }
         self.appends_sent.fetch_add(1, Ordering::SeqCst);
         let resp = self.inner.append(req).await?;
-        if take(&self.lose_acks) {
+        if !passed && take(&self.lose_acks) {
             return Err(Error::from(tonic::Status::unavailable("ack lost")));
         }
         Ok(resp)
