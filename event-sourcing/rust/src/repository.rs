@@ -214,16 +214,28 @@ where
             .take_while(
                 |(stored, ours)| match (stored.meta.as_ref(), ours.meta.as_ref()) {
                     (Some(s), Some(o)) => {
-                        s.event_id == o.event_id
-                            && s.aggregate_nonce == o.aggregate_nonce
-                            && s.event_type == o.event_type
-                            && stored.payload == ours.payload
+                        same_client_metadata(s, o) && stored.payload == ours.payload
                     }
                     _ => false,
                 },
             )
             .count())
     }
+}
+
+/// Whether a stored event carries exactly the metadata we sent, ignoring
+/// what the store assigns (commit time, global position). This is the same
+/// comparison the store makes for an idempotency key (ADR-028): with
+/// deterministic event ids (`EventContext::with_command_id`) a re-decided
+/// command can repeat ids, nonces and payloads while changing its actor,
+/// headers or time, and that is a different batch, not a lost ack.
+fn same_client_metadata(stored: &proto::EventMetadata, ours: &proto::EventMetadata) -> bool {
+    let scrub = |m: &proto::EventMetadata| proto::EventMetadata {
+        recorded_time_unix_ms: 0,
+        global_nonce: 0,
+        ..m.clone()
+    };
+    scrub(stored) == scrub(ours)
 }
 
 impl<A> EventStoreRepository<A>
@@ -264,11 +276,13 @@ where
         })
     }
 
-    /// Append request for the instance's (non-empty) pending batch.
+    /// Append request for the instance's (non-empty) pending batch, under
+    /// `key` when the caller supplied one.
     fn append_request(
         &self,
         aggregate_id: &str,
         instance: &AggregateInstance<A>,
+        key: Option<String>,
     ) -> Result<proto::AppendRequest> {
         let pending = &instance.uncommitted_events;
         let expected = instance.committed_version();
@@ -286,7 +300,8 @@ where
             expected_aggregate_nonce: expected,
             // Same key on every attempt for this batch; a batch that changed
             // (more events recorded) gets a different key.
-            idempotency_key: format!("esp-rs:{expected}:{count}:{first_id}:{last_id}"),
+            idempotency_key: key
+                .unwrap_or_else(|| format!("esp-rs:{expected}:{count}:{first_id}:{last_id}")),
             events,
         })
     }
@@ -342,6 +357,64 @@ where
     }
 
     async fn save(&self, instance: &mut AggregateInstance<A>) -> Result<()> {
+        self.save_keyed(instance, None).await
+    }
+
+    async fn exists(&self, aggregate_id: &str) -> Result<bool> {
+        let page = self.read_page(aggregate_id, 1, 1).await?;
+        match page.events.first().and_then(|e| e.meta.as_ref()) {
+            Some(meta) => {
+                self.check_type(aggregate_id, meta)?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+}
+
+impl<A> EventStoreRepository<A>
+where
+    A: Aggregate + 'static,
+    A::Event: 'static,
+{
+    /// [`save`](Repository::save) under a caller-supplied idempotency key
+    /// that names the command, instead of a key derived from the pending
+    /// batch.
+    ///
+    /// The store answers a committed key with an identical batch with the
+    /// original ack, and a committed key with a different batch with
+    /// `ALREADY_EXISTS` ([`Error::is_idempotency_key_reused`]): the command
+    /// already ran, nothing is written, and pending events are kept. Record
+    /// the events with [`EventContext::with_command_id`] (and a fixed
+    /// [`EventContext::with_timestamp`]) so that re-deciding the same command
+    /// after a restart produces an identical batch.
+    ///
+    /// Any different batch under a committed `key` is refused, including one
+    /// that shortens or extends it: the key is not reconciled against the
+    /// stream. If an earlier save failed with an unknown outcome and the
+    /// instance has since recorded another command's events, save them under
+    /// that command's key: the stale expected revision is a concurrency
+    /// conflict (the key is still unused), reconciliation clears the
+    /// committed prefix, and the remainder is appended under `key`.
+    ///
+    /// [`EventContext::with_command_id`]: crate::event::EventContext::with_command_id
+    /// [`EventContext::with_timestamp`]: crate::event::EventContext::with_timestamp
+    pub async fn save_with_key(
+        &self,
+        instance: &mut AggregateInstance<A>,
+        key: &str,
+    ) -> Result<()> {
+        if key.is_empty() {
+            return Err(Error::invalid_command("idempotency key must not be empty"));
+        }
+        self.save_keyed(instance, Some(key)).await
+    }
+
+    async fn save_keyed(
+        &self,
+        instance: &mut AggregateInstance<A>,
+        key: Option<&str>,
+    ) -> Result<()> {
         if instance.uncommitted_events.is_empty() {
             return Ok(());
         }
@@ -378,7 +451,12 @@ where
             if instance.uncommitted_events.is_empty() {
                 return Ok(());
             }
-            let request = self.append_request(&aggregate_id, instance)?;
+            // A caller key is used on every pass. A later pass follows a
+            // concurrency conflict, and the store checks the key first
+            // (ADR-028), so the key is still unused: the remainder commits
+            // under the command's own key, and a retry or a re-decision
+            // under that key is recognised.
+            let request = self.append_request(&aggregate_id, instance, key.map(str::to_string))?;
             let expected = request.expected_aggregate_nonce;
             let count = request.events.len() as u64;
             loop {
@@ -393,6 +471,14 @@ where
                         }
                         instance.mark_committed();
                         return Ok(());
+                    }
+                    // A caller key names one command. `ALREADY_EXISTS` under it
+                    // means the key committed a different batch: the command
+                    // already ran, possibly decided differently (fewer or
+                    // more events). That is final; a stream prefix cannot
+                    // tell it apart from a lost ack, so it is not reconciled.
+                    Err(err) if key.is_some() && err.is_idempotency_key_reused() => {
+                        return Err(err);
                     }
                     Err(err)
                         if err.is_concurrency_conflict()
@@ -421,17 +507,6 @@ where
                     Err(err) => return Err(err),
                 }
             }
-        }
-    }
-
-    async fn exists(&self, aggregate_id: &str) -> Result<bool> {
-        let page = self.read_page(aggregate_id, 1, 1).await?;
-        match page.events.first().and_then(|e| e.meta.as_ref()) {
-            Some(meta) => {
-                self.check_type(aggregate_id, meta)?;
-                Ok(true)
-            }
-            None => Ok(false),
         }
     }
 }

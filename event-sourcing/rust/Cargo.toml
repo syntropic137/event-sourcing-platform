@@ -23,7 +23,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # IDs and time
-uuid = { version = "1.0", features = ["v4", "v7", "serde"] }
+uuid = { version = "1.0", features = ["v4", "v5", "v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # gRPC client for event store. The high-level SDK is layered on the
