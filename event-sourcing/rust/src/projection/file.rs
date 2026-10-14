@@ -1,39 +1,4 @@
-//! Durable local [`CheckpointStore`]: checkpoints in one file on disk, for a
-//! process without Postgres (a desktop app, a CLI, a background job). Wrap it
-//! in [`ExternalCheckpoints`](super::ExternalCheckpoints) so an external read
-//! model resumes from where it stopped instead of replaying from position 0.
-//!
-//! # Layout and guarantees
-//!
-//! * One directory per store: `checkpoints.json` (every key's position) and
-//!   `LOCK`. [`FileCheckpointStore::open`] takes an exclusive OS lock on
-//!   `LOCK` for the life of the store, so a second store (in this or another
-//!   process) on the same directory is refused instead of racing it. The OS
-//!   releases the lock when the process exits, including on a crash.
-//! * Every `save` and `delete` rewrites `checkpoints.json` atomically: write
-//!   a temporary file, flush it to disk, rename it over the old one, then
-//!   flush the directory. A crash or power loss leaves the old file or the new
-//!   one, never a torn one. A file that does not parse (or names a key twice)
-//!   is an error at `open`, never a silent reset to zero. Directories `open`
-//!   creates are flushed into their parents too.
-//! * `save` is fenced like [`InMemoryCheckpointStore`](super::InMemoryCheckpointStore):
-//!   a position at or below the stored one fails with
-//!   [`Error::CheckpointFenced`] and writes nothing.
-//! * A write that fails before the rename changes nothing. If only the final
-//!   directory flush fails, the new file is already in place: the store keeps
-//!   the new positions (what is on disk) and returns the error.
-//! * Each write costs one or two `fsync`s, so a checkpoint per event during a
-//!   long catch-up is slow on some disks; the position is what you pay for.
-//! * Windows (any non-Unix target): the rename is not flushed to disk
-//!   separately (std has no directory flush there). A power loss can then
-//!   restore the previous file. For `save` that rolls a checkpoint back and
-//!   redelivers events; handlers behind `ExternalCheckpoints` are idempotent
-//!   by contract. A file is still never torn. A rolled-back `delete` would
-//!   resurrect a position after `rebuild` cleared the read model, skipping
-//!   history, so there `delete` of a stored key is refused: to rebuild,
-//!   remove the directory while no store holds it.
-//!
-//! Requires Rust 1.89+ (`std::fs::File::try_lock`).
+//! Durable local [`CheckpointStore`]; see [`FileCheckpointStore`].
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -98,8 +63,42 @@ impl Inner {
 /// Whether a rename is flushed to disk before `save`/`delete` return.
 const DURABLE_RENAME: bool = cfg!(unix);
 
-/// [`CheckpointStore`] persisted to a local directory. See the
-/// [module docs](self) for the on-disk guarantees.
+/// Durable local [`CheckpointStore`]: checkpoints in one file on disk, for a
+/// process without Postgres (a desktop app, a CLI, a background job). Wrap it
+/// in [`ExternalCheckpoints`](super::ExternalCheckpoints) so an external read
+/// model resumes from where it stopped instead of replaying from position 0.
+///
+/// # Layout and guarantees
+///
+/// * One directory per store: `checkpoints.json` (every key's position) and
+///   `LOCK`. [`FileCheckpointStore::open`] takes an exclusive OS lock on
+///   `LOCK` for the life of the store, so a second store (in this or another
+///   process) on the same directory is refused instead of racing it. The OS
+///   releases the lock when the process exits, including on a crash.
+/// * Every `save` and `delete` rewrites `checkpoints.json` atomically: write
+///   a temporary file, flush it to disk, rename it over the old one, then
+///   flush the directory. A crash or power loss leaves the old file or the new
+///   one, never a torn one. A file that does not parse (or names a key twice)
+///   is an error at `open`, never a silent reset to zero. Directories `open`
+///   creates are flushed into their parents too.
+/// * `save` is fenced like [`InMemoryCheckpointStore`](super::InMemoryCheckpointStore):
+///   a position at or below the stored one fails with
+///   [`Error::CheckpointFenced`] and writes nothing.
+/// * A write that fails before the rename changes nothing. If only the final
+///   directory flush fails, the new file is already in place: the store keeps
+///   the new positions (what is on disk) and returns the error.
+/// * Each write costs one or two `fsync`s, so a checkpoint per event during a
+///   long catch-up is slow on some disks; the position is what you pay for.
+/// * Windows (any non-Unix target): the rename is not flushed to disk
+///   separately (std has no directory flush there). A power loss can then
+///   restore the previous file. For `save` that rolls a checkpoint back and
+///   redelivers events; handlers behind `ExternalCheckpoints` are idempotent
+///   by contract. A file is still never torn. A rolled-back `delete` would
+///   resurrect a position after `rebuild` cleared the read model, skipping
+///   history, so there `delete` of a stored key is refused: to rebuild,
+///   remove the directory while no store holds it.
+///
+/// Requires Rust 1.89+ (`std::fs::File::try_lock`).
 ///
 /// Cheap to clone: clones share the lock, the positions and the file.
 #[derive(Clone)]
