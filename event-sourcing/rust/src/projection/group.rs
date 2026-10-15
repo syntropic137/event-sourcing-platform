@@ -117,8 +117,8 @@ pub struct MemberIdle {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GroupIdleExit {
-    /// One whole sweep processed nothing and moved no checkpoint. One entry
-    /// per runner, in the order they were added.
+    /// One whole sweep processed nothing and no runner's log head changed
+    /// during it. One entry per runner, in the order they were added.
     Idle {
         /// Per-runner totals.
         members: Vec<MemberIdle>,
