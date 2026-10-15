@@ -373,3 +373,100 @@ async fn a_supervised_group_reports_health_and_shuts_down_together() {
         );
     }
 }
+
+/// Completes `XWork` entries; on its second pass ever it also appends a
+/// `VDone` event for the view while reporting 0 work.
+struct SilentWriter {
+    client: EventStoreClient,
+    tenant: String,
+    store: Arc<TodoStore>,
+    key: CheckpointKey,
+    passes: AtomicU32,
+}
+
+#[async_trait]
+impl LiveProcessor for SilentWriter {
+    async fn process_pending(&self) -> Result<usize> {
+        let pass = self
+            .passes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        let mut n = 0;
+        for (id, nonce) in self.store.state(&self.key).pending {
+            append(&self.client, &self.tenant, &id, nonce + 1, "XDone").await?;
+            n += 1;
+        }
+        if pass == 2 {
+            append(&self.client, &self.tenant, "v-1", 1, "VDone").await?;
+        }
+        Ok(n)
+    }
+}
+
+#[tokio::test]
+async fn a_processor_that_writes_but_reports_nothing_does_not_end_the_drain_early() {
+    let f = fixture().await;
+    append(&f.client, &f.tenant, "1", 1, "XWork").await.unwrap();
+    let count = Arc::new(CountStore::new());
+    let view = ProjectionRunner::new(f.port.clone(), count.clone(), DoneCount, &f.tenant);
+    let store = Arc::new(TodoStore::new());
+    let runner = ProjectionRunner::new(
+        f.port.clone(),
+        store.clone(),
+        TodoList {
+            name: "x-todo",
+            work: "XWork",
+            done: "XDone",
+        },
+        &f.tenant,
+    );
+    let writer = Arc::new(SilentWriter {
+        client: f.client.clone(),
+        tenant: f.tenant.clone(),
+        store,
+        key: runner.key().clone(),
+        passes: AtomicU32::new(0),
+    });
+    let mut group = RunnerGroup::new()
+        .with(view)
+        .with(runner.with_live_processor(writer));
+
+    let exit = group
+        .run_until_idle(CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert!(matches!(exit, GroupIdleExit::Idle { .. }), "{exit:?}");
+    assert_eq!(
+        count
+            .state(&CheckpointKey::new(&f.tenant, "done-count", 1))
+            .0,
+        2,
+        "the view saw XDone and the silently written VDone"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_group_honours_cancellation() {
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+
+    let exit = RunnerGroup::new().run_until_idle(cancel).await.unwrap();
+
+    assert_eq!(exit, GroupIdleExit::Cancelled);
+}
+
+#[tokio::test]
+async fn shutdown_cancels_the_group_not_the_callers_token() {
+    let f = fixture().await;
+    let built = build(&f, 0);
+    let caller = CancellationToken::new();
+    let running = built
+        .group
+        .spawn_supervised(caller.clone(), BackoffPolicy::default());
+
+    let exits = running.shutdown().await;
+
+    assert_eq!(exits.len(), 3);
+    assert!(!caller.is_cancelled(), "the caller's token is untouched");
+}

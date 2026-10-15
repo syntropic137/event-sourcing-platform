@@ -12,7 +12,7 @@
 //!
 //! * **Batch** ([`RunnerGroup::run_until_idle`]): sweep every runner's
 //!   [`ProjectionRunner::run_until_idle`] until one whole sweep processes
-//!   nothing and moves no runner's checkpoint. That fixed point covers
+//!   nothing and no event is appended to any runner's log while it runs. That fixed point covers
 //!   automations that feed each other (A's command creates work for B, B's for
 //!   A), which one pass over the runners cannot prove.
 //! * **Live** ([`RunnerGroup::spawn_supervised`]): one
@@ -62,6 +62,7 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 trait GroupMember: Send {
     fn name(&self) -> String;
     fn run_until_idle(&mut self, cancel: CancellationToken) -> BoxFuture<'_, Result<IdleExit>>;
+    fn head(&self) -> BoxFuture<'_, Result<u64>>;
     fn spawn_supervised(
         self: Box<Self>,
         cancel: CancellationToken,
@@ -80,6 +81,10 @@ where
 
     fn run_until_idle(&mut self, cancel: CancellationToken) -> BoxFuture<'_, Result<IdleExit>> {
         Box::pin(ProjectionRunner::run_until_idle(self, cancel))
+    }
+
+    fn head(&self) -> BoxFuture<'_, Result<u64>> {
+        Box::pin(ProjectionRunner::head(self))
     }
 
     fn spawn_supervised(
@@ -204,8 +209,10 @@ impl RunnerGroup {
     /// Each sweep runs every runner's
     /// [`run_until_idle`](ProjectionRunner::run_until_idle) in order. The
     /// group is at rest after a sweep in which no processor took anything and
-    /// no runner's checkpoint moved: nothing a runner did in that sweep could
-    /// have created work for another. An error from any runner is returned at
+    /// no runner's log head moved (checked before and after the sweep): nothing
+    /// was appended during it, by these processors or anyone else, and every
+    /// runner caught up to that head inside it. A processor that writes events
+    /// but reports 0 is therefore still caught. An error from any runner is returned at
     /// once; every checkpoint stays where it committed, so the next call
     /// resumes. Runners can be swept again by later calls.
     pub async fn run_until_idle(&mut self, cancel: CancellationToken) -> Result<GroupIdleExit> {
@@ -219,8 +226,18 @@ impl RunnerGroup {
                 passes: 0,
             })
             .collect();
-        let mut previous: Option<Vec<u64>> = None;
         for sweep in 1..=self.max_sweeps() {
+            if cancel.is_cancelled() {
+                return Ok(GroupIdleExit::Cancelled);
+            }
+            // The log head each runner reads, before the sweep. If no runner's
+            // head moved by the end of the sweep, nothing was appended during
+            // it (by these processors or anyone else), and every runner caught
+            // up to that same head inside the sweep.
+            let before = self.heads(&cancel).await?;
+            let Some(before) = before else {
+                return Ok(GroupIdleExit::Cancelled);
+            };
             let mut took = 0usize;
             for (member, total) in self.members.iter_mut().zip(members.iter_mut()) {
                 match member.run_until_idle(cancel.clone()).await? {
@@ -243,17 +260,31 @@ impl RunnerGroup {
                     }
                 }
             }
-            let positions: Vec<u64> = members.iter().map(|m| m.position).collect();
-            let still = previous.as_ref() == Some(&positions);
-            if took == 0 && (still || self.members.len() <= 1) {
+            let Some(after) = self.heads(&cancel).await? else {
+                return Ok(GroupIdleExit::Cancelled);
+            };
+            if took == 0 && after == before {
                 return Ok(GroupIdleExit::Idle {
                     members,
                     sweeps: sweep,
                 });
             }
-            previous = Some(positions);
         }
         Ok(GroupIdleExit::SweepLimit { members })
+    }
+
+    /// Every runner's tenant log head, or `None` if cancelled first.
+    async fn heads(&self, cancel: &CancellationToken) -> Result<Option<Vec<u64>>> {
+        let mut heads = Vec::with_capacity(self.members.len());
+        for member in &self.members {
+            let head = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Ok(None),
+                head = member.head() => head?,
+            };
+            heads.push(head);
+        }
+        Ok(Some(heads))
     }
 
     /// Live mode: spawn one [`run_supervised`](ProjectionRunner::run_supervised)
@@ -264,6 +295,8 @@ impl RunnerGroup {
         cancel: CancellationToken,
         policy: BackoffPolicy,
     ) -> RunningGroup {
+        // The group's own token: shutdown cancels these runners, never the caller's.
+        let cancel = cancel.child_token();
         let members = self
             .members
             .into_iter()
