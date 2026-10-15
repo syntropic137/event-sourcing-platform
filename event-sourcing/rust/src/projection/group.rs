@@ -178,6 +178,10 @@ impl RunnerGroup {
     /// do on the way; putting automations before the views that read their
     /// events usually needs fewer sweeps. Rest itself is always checked the
     /// same way.
+    ///
+    /// The projection must be `Sync` (as for spawning a single runner's
+    /// `run_supervised` on a multi-threaded runtime), so the group's futures
+    /// are `Send`.
     pub fn with<P, S>(mut self, runner: ProjectionRunner<P, S>) -> Self
     where
         P: CheckpointedProjection<S> + Sync + 'static,
