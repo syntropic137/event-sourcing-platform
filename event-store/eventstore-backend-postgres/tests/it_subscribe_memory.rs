@@ -11,8 +11,8 @@
 //! at a time). This test pins the outcome the incident was about: 8
 //! subscribers replaying 50k events of 1 KiB each at the same time, with the
 //! production page size, must not grow the process's peak RSS by more than
-//! 64 MiB. Holding the full history costs about 50 MiB per subscriber
-//! (~400 MiB for 8); holding one page of 1000 costs about 1 MiB each.
+//! 64 MiB. Measured on a debug build: about 35-39 MiB with paging, and
+//! about 1.2 GiB with the page bound removed or on the parent of #369.
 //!
 //! Peak RSS comes from `/proc/self/status` (`VmHWM`), so the test is
 //! Linux-only. It is the only test in this binary, so no other test's
