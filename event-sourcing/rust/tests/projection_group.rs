@@ -562,13 +562,20 @@ async fn a_panicked_runner_task_is_reported_failed() {
     let running = RunnerGroup::new()
         .with(ProjectionRunner::new(
             f.port.clone(),
-            store,
+            store.clone(),
             Exploding,
             &f.tenant,
         ))
         .spawn_supervised(CancellationToken::new(), BackoffPolicy::default())
         .expect("inside a runtime");
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The task has died once the runner it owned released the store.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while Arc::strong_count(&store) > 1 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the handler ran and the task died");
 
     let exits = running.shutdown().await;
 
@@ -712,5 +719,103 @@ async fn a_silent_write_into_another_tenant_does_not_end_the_drain_early() {
         count.state(&CheckpointKey::new(&other, "done-count", 1)).0,
         1,
         "the other tenant's view saw the write"
+    );
+}
+
+/// Completes `XWork`; on its third pass (inside the quiet second sweep) it
+/// lets an independent writer append, and waits until that write has landed.
+struct Handoff {
+    client: EventStoreClient,
+    tenant: String,
+    store: Arc<TodoStore>,
+    key: CheckpointKey,
+    passes: AtomicU32,
+    go: Arc<tokio::sync::Notify>,
+    done: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl LiveProcessor for Handoff {
+    async fn process_pending(&self) -> Result<usize> {
+        let pass = self
+            .passes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        let mut n = 0;
+        for (id, nonce) in self.store.state(&self.key).pending {
+            append(&self.client, &self.tenant, &id, nonce + 1, "XDone").await?;
+            n += 1;
+        }
+        if pass == 3 {
+            self.go.notify_one();
+            self.done.notified().await;
+        }
+        Ok(n)
+    }
+}
+
+/// An independent writer (not a processor in the group) appends during a
+/// quiet sweep: the group must not rest until the view has seen it.
+#[tokio::test]
+async fn a_concurrent_external_write_during_a_quiet_sweep_is_caught() {
+    let f = fixture().await;
+    append(&f.client, &f.tenant, "x-1", 1, "XWork")
+        .await
+        .unwrap();
+    let count = Arc::new(CountStore::new());
+    let view = ProjectionRunner::new(f.port.clone(), count.clone(), DoneCount, &f.tenant)
+        .with_feed_prefix("v-");
+    let store = Arc::new(TodoStore::new());
+    let runner = ProjectionRunner::new(
+        f.port.clone(),
+        store.clone(),
+        TodoList {
+            name: "x-todo",
+            work: "XWork",
+            done: "XDone",
+        },
+        &f.tenant,
+    )
+    .with_feed_prefix("x-");
+    let go = Arc::new(tokio::sync::Notify::new());
+    let done = Arc::new(tokio::sync::Notify::new());
+    let processor = Arc::new(Handoff {
+        client: f.client.clone(),
+        tenant: f.tenant.clone(),
+        store,
+        key: runner.key().clone(),
+        passes: AtomicU32::new(0),
+        go: go.clone(),
+        done: done.clone(),
+    });
+    let writer_client = f.client.clone();
+    let writer_tenant = f.tenant.clone();
+    let writer = tokio::spawn(async move {
+        go.notified().await;
+        append(&writer_client, &writer_tenant, "v-1", 1, "VDone")
+            .await
+            .expect("external write");
+        done.notify_one();
+    });
+    let mut group = RunnerGroup::new()
+        .with(view)
+        .with(runner.with_live_processor(processor));
+
+    let exit = tokio::time::timeout(
+        Duration::from_secs(10),
+        group.run_until_idle(CancellationToken::new()),
+    )
+    .await
+    .expect("reaches rest")
+    .unwrap();
+    writer.await.expect("writer task");
+
+    assert!(matches!(exit, GroupIdleExit::Idle { .. }), "{exit:?}");
+    assert_eq!(
+        count
+            .state(&CheckpointKey::new(&f.tenant, "done-count", 1).with_feed("v-"))
+            .0,
+        1,
+        "the view saw the external write"
     );
 }
