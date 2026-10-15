@@ -49,9 +49,9 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     BackoffPolicy, CheckpointedProjection, IdleExit, ProjectionRunner, ProjectionStore, RunExit,
-    RunnerHealth,
+    RunnerHealth, RunnerState,
 };
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// Default bound on sweeps in one [`RunnerGroup::run_until_idle`] call.
 const DEFAULT_MAX_SWEEPS: u32 = 100;
@@ -67,6 +67,7 @@ trait GroupMember: Send + Sync {
         self: Box<Self>,
         cancel: CancellationToken,
         policy: BackoffPolicy,
+        runtime: &tokio::runtime::Handle,
     ) -> RunningMember;
 }
 
@@ -91,11 +92,12 @@ where
         self: Box<Self>,
         cancel: CancellationToken,
         policy: BackoffPolicy,
+        runtime: &tokio::runtime::Handle,
     ) -> RunningMember {
         let mut runner = *self;
         let name = runner.key().to_string();
         let health = runner.health();
-        let task = tokio::spawn(async move { runner.run_supervised(cancel, policy).await });
+        let task = runtime.spawn(async move { runner.run_supervised(cancel, policy).await });
         RunningMember { name, health, task }
     }
 }
@@ -247,9 +249,11 @@ impl RunnerGroup {
                         passes,
                     } => {
                         total.position = position;
-                        total.processed += processed;
-                        total.passes += passes;
-                        took += processed;
+                        // Saturating: counts are reports, and a wrap must never
+                        // turn work into an apparent zero.
+                        total.processed = total.processed.saturating_add(processed);
+                        total.passes = total.passes.saturating_add(passes);
+                        took = took.saturating_add(processed);
                     }
                     IdleExit::Cancelled { .. } => return Ok(GroupIdleExit::Cancelled),
                     IdleExit::PassLimit { processed, .. } => {
@@ -288,21 +292,30 @@ impl RunnerGroup {
     }
 
     /// Live mode: spawn one [`run_supervised`](ProjectionRunner::run_supervised)
-    /// task per runner on the current Tokio runtime, each with a child of
-    /// `cancel`. Must be called from within a Tokio runtime.
+    /// task per runner on the current Tokio runtime, each under a child of a
+    /// group-owned child of `cancel`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] when called outside a Tokio runtime; nothing is
+    /// spawned.
     pub fn spawn_supervised(
         self,
         cancel: CancellationToken,
         policy: BackoffPolicy,
-    ) -> RunningGroup {
-        // The group's own token: shutdown cancels these runners, never the caller's.
+    ) -> Result<RunningGroup> {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+            Error::Config("RunnerGroup::spawn_supervised needs a Tokio runtime".into())
+        })?;
+        // The group's own token: shutdown and drop cancel these runners, never
+        // the caller's.
         let cancel = cancel.child_token();
         let members = self
             .members
             .into_iter()
-            .map(|m| m.spawn_supervised(cancel.child_token(), policy.clone()))
+            .map(|m| m.spawn_supervised(cancel.child_token(), policy.clone(), &runtime))
             .collect();
-        RunningGroup { members, cancel }
+        Ok(RunningGroup { members, cancel })
     }
 }
 
@@ -312,11 +325,21 @@ struct RunningMember {
     task: JoinHandle<Result<RunExit>>,
 }
 
-/// A [`RunnerGroup`] running live. Dropping it does not stop the runners;
-/// call [`shutdown`](Self::shutdown) (or cancel the token it was spawned with).
+/// A [`RunnerGroup`] running live.
+///
+/// [`shutdown`](Self::shutdown) stops the runners and reports how each ended.
+/// Dropping the group without it (or dropping an unfinished `shutdown`)
+/// cancels the group's token, so every runner still stops cooperatively,
+/// between events, exactly as on shutdown; only the exits are not reported.
 pub struct RunningGroup {
     members: Vec<RunningMember>,
     cancel: CancellationToken,
+}
+
+impl Drop for RunningGroup {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
 }
 
 /// How one runner of a [`RunningGroup`] ended.
@@ -324,7 +347,9 @@ pub struct RunningGroup {
 pub struct MemberExit {
     /// The runner's checkpoint key, rendered.
     pub name: String,
-    /// Its health when it ended.
+    /// Its health when it ended. For a task that panicked or was aborted,
+    /// `state` is [`RunnerState::Failed`] and `last_error` names the join
+    /// failure.
     pub health: RunnerHealth,
     /// What `run_supervised` returned. A task that panicked or was aborted is
     /// `Err(Error::Repository)` naming the join failure.
@@ -343,17 +368,22 @@ impl RunningGroup {
     /// Cancel every runner (each finishes or rolls back its in-flight event,
     /// and gives an in-flight processor pass its shutdown grace), wait for all
     /// of them, and return how each ended, in the order they were added.
-    pub async fn shutdown(self) -> Vec<MemberExit> {
+    pub async fn shutdown(mut self) -> Vec<MemberExit> {
         self.cancel.cancel();
-        let mut exits = Vec::with_capacity(self.members.len());
-        for RunningMember { name, health, task } in self.members {
-            let result = match task.await {
+        let members = std::mem::take(&mut self.members);
+        let mut exits = Vec::with_capacity(members.len());
+        for RunningMember { name, health, task } in members {
+            let joined = task.await;
+            let mut health = health.borrow().clone();
+            let result = match joined {
                 Ok(result) => result,
-                Err(join) => Err(crate::error::Error::Repository(anyhow::anyhow!(
-                    "runner task for {name} ended abnormally: {join}"
-                ))),
+                Err(join) => {
+                    let message = format!("runner task for {name} ended abnormally: {join}");
+                    health.state = RunnerState::Failed;
+                    health.last_error = Some(message.clone());
+                    Err(Error::Repository(anyhow::anyhow!(message)))
+                }
             };
-            let health = health.borrow().clone();
             exits.push(MemberExit {
                 name,
                 health,

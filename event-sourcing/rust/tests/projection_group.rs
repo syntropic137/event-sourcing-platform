@@ -20,7 +20,7 @@ use event_sourcing_rust::error::{Error, Result};
 use event_sourcing_rust::projection::{
     BackoffPolicy, CheckpointKey, CheckpointedProjection, DispatchContext, GroupIdleExit,
     InMemoryProjectionStore, InMemoryTx, LiveProcessor, ProjectionRunner, RecordedEvent, RunExit,
-    RunnerGroup,
+    RunnerGroup, RunnerState,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -343,7 +343,8 @@ async fn a_supervised_group_reports_health_and_shuts_down_together() {
     let count_store = built.count.clone();
     let running = built
         .group
-        .spawn_supervised(CancellationToken::new(), BackoffPolicy::default());
+        .spawn_supervised(CancellationToken::new(), BackoffPolicy::default())
+        .expect("inside a runtime");
 
     append(&f.client, &f.tenant, "1", 1, "AWork").await.unwrap();
     let key = CheckpointKey::new(&f.tenant, "done-count", 1);
@@ -483,10 +484,233 @@ async fn shutdown_cancels_the_group_not_the_callers_token() {
     let caller = CancellationToken::new();
     let running = built
         .group
-        .spawn_supervised(caller.clone(), BackoffPolicy::default());
+        .spawn_supervised(caller.clone(), BackoffPolicy::default())
+        .expect("inside a runtime");
 
     let exits = running.shutdown().await;
 
     assert_eq!(exits.len(), 3);
     assert!(!caller.is_cancelled(), "the caller's token is untouched");
+}
+
+// ---------------------------------------------------------------------------
+// Release-gate regressions (v0.22.0)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spawn_supervised_outside_a_runtime_is_an_error_not_a_panic() {
+    let group = RunnerGroup::new();
+
+    let err = group
+        .spawn_supervised(CancellationToken::new(), BackoffPolicy::default())
+        .err()
+        .expect("refused");
+
+    assert!(matches!(err, Error::Config(_)), "{err}");
+}
+
+#[tokio::test]
+async fn dropping_a_running_group_stops_its_runners() {
+    let f = fixture().await;
+    let Built { group, count } = build(&f, 0);
+    let running = group
+        .spawn_supervised(CancellationToken::new(), BackoffPolicy::default())
+        .expect("inside a runtime");
+    assert!(Arc::strong_count(&count) > 1, "a runner holds the store");
+
+    drop(running);
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while Arc::strong_count(&count) > 1 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the runner task ended and released its store");
+}
+
+/// A view whose handler panics: the runner task itself dies.
+struct Exploding;
+
+#[async_trait]
+impl CheckpointedProjection<CountStore> for Exploding {
+    fn name(&self) -> &str {
+        "exploding"
+    }
+    fn version(&self) -> u32 {
+        1
+    }
+    async fn handle(
+        &mut self,
+        _tx: &mut InMemoryTx<Count>,
+        _event: &RecordedEvent,
+        _ctx: &DispatchContext,
+    ) -> Result<()> {
+        panic!("handler bug");
+    }
+    async fn reset(&mut self, tx: &mut InMemoryTx<Count>, _key: &CheckpointKey) -> Result<()> {
+        tx.state = Count::default();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_panicked_runner_task_is_reported_failed() {
+    let f = fixture().await;
+    append(&f.client, &f.tenant, "1", 1, "AWork").await.unwrap();
+    let store = Arc::new(CountStore::new());
+    let running = RunnerGroup::new()
+        .with(ProjectionRunner::new(
+            f.port.clone(),
+            store,
+            Exploding,
+            &f.tenant,
+        ))
+        .spawn_supervised(CancellationToken::new(), BackoffPolicy::default())
+        .expect("inside a runtime");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let exits = running.shutdown().await;
+
+    assert_eq!(exits.len(), 1);
+    let exit = &exits[0];
+    assert!(exit.result.is_err(), "{:?}", exit.result);
+    assert_eq!(exit.health.state, RunnerState::Failed);
+    assert!(
+        exit.health
+            .last_error
+            .as_deref()
+            .is_some_and(|e| e.contains("handler bug") || e.contains("abnormally")),
+        "{:?}",
+        exit.health.last_error
+    );
+}
+
+/// Holds its pass until cancelled.
+struct Stuck {
+    started: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl LiveProcessor for Stuck {
+    async fn process_pending(&self) -> Result<usize> {
+        self.started.notify_one();
+        std::future::pending::<()>().await;
+        Ok(0)
+    }
+}
+
+#[tokio::test]
+async fn cancelling_in_the_middle_of_a_sweep_returns_cancelled() {
+    let f = fixture().await;
+    append(&f.client, &f.tenant, "1", 1, "AWork").await.unwrap();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let store = Arc::new(TodoStore::new());
+    let runner = ProjectionRunner::new(
+        f.port.clone(),
+        store,
+        TodoList {
+            name: "stuck-todo",
+            work: "AWork",
+            done: "ADone",
+        },
+        &f.tenant,
+    )
+    .with_live_processor(Arc::new(Stuck {
+        started: started.clone(),
+    }))
+    .with_processor_shutdown_grace(Duration::from_millis(50));
+    let mut group = RunnerGroup::new().with(runner);
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    tokio::spawn(async move {
+        started.notified().await;
+        trigger.cancel();
+    });
+
+    let exit = tokio::time::timeout(Duration::from_secs(10), group.run_until_idle(cancel))
+        .await
+        .expect("returns promptly")
+        .unwrap();
+
+    assert_eq!(exit, GroupIdleExit::Cancelled);
+}
+
+/// Completes `XWork` in its own tenant; on its third pass it writes a `VDone`
+/// into ANOTHER tenant, while reporting 0.
+struct CrossTenantWriter {
+    client: EventStoreClient,
+    tenant: String,
+    other_tenant: String,
+    store: Arc<TodoStore>,
+    key: CheckpointKey,
+    passes: AtomicU32,
+}
+
+#[async_trait]
+impl LiveProcessor for CrossTenantWriter {
+    async fn process_pending(&self) -> Result<usize> {
+        let pass = self
+            .passes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        let mut n = 0;
+        for (id, nonce) in self.store.state(&self.key).pending {
+            append(&self.client, &self.tenant, &id, nonce + 1, "XDone").await?;
+            n += 1;
+        }
+        if pass == 3 {
+            append(&self.client, &self.other_tenant, "v-1", 1, "VDone").await?;
+        }
+        Ok(n)
+    }
+}
+
+/// Runners on different tenants: a silent write into the other tenant during
+/// a quiet sweep still keeps the group sweeping until that tenant's view saw
+/// it (heads are compared per runner, so per tenant).
+#[tokio::test]
+async fn a_silent_write_into_another_tenant_does_not_end_the_drain_early() {
+    let f = fixture().await;
+    let other = unique_tenant();
+    append(&f.client, &f.tenant, "x-1", 1, "XWork")
+        .await
+        .unwrap();
+    let count = Arc::new(CountStore::new());
+    let view = ProjectionRunner::new(f.port.clone(), count.clone(), DoneCount, &other);
+    let store = Arc::new(TodoStore::new());
+    let runner = ProjectionRunner::new(
+        f.port.clone(),
+        store.clone(),
+        TodoList {
+            name: "x-todo",
+            work: "XWork",
+            done: "XDone",
+        },
+        &f.tenant,
+    );
+    let writer = Arc::new(CrossTenantWriter {
+        client: f.client.clone(),
+        tenant: f.tenant.clone(),
+        other_tenant: other.clone(),
+        store,
+        key: runner.key().clone(),
+        passes: AtomicU32::new(0),
+    });
+    let mut group = RunnerGroup::new()
+        .with(view)
+        .with(runner.with_live_processor(writer.clone()));
+
+    let exit = group
+        .run_until_idle(CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert!(matches!(exit, GroupIdleExit::Idle { .. }), "{exit:?}");
+    assert!(writer.passes.load(std::sync::atomic::Ordering::SeqCst) >= 3);
+    assert_eq!(
+        count.state(&CheckpointKey::new(&other, "done-count", 1)).0,
+        1,
+        "the other tenant's view saw the write"
+    );
 }
