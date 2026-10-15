@@ -59,7 +59,7 @@ const DEFAULT_MAX_SWEEPS: u32 = 100;
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// A [`ProjectionRunner`] with its projection and store types erased.
-trait GroupMember: Send {
+trait GroupMember: Send + Sync {
     fn name(&self) -> String;
     fn run_until_idle(&mut self, cancel: CancellationToken) -> BoxFuture<'_, Result<IdleExit>>;
     fn head(&self) -> BoxFuture<'_, Result<u64>>;

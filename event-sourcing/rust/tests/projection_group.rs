@@ -374,8 +374,9 @@ async fn a_supervised_group_reports_health_and_shuts_down_together() {
     }
 }
 
-/// Completes `XWork` entries; on its second pass ever it also appends a
-/// `VDone` event for the view while reporting 0 work.
+/// Completes `XWork` entries. On its third pass ever (the first pass of the
+/// second sweep, a sweep that reports no work) it also appends a `VDone` for
+/// the view, outside its own feed, while reporting 0.
 struct SilentWriter {
     client: EventStoreClient,
     tenant: String,
@@ -396,19 +397,26 @@ impl LiveProcessor for SilentWriter {
             append(&self.client, &self.tenant, &id, nonce + 1, "XDone").await?;
             n += 1;
         }
-        if pass == 2 {
+        if pass == 3 {
             append(&self.client, &self.tenant, "v-1", 1, "VDone").await?;
         }
         Ok(n)
     }
 }
 
+/// The false-rest case: both runners have feeds, so the silent write moves
+/// neither runner's checkpoint in the sweep it happens in. Comparing
+/// checkpoints between sweeps would declare rest there with `VDone` unseen;
+/// the group checks the log head instead.
 #[tokio::test]
-async fn a_processor_that_writes_but_reports_nothing_does_not_end_the_drain_early() {
+async fn a_silent_write_in_a_quiet_sweep_does_not_end_the_drain_early() {
     let f = fixture().await;
-    append(&f.client, &f.tenant, "1", 1, "XWork").await.unwrap();
+    append(&f.client, &f.tenant, "x-1", 1, "XWork")
+        .await
+        .unwrap();
     let count = Arc::new(CountStore::new());
-    let view = ProjectionRunner::new(f.port.clone(), count.clone(), DoneCount, &f.tenant);
+    let view = ProjectionRunner::new(f.port.clone(), count.clone(), DoneCount, &f.tenant)
+        .with_feed_prefix("v-");
     let store = Arc::new(TodoStore::new());
     let runner = ProjectionRunner::new(
         f.port.clone(),
@@ -419,7 +427,8 @@ async fn a_processor_that_writes_but_reports_nothing_does_not_end_the_drain_earl
             done: "XDone",
         },
         &f.tenant,
-    );
+    )
+    .with_feed_prefix("x-");
     let writer = Arc::new(SilentWriter {
         client: f.client.clone(),
         tenant: f.tenant.clone(),
@@ -429,7 +438,7 @@ async fn a_processor_that_writes_but_reports_nothing_does_not_end_the_drain_earl
     });
     let mut group = RunnerGroup::new()
         .with(view)
-        .with(runner.with_live_processor(writer));
+        .with(runner.with_live_processor(writer.clone()));
 
     let exit = group
         .run_until_idle(CancellationToken::new())
@@ -437,13 +446,24 @@ async fn a_processor_that_writes_but_reports_nothing_does_not_end_the_drain_earl
         .unwrap();
 
     assert!(matches!(exit, GroupIdleExit::Idle { .. }), "{exit:?}");
+    assert!(
+        writer.passes.load(std::sync::atomic::Ordering::SeqCst) >= 3,
+        "the silent write happened"
+    );
     assert_eq!(
         count
-            .state(&CheckpointKey::new(&f.tenant, "done-count", 1))
+            .state(&CheckpointKey::new(&f.tenant, "done-count", 1).with_feed("v-"))
             .0,
-        2,
-        "the view saw XDone and the silently written VDone"
+        1,
+        "the view saw the silently written VDone"
     );
+}
+
+/// A drain future can be spawned.
+#[allow(dead_code)]
+fn run_until_idle_is_send(group: &mut RunnerGroup) {
+    fn assert_send<T: Send>(_: T) {}
+    assert_send(group.run_until_idle(CancellationToken::new()));
 }
 
 #[tokio::test]
