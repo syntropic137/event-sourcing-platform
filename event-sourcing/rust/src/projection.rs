@@ -92,12 +92,14 @@ use crate::wire;
 
 mod drain;
 mod file;
+mod group;
 #[cfg(feature = "postgres")]
 mod postgres;
 mod supervisor;
 use drain::Drain;
 pub use drain::ProcessorPanicPolicy;
 pub use file::FileCheckpointStore;
+pub use group::{GroupIdleExit, MemberExit, MemberIdle, RunnerGroup, RunningGroup};
 #[cfg(feature = "postgres")]
 pub use postgres::PostgresProjectionStore;
 pub use supervisor::{BackoffPolicy, RunnerHealth, RunnerState};
