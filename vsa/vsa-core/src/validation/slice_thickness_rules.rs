@@ -78,7 +78,7 @@ fn imported_segments(slice: &Slice) -> HashSet<String> {
 
 fn command_slices(ctx: &ValidationContext) -> Result<Vec<Slice>> {
     let scanner = SliceScanner::for_config(&ctx.config, &ctx.root);
-    Ok(scanner.scan()?.into_iter().filter(|s| s.slice_type == SliceType::Command).collect())
+    Ok(scanner.scan()?.into_iter().filter(|s| s.has_pattern(&SliceType::Command)).collect())
 }
 
 /// VSA034: a command slice must reach the domain.

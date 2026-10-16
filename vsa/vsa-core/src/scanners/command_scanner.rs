@@ -3,8 +3,9 @@
 //! Scans for command files and extracts basic metadata.
 
 use crate::config::{CommandConfig, FilenameConvention};
-use crate::domain::Command;
+use crate::domain::{Command, CommandField};
 use crate::error::Result;
+use crate::scanners::rust_source::{is_optional_type, rust_enum_variants};
 use crate::scanners::stem_matches_suffix;
 use std::fs;
 use std::path::Path;
@@ -58,9 +59,7 @@ impl<'a> CommandScanner<'a> {
             } else if path.is_file() {
                 if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
                     if self.matches_pattern(file_name) {
-                        if let Some(command) = self.parse_command(&path, file_name)? {
-                            commands.push(command);
-                        }
+                        commands.extend(self.parse_command(&path, file_name)?);
                     }
                 }
             }
@@ -83,8 +82,9 @@ impl<'a> CommandScanner<'a> {
         stem_matches_suffix(name_without_ext, "Command", &self.filename_convention)
     }
 
-    /// Parse command metadata from a file
-    fn parse_command(&self, file_path: &Path, file_name: &str) -> Result<Option<Command>> {
+    /// Parse command metadata from a file: one command per variant when a Rust
+    /// file declares a `*Command` enum, else one command named after the file.
+    fn parse_command(&self, file_path: &Path, file_name: &str) -> Result<Vec<Command>> {
         // Extract command name from file name
         let name = self.extract_command_name(file_name)?;
 
@@ -92,15 +92,39 @@ impl<'a> CommandScanner<'a> {
         let content = fs::read_to_string(file_path)?;
         let has_aggregate_id = content.contains("aggregateId") || content.contains("aggregate_id");
 
-        // For now, we create a basic command without fields
-        // Fields will be populated by AST parser in Milestone 4
-        Ok(Some(Command {
+        if file_name.ends_with(".rs") {
+            let variants = rust_enum_variants(&content, "Command");
+            if !variants.is_empty() {
+                return Ok(variants
+                    .into_iter()
+                    .map(|(qualified, variant)| Command {
+                        name: qualified,
+                        context: None,
+                        file_path: file_path.to_path_buf(),
+                        has_aggregate_id,
+                        fields: variant
+                            .fields
+                            .into_iter()
+                            .map(|(name, field_type)| CommandField {
+                                required: !is_optional_type(&field_type),
+                                name,
+                                field_type,
+                                line_number: variant.line,
+                            })
+                            .collect(),
+                    })
+                    .collect());
+            }
+        }
+
+        // One command per file; fields are not read for other languages yet.
+        Ok(vec![Command {
             name,
             context: None, // Will be set by domain scanner when scanning contexts
             file_path: file_path.to_path_buf(),
             has_aggregate_id,
             fields: Vec::new(),
-        }))
+        }])
     }
 
     /// Extract command name from file name
@@ -234,7 +258,7 @@ mod tests {
         let config = create_test_config();
         let scanner = CommandScanner::new(&config, root);
 
-        let command = scanner.parse_command(&file_path, "CreateTaskCommand.ts").unwrap().unwrap();
+        let command = scanner.parse_command(&file_path, "CreateTaskCommand.ts").unwrap().remove(0);
 
         assert_eq!(command.name, "CreateTaskCommand");
         assert!(command.has_aggregate_id);
@@ -251,7 +275,7 @@ mod tests {
         let config = create_test_config();
         let scanner = CommandScanner::new(&config, root);
 
-        let command = scanner.parse_command(&file_path, "SomeCommand.ts").unwrap().unwrap();
+        let command = scanner.parse_command(&file_path, "SomeCommand.ts").unwrap().remove(0);
 
         assert_eq!(command.name, "SomeCommand");
         assert!(!command.has_aggregate_id);

@@ -137,8 +137,37 @@ impl<'a> AggregateScanner<'a> {
             } else {
                 // Classify as entity or value object based on content
                 let class_name = self.extract_class_name(file_name);
+                // Rust: an entity is a struct with an `id` / `*_id` field, read
+                // from code only, so helper files (decide, replay) and doc
+                // comments do not count.
+                // Other Rust files still go through the value-object reading below.
+                let (content, rust_entity) = if file_name.ends_with(".rs") {
+                    let code = crate::scanners::rust_source::rust_code_only(&content);
+                    let identity = rust_identity_field(&code);
+                    (code, Some(identity))
+                } else {
+                    (content, None)
+                };
 
-                if self.is_entity(&content) {
+                if let Some(Some(identity_field)) = rust_entity {
+                    entities.push(AggregateEntity {
+                        name: class_name,
+                        identity_field: Some(identity_field),
+                        file_path: path,
+                        line_count,
+                    });
+                } else if rust_entity.is_some() {
+                    // Rust: a struct without an identity is a value object; a
+                    // file of functions only (decide, replay) is neither.
+                    if rust_declares_struct(&content) {
+                        value_objects.push(AggregateValueObject {
+                            name: class_name,
+                            file_path: path,
+                            is_immutable: true,
+                            line_count,
+                        });
+                    }
+                } else if self.is_entity(&content) {
                     let identity_field = self.detect_identity_field(&content);
                     entities.push(AggregateEntity {
                         name: class_name,
@@ -335,10 +364,90 @@ impl<'a> AggregateScanner<'a> {
     }
 }
 
+/// The identity field of the first Rust struct in `code` (comments, literals
+/// and test items already blanked) that has an `id` or `*_id` field.
+fn rust_identity_field(code: &str) -> Option<String> {
+    static STRUCT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static FIELD: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let structs = STRUCT.get_or_init(|| {
+        regex::Regex::new(r"\bstruct\s+[A-Za-z_][A-Za-z0-9_]*(?:<[^>{]*>)?\s*\{([^}]*)\}")
+            .expect("valid regex")
+    });
+    let field = FIELD.get_or_init(|| {
+        regex::Regex::new(r"(?:^|[\s,(])(?:pub(?:\([^)]*\))?\s+)?(id|[a-z][a-z0-9_]*_id)\s*:")
+            .expect("valid regex")
+    });
+    structs.captures_iter(code).find_map(|s| field.captures(&s[1]).map(|f| f[1].to_string()))
+}
+
+/// Whether `code` (comments and literals blanked) declares a struct.
+fn rust_declares_struct(code: &str) -> bool {
+    static STRUCT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    STRUCT
+        .get_or_init(|| regex::Regex::new(r"\bstruct\s+[A-Za-z_]").expect("valid regex"))
+        .is_match(code)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn rust_aggregate_folder_reads_entities_value_objects_and_helpers() {
+        let temp_dir = TempDir::new().unwrap();
+        let folder = temp_dir.path().join("aggregate_order");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("order_aggregate.rs"), "pub struct Order { id: OrderId }\n").unwrap();
+        fs::write(folder.join("order_line.rs"), "pub struct OrderLine { pub line_id: LineId }\n")
+            .unwrap();
+        fs::write(
+            folder.join("money.rs"),
+            "/// `currency_id: x`\npub struct Money { cents: i64 }\n",
+        )
+        .unwrap();
+        fs::write(
+            folder.join("order_decide.rs"),
+            "/// `require_aggregate_id: false`\npub fn decide(order_id: u64) -> Result<(), ()> { Ok(()) }\n",
+        )
+        .unwrap();
+        let config = AggregateConfig {
+            path: PathBuf::from("."),
+            pattern: "*_aggregate.rs".to_string(),
+            require_suffix: true,
+            extensions: vec![".rs".to_string()],
+        };
+        let aggregates = AggregateScanner::new(&config, temp_dir.path())
+            .with_filename_convention(crate::config::FilenameConvention::SnakeCase)
+            .scan()
+            .unwrap();
+        assert_eq!(aggregates.len(), 1);
+        let a = &aggregates[0];
+        let entities: Vec<_> =
+            a.entities.iter().map(|e| (e.name.as_str(), e.identity_field.as_deref())).collect();
+        assert_eq!(entities, [("order_line", Some("line_id"))]);
+        let vos: Vec<_> = a.value_objects.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(vos, ["money"], "a struct without identity; helper files are neither");
+    }
+
+    #[test]
+    fn rust_entity_needs_a_struct_with_an_id_field() {
+        let code = |s: &str| crate::scanners::rust_source::rust_code_only(s);
+        assert_eq!(
+            rust_identity_field(&code(
+                "pub struct Line {\n    pub line_id: LineId,\n    qty: u32,\n}\n"
+            )),
+            Some("line_id".to_string())
+        );
+        // A helper file: a doc comment and a fn parameter named `*_id` are not entities.
+        assert_eq!(
+            rust_identity_field(&code(
+                "/// `require_aggregate_id: false`\npub fn decide(order_id: u64) {}\n"
+            )),
+            None
+        );
+        assert_eq!(rust_identity_field(&code("struct Totals { count: u32 }\n")), None);
+    }
     use std::path::PathBuf;
     use tempfile::TempDir;
 

@@ -50,7 +50,7 @@ impl ValidationRule for RequireProjectionForQueryRule {
         let slices = scanner.scan()?;
 
         for slice in slices {
-            if slice.slice_type.pattern() == SliceType::View && !slice.has_projection() {
+            if slice.has_pattern(&SliceType::View) && !slice.has_projection() {
                 // Suggest creating a projection
                 // Note: to_pascal_case already handles both '-' and '_' delimiters
                 let projection_name = format!("{}Projection", to_pascal_case(&slice.name));

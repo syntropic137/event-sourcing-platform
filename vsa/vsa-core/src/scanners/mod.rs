@@ -16,6 +16,7 @@ pub mod domain_scanner;
 pub mod event_scanner;
 pub mod projection_scanner;
 pub mod query_scanner;
+pub(crate) mod rust_source;
 pub mod slice_scanner;
 
 use crate::config::FilenameConvention;

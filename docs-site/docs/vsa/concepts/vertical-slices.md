@@ -108,6 +108,13 @@ type: automation   # command | view | automation | translation
 
 An automation is a to-do list view of pending work and a processor that takes the next entry and issues a command. The event that command produces clears the entry. A projection runner that only keeps a view current is a `view`: it issues no command. Once it issues commands, it is an automation.
 
+A processor often lives with the command it issues, so it never reaches into another slice. Such a slice declares both patterns and gets both sets of checks:
+
+```yaml
+name: ship
+type: [command, automation]   # VSA034 + VSA035 for the command, VSA039 for the automation
+```
+
 `query` and `saga` are older names for `view` and `automation`. They still validate, but they draw a deprecation warning (VSA038). `mixed` is still accepted. An unknown `type:` is an error (VSA036), and so is a type that `slices.types` does not list (VSA037). `slices.view:` and `slices.automation:` are accepted as aliases for the `slices.query:` and `slices.saga:` config blocks.
 
 In *Understanding Eventsourcing*, Martin Dilger describes the same four patterns

@@ -10,7 +10,7 @@ describe('ArchitectureSvgGenerator', () => {
     version: '0.1.0',
     schema_version: '2.0.0',
     generated_at: '2026-01-25T00:00:00Z',
-    bounded_contexts: []
+    bounded_contexts: [],
   };
 
   describe('generate()', () => {
@@ -61,22 +61,22 @@ describe('ArchitectureSvgGenerator', () => {
           path: './packages/domain/src/contexts/orders',
           features: [
             { name: 'place-order', path: 'slices/place-order', files: ['handler.ts'] },
-            { name: 'cancel-order', path: 'slices/cancel-order', files: ['handler.ts'] }
-          ]
+            { name: 'cancel-order', path: 'slices/cancel-order', files: ['handler.ts'] },
+          ],
         },
         {
           name: 'payments',
           path: './packages/domain/src/contexts/payments',
           features: [
-            { name: 'process-payment', path: 'slices/process-payment', files: ['handler.ts'] }
-          ]
+            { name: 'process-payment', path: 'slices/process-payment', files: ['handler.ts'] },
+          ],
         },
         {
           name: 'shipping',
           path: './packages/domain/src/contexts/shipping',
-          features: []
-        }
-      ]
+          features: [],
+        },
+      ],
     };
 
     it('should render all bounded contexts', () => {
@@ -117,7 +117,7 @@ describe('ArchitectureSvgGenerator', () => {
   describe('with layer configuration', () => {
     it('should render applications layer when configured', () => {
       const config = {
-        applications: ['CLI', 'Dashboard', 'Web UI']
+        applications: ['CLI', 'Dashboard', 'Web UI'],
       };
 
       const generator = new ArchitectureSvgGenerator(minimalManifest, config);
@@ -133,8 +133,8 @@ describe('ArchitectureSvgGenerator', () => {
       const config = {
         infrastructure: [
           { name: 'PostgreSQL', description: 'Event Store' },
-          { name: 'Redis', description: 'Cache' }
-        ]
+          { name: 'Redis', description: 'Cache' },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(minimalManifest, config);
@@ -149,7 +149,7 @@ describe('ArchitectureSvgGenerator', () => {
 
     it('should render packages in sidebar when configured', () => {
       const config = {
-        packages: ['aef-domain', 'aef-adapters', 'aef-collector']
+        packages: ['aef-domain', 'aef-adapters', 'aef-collector'],
       };
 
       const generator = new ArchitectureSvgGenerator(minimalManifest, config);
@@ -165,8 +165,8 @@ describe('ArchitectureSvgGenerator', () => {
       const config = {
         libraries: [
           { name: 'agentic-primitives', repo: 'github.com/org/agentic-primitives' },
-          { name: 'event-sourcing-platform' }
-        ]
+          { name: 'event-sourcing-platform' },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(minimalManifest, config);
@@ -189,29 +189,25 @@ describe('ArchitectureSvgGenerator', () => {
             path: './packages/aef-domain/src/contexts/workflows',
             features: [
               { name: 'execute-workflow', path: 'slices/execute-workflow', files: [] },
-              { name: 'create-workflow', path: 'slices/create-workflow', files: [] }
-            ]
+              { name: 'create-workflow', path: 'slices/create-workflow', files: [] },
+            ],
           },
           {
             name: 'workspaces',
             path: './packages/aef-domain/src/contexts/workspaces',
-            features: [
-              { name: 'create-workspace', path: 'slices/create-workspace', files: [] }
-            ]
-          }
-        ]
+            features: [{ name: 'create-workspace', path: 'slices/create-workspace', files: [] }],
+          },
+        ],
       };
 
       const config = {
         applications: ['AEF CLI', 'Dashboard'],
         infrastructure: [
           { name: 'TimescaleDB', description: 'Projections' },
-          { name: 'EventStore', description: 'Events' }
+          { name: 'EventStore', description: 'Events' },
         ],
         packages: ['aef-domain', 'aef-adapters'],
-        libraries: [
-          { name: 'agentic-primitives' }
-        ]
+        libraries: [{ name: 'agentic-primitives' }],
       };
 
       const generator = new ArchitectureSvgGenerator(manifestComplete, config);
@@ -243,8 +239,8 @@ describe('ArchitectureSvgGenerator', () => {
         bounded_contexts: Array.from({ length: 9 }, (_, i) => ({
           name: `context-${i + 1}`,
           path: `./contexts/context-${i + 1}`,
-          features: []
-        }))
+          features: [],
+        })),
       };
 
       const generator = new ArchitectureSvgGenerator(manifest);
@@ -266,9 +262,9 @@ describe('ArchitectureSvgGenerator', () => {
             name: 'single-context',
             path: './contexts/single',
             features: [],
-            aggregate_count: 2
-          }
-        ]
+            aggregate_count: 2,
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest);
@@ -294,10 +290,15 @@ describe('ArchitectureSvgGenerator', () => {
               { name: 'domain', path: 'domain', files: [] },
               { name: 'slices', path: 'slices', files: [] },
               { name: 'place-order', path: 'slices/place-order', files: [], slice_type: 'command' },
-              { name: 'cancel-order', path: 'slices/cancel-order', files: [], slice_type: 'command' }
-            ]
-          }
-        ]
+              {
+                name: 'cancel-order',
+                path: 'slices/cancel-order',
+                files: [],
+                slice_type: 'command',
+              },
+            ],
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest);
@@ -317,7 +318,7 @@ describe('ArchitectureSvgGenerator', () => {
         name: `feature-${i + 1}`,
         path: `slices/feature-${i + 1}`,
         files: [],
-        slice_type: 'command' as const
+        slice_type: 'command' as const,
       }));
 
       const manifest: Manifest = {
@@ -329,9 +330,9 @@ describe('ArchitectureSvgGenerator', () => {
             name: 'large-context',
             path: './contexts/large',
             aggregate_count: 2,
-            features
-          }
-        ]
+            features,
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest);
@@ -356,9 +357,9 @@ describe('ArchitectureSvgGenerator', () => {
           {
             name: 'test<>&"',
             path: './contexts/test',
-            features: []
-          }
-        ]
+            features: [],
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest);
@@ -399,14 +400,14 @@ describe('ArchitectureSvgGenerator', () => {
           {
             name: 'orders',
             path: './packages/aef-domain/src/contexts/orders',
-            features: []
+            features: [],
           },
           {
             name: 'payments',
             path: './packages/aef-adapters/src/contexts/payments',
-            features: []
-          }
-        ]
+            features: [],
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest);
@@ -432,22 +433,42 @@ describe('ArchitectureSvgGenerator', () => {
             context_type: 'bounded_context',
             aggregate_count: 3,
             features: [
-              { name: 'create-workspace', path: 'slices/create-workspace', files: [], slice_type: 'command' },
-              { name: 'execute-workflow', path: 'slices/execute-workflow', files: [], slice_type: 'command' },
-              { name: 'workspace-metrics', path: 'slices/workspace-metrics', files: [], slice_type: 'query' },
-              { name: 'session-stats', path: 'slices/session-stats', files: [], slice_type: 'query' }
-            ]
-          }
-        ]
+              {
+                name: 'create-workspace',
+                path: 'slices/create-workspace',
+                files: [],
+                slice_type: 'command',
+              },
+              {
+                name: 'execute-workflow',
+                path: 'slices/execute-workflow',
+                files: [],
+                slice_type: 'command',
+              },
+              {
+                name: 'workspace-metrics',
+                path: 'slices/workspace-metrics',
+                files: [],
+                slice_type: 'query',
+              },
+              {
+                name: 'session-stats',
+                path: 'slices/session-stats',
+                files: [],
+                slice_type: 'query',
+              },
+            ],
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest);
       const svg = generator.generate();
 
-      // Should have slice type section headers
-      expect(svg).toContain('⚡ Commands');
-      expect(svg).toContain('📊 Queries');
-      
+      // Slices are grouped by Event Modeling pattern; 'query' is the old name for a view
+      expect(svg).toContain('⚡ Command slices');
+      expect(svg).toContain('📊 View slices');
+
       // Should list features under correct sections
       expect(svg).toContain('create-workspace');
       expect(svg).toContain('execute-workflow');
@@ -467,10 +488,10 @@ describe('ArchitectureSvgGenerator', () => {
             features: [
               { name: 'mixed-feature', path: 'slices/mixed', files: [], slice_type: 'mixed' },
               { name: 'unknown-feature', path: 'slices/unknown', files: [], slice_type: 'unknown' },
-              { name: 'no-type-feature', path: 'slices/no-type', files: [] }
-            ]
-          }
-        ]
+              { name: 'no-type-feature', path: 'slices/no-type', files: [] },
+            ],
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest);
@@ -493,9 +514,9 @@ describe('ArchitectureSvgGenerator', () => {
             path: './contexts/orchestration',
             context_type: 'bounded_context',
             aggregate_count: 3,
-            features: []
-          }
-        ]
+            features: [],
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest);
@@ -515,9 +536,9 @@ describe('ArchitectureSvgGenerator', () => {
             path: './contexts/github',
             context_type: 'bounded_context',
             aggregate_count: 1,
-            features: []
-          }
-        ]
+            features: [],
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest);
@@ -536,9 +557,9 @@ describe('ArchitectureSvgGenerator', () => {
           {
             name: 'legacy-context',
             path: './contexts/legacy',
-            features: []
-          }
-        ]
+            features: [],
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest);
@@ -560,16 +581,16 @@ describe('ArchitectureSvgGenerator', () => {
             path: './contexts/orchestration',
             context_type: 'bounded_context',
             aggregate_count: 3,
-            features: []
+            features: [],
           },
           {
             name: 'metrics',
             path: './contexts/metrics',
             context_type: 'invalid_module',
             aggregate_count: 0,
-            features: []
-          }
-        ]
+            features: [],
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest);
@@ -592,16 +613,16 @@ describe('ArchitectureSvgGenerator', () => {
             path: './contexts/orchestration',
             context_type: 'bounded_context',
             aggregate_count: 3,
-            features: []
+            features: [],
           },
           {
             name: 'metrics',
             path: './contexts/metrics',
             context_type: 'invalid_module',
             aggregate_count: 0,
-            features: []
-          }
-        ]
+            features: [],
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest, {}, { showInvalidModules: true });
@@ -621,9 +642,9 @@ describe('ArchitectureSvgGenerator', () => {
           {
             name: 'orders',
             path: './contexts/orders',
-            features: []
-          }
-        ]
+            features: [],
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest);
@@ -651,10 +672,10 @@ describe('ArchitectureSvgGenerator', () => {
               name: `feature-${i + 1}`,
               path: `slices/feature-${i + 1}`,
               files: [],
-              slice_type: 'command' as const
-            }))
-          }
-        ]
+              slice_type: 'command' as const,
+            })),
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest);
@@ -683,10 +704,10 @@ describe('ArchitectureSvgGenerator', () => {
               name: `command-${i + 1}`,
               path: `slices/command-${i + 1}`,
               files: [],
-              slice_type: 'command' as const
-            }))
-          }
-        ]
+              slice_type: 'command' as const,
+            })),
+          },
+        ],
       };
 
       const generator = new ArchitectureSvgGenerator(manifest, {}, { maxFeaturesPerSection: 3 });
@@ -711,22 +732,56 @@ describe('ArchitectureSvgGenerator', () => {
         domain: {
           aggregates: [],
           commands: [
-            { name: 'CreateOrderCommand', file_path: 'commands/CreateOrder.ts', has_aggregate_id: true, fields: [] },
-            { name: 'CancelOrderCommand', file_path: 'commands/CancelOrder.ts', has_aggregate_id: true, fields: [] }
+            {
+              name: 'CreateOrderCommand',
+              file_path: 'commands/CreateOrder.ts',
+              has_aggregate_id: true,
+              fields: [],
+            },
+            {
+              name: 'CancelOrderCommand',
+              file_path: 'commands/CancelOrder.ts',
+              has_aggregate_id: true,
+              fields: [],
+            },
           ],
           events: [
-            { name: 'OrderCreatedEvent', event_type: 'OrderCreated', version: 'v1', file_path: 'events/OrderCreated.ts', emitted_by: [], handled_by: [], fields: [], decorator_present: true },
-            { name: 'OrderCancelledEvent', event_type: 'OrderCancelled', version: 'v1', file_path: 'events/OrderCancelled.ts', emitted_by: [], handled_by: [], fields: [], decorator_present: true }
+            {
+              name: 'OrderCreatedEvent',
+              event_type: 'OrderCreated',
+              version: 'v1',
+              file_path: 'events/OrderCreated.ts',
+              emitted_by: [],
+              handled_by: [],
+              fields: [],
+              decorator_present: true,
+            },
+            {
+              name: 'OrderCancelledEvent',
+              event_type: 'OrderCancelled',
+              version: 'v1',
+              file_path: 'events/OrderCancelled.ts',
+              emitted_by: [],
+              handled_by: [],
+              fields: [],
+              decorator_present: true,
+            },
           ],
           projections: [
-            { name: 'OrderListProjection', file_path: 'projections/OrderList.ts', subscribed_events: ['OrderCreatedEvent'], read_model: 'OrderSummary', line_count: 50 }
+            {
+              name: 'OrderListProjection',
+              file_path: 'projections/OrderList.ts',
+              subscribed_events: ['OrderCreatedEvent'],
+              read_model: 'OrderSummary',
+              line_count: 50,
+            },
           ],
           relationships: {
             command_to_aggregate: {},
             aggregate_to_events: {},
-            event_to_handlers: {}
-          }
-        }
+            event_to_handlers: {},
+          },
+        },
       };
 
       const generator = new ArchitectureSvgGenerator(manifestWithDomain);
@@ -737,7 +792,7 @@ describe('ArchitectureSvgGenerator', () => {
       expect(svg).toContain('Commands');
       expect(svg).toContain('Events');
       expect(svg).toContain('Projections');
-      
+
       // Check counts
       expect(svg).toContain('2 total'); // Commands count
       expect(svg).toContain('1 total'); // Projections count
@@ -762,18 +817,32 @@ describe('ArchitectureSvgGenerator', () => {
         domain: {
           aggregates: [],
           commands: [
-            { name: 'CreateTaskCommand', file_path: 'commands/CreateTask.ts', has_aggregate_id: true, fields: [] }
+            {
+              name: 'CreateTaskCommand',
+              file_path: 'commands/CreateTask.ts',
+              has_aggregate_id: true,
+              fields: [],
+            },
           ],
           events: [
-            { name: 'TaskCreatedEvent', event_type: 'TaskCreated', version: 'v1', file_path: 'events/TaskCreated.ts', emitted_by: [], handled_by: [], fields: [], decorator_present: true }
+            {
+              name: 'TaskCreatedEvent',
+              event_type: 'TaskCreated',
+              version: 'v1',
+              file_path: 'events/TaskCreated.ts',
+              emitted_by: [],
+              handled_by: [],
+              fields: [],
+              decorator_present: true,
+            },
           ],
           projections: [],
           relationships: {
             command_to_aggregate: {},
             aggregate_to_events: {},
-            event_to_handlers: {}
-          }
-        }
+            event_to_handlers: {},
+          },
+        },
       };
 
       const generator = new ArchitectureSvgGenerator(manifestWithoutProjections);
@@ -793,15 +862,40 @@ describe('ArchitectureSvgGenerator', () => {
         bounded_contexts: [],
         domain: {
           aggregates: [],
-          commands: [{ name: 'TestCommand', file_path: 'commands/Test.ts', has_aggregate_id: true, fields: [] }],
-          events: [{ name: 'TestEvent', event_type: 'Test', version: 'v1', file_path: 'events/Test.ts', emitted_by: [], handled_by: [], fields: [], decorator_present: true }],
-          projections: [{ name: 'TestProjection', file_path: 'projections/Test.ts', subscribed_events: ['TestEvent'], line_count: 30 }],
+          commands: [
+            {
+              name: 'TestCommand',
+              file_path: 'commands/Test.ts',
+              has_aggregate_id: true,
+              fields: [],
+            },
+          ],
+          events: [
+            {
+              name: 'TestEvent',
+              event_type: 'Test',
+              version: 'v1',
+              file_path: 'events/Test.ts',
+              emitted_by: [],
+              handled_by: [],
+              fields: [],
+              decorator_present: true,
+            },
+          ],
+          projections: [
+            {
+              name: 'TestProjection',
+              file_path: 'projections/Test.ts',
+              subscribed_events: ['TestEvent'],
+              line_count: 30,
+            },
+          ],
           relationships: {
             command_to_aggregate: {},
             aggregate_to_events: {},
-            event_to_handlers: {}
-          }
-        }
+            event_to_handlers: {},
+          },
+        },
       };
 
       const generator = new ArchitectureSvgGenerator(manifestWithDomain);
@@ -824,15 +918,40 @@ describe('ArchitectureSvgGenerator', () => {
         bounded_contexts: [],
         domain: {
           aggregates: [],
-          commands: [{ name: 'TestCommand', file_path: 'commands/Test.ts', has_aggregate_id: true, fields: [] }],
-          events: [{ name: 'TestEvent', event_type: 'Test', version: 'v1', file_path: 'events/Test.ts', emitted_by: [], handled_by: [], fields: [], decorator_present: true }],
-          projections: [{ name: 'TestProjection', file_path: 'projections/Test.ts', subscribed_events: ['TestEvent'], line_count: 30 }],
+          commands: [
+            {
+              name: 'TestCommand',
+              file_path: 'commands/Test.ts',
+              has_aggregate_id: true,
+              fields: [],
+            },
+          ],
+          events: [
+            {
+              name: 'TestEvent',
+              event_type: 'Test',
+              version: 'v1',
+              file_path: 'events/Test.ts',
+              emitted_by: [],
+              handled_by: [],
+              fields: [],
+              decorator_present: true,
+            },
+          ],
+          projections: [
+            {
+              name: 'TestProjection',
+              file_path: 'projections/Test.ts',
+              subscribed_events: ['TestEvent'],
+              line_count: 30,
+            },
+          ],
           relationships: {
             command_to_aggregate: {},
             aggregate_to_events: {},
-            event_to_handlers: {}
-          }
-        }
+            event_to_handlers: {},
+          },
+        },
       };
 
       const generator = new ArchitectureSvgGenerator(manifestWithDomain);
@@ -842,6 +961,199 @@ describe('ArchitectureSvgGenerator', () => {
       expect(svg).toContain('<line');
       expect(svg).toContain('<polygon'); // Arrow heads
       expect(svg).toContain('fill="#666666"'); // Arrow color
+    });
+  });
+
+  describe('what the manifest says, and nothing it does not (#460)', () => {
+    const rustManifest = {
+      version: '0.23.0',
+      schema_version: '2.4.0',
+      generated_at: '2026-10-16T00:00:00Z',
+      bounded_contexts: [
+        {
+          name: 'orders',
+          path: 'contexts/orders',
+          context_type: 'bounded_context',
+          aggregate_count: 1,
+          features: [
+            {
+              name: 'place',
+              path: 'slices/place',
+              files: [],
+              slice_type: 'command',
+              slice_types: ['command'],
+            },
+            {
+              name: 'ship',
+              path: 'slices/ship',
+              files: [],
+              slice_type: 'command',
+              slice_types: ['command', 'automation'],
+            },
+            {
+              name: 'pending',
+              path: 'slices/pending',
+              files: [],
+              slice_type: 'view',
+              slice_types: ['view'],
+            },
+            {
+              name: 'import',
+              path: 'slices/import',
+              files: [],
+              slice_type: 'translation',
+              slice_types: ['translation'],
+            },
+            {
+              name: 'file',
+              path: 'slices/file',
+              files: [],
+              slice_type: 'automation',
+              slice_types: ['automation'],
+            },
+          ],
+        },
+      ],
+      domain: {
+        aggregates: [
+          {
+            name: 'order_aggregate',
+            context: 'orders',
+            file_path: 'x',
+            line_count: 1,
+            command_handlers: [],
+            event_handlers: [],
+          },
+        ],
+        commands: [
+          {
+            name: 'OrderCommand::Place',
+            context: 'orders',
+            file_path: 'x',
+            has_aggregate_id: false,
+            fields: [],
+          },
+          {
+            name: 'OrderCommand::Ship',
+            context: 'orders',
+            file_path: 'x',
+            has_aggregate_id: false,
+            fields: [],
+          },
+          {
+            name: 'OrderCommand::Cancel',
+            context: 'orders',
+            file_path: 'x',
+            has_aggregate_id: false,
+            fields: [],
+          },
+          {
+            name: 'OrderCommand::Archive',
+            context: 'orders',
+            file_path: 'x',
+            has_aggregate_id: false,
+            fields: [],
+          },
+        ],
+        events: [
+          {
+            name: 'OrderEvent::Placed',
+            context: 'orders',
+            event_type: 'Placed',
+            version: 'v1',
+            file_path: 'x',
+            emitted_by: [],
+            handled_by: [],
+            fields: [],
+            decorator_present: false,
+          },
+          {
+            name: 'OrderEvent::Shipped',
+            context: 'orders',
+            event_type: 'Shipped',
+            version: 'v1',
+            file_path: 'x',
+            emitted_by: [],
+            handled_by: [],
+            fields: [],
+            decorator_present: false,
+          },
+        ],
+        relationships: {
+          command_to_aggregate: {},
+          aggregate_to_events: {},
+          event_to_handlers: {},
+          command_to_events: {
+            'OrderCommand::Place': ['OrderEvent::Placed'],
+            'OrderCommand::Ship': ['OrderEvent::Shipped'],
+            'OrderCommand::Cancel': [],
+          },
+        },
+      },
+    } as unknown as Manifest;
+
+    it('draws no infrastructure the project did not name', () => {
+      const svg = new ArchitectureSvgGenerator(rustManifest).generate();
+      expect(svg).not.toContain('PostgreSQL');
+      expect(svg).not.toContain('Redis');
+      expect(svg).not.toContain('MinIO');
+      expect(svg).not.toContain('>Infrastructure<');
+    });
+
+    it('draws the infrastructure a layers config names', () => {
+      const svg = new ArchitectureSvgGenerator(rustManifest, {
+        infrastructure: [{ name: 'ESP', description: 'Event store' }],
+      }).generate();
+      expect(svg).toContain('Infrastructure');
+      expect(svg).toContain('ESP');
+    });
+
+    it('groups slices by pattern and names a second pattern', () => {
+      const svg = new ArchitectureSvgGenerator(rustManifest).generate();
+      expect(svg).toContain('⚡ Command slices');
+      expect(svg).toContain('📊 View slices');
+      expect(svg).toContain('🔁 Translation slices');
+      expect(svg).toContain('ship (+ automation)');
+      expect(svg).toContain('🤖 Automation slices');
+      // The automation group lists `file`, after the command group that lists `ship`.
+      expect(svg.indexOf('🤖 Automation slices')).toBeGreaterThan(
+        svg.indexOf('ship (+ automation)')
+      );
+      expect(svg.indexOf('• file<')).toBeGreaterThan(svg.indexOf('🤖 Automation slices'));
+    });
+
+    it('lists each command variant with the events it builds', () => {
+      const svg = new ArchitectureSvgGenerator(rustManifest).generate();
+      expect(svg).toContain('⚡ Commands → events');
+      expect(svg).toContain('Place → Placed');
+      expect(svg).toContain('Ship → Shipped');
+      expect(svg).toContain('Cancel → (none)'); // an explicit [] means none
+      expect(svg).toContain('• Archive<'); // no entry: unknown, shown alone
+      expect(svg).not.toContain('Archive →');
+      expect(svg).not.toContain('OrderCommand::');
+      expect(svg).toContain('orders (1 aggregate)');
+    });
+
+    it('keeps a long context title inside its box', () => {
+      const name = 'a_context_name_long_enough_to_overflow_a_three_column_box';
+      const manifest = {
+        ...rustManifest,
+        bounded_contexts: [
+          { ...rustManifest.bounded_contexts![0], name },
+          { ...rustManifest.bounded_contexts![0], name: 'b' },
+          { ...rustManifest.bounded_contexts![0], name: 'c' },
+        ],
+      } as Manifest;
+      const svg = new ArchitectureSvgGenerator(manifest).generate();
+      expect(svg).not.toContain(`${name} (1 aggregate)`);
+      expect(svg).toContain('…');
+    });
+
+    it('counts commands and events per variant in the CQRS row', () => {
+      const svg = new ArchitectureSvgGenerator(rustManifest).generate();
+      expect(svg).toContain('1 view slice');
+      expect(svg).toContain('4 total');
+      expect(svg).toContain('2 total');
     });
   });
 });

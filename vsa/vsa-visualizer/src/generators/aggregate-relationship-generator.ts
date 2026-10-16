@@ -9,12 +9,7 @@
  * NEW in v2.3.0
  */
 
-import {
-  Manifest,
-  Aggregate,
-  AggregateEntity,
-  AggregateValueObject,
-} from '../types/manifest';
+import { Manifest, Aggregate, AggregateEntity, AggregateValueObject } from '../types/manifest';
 import { SvgBuilder, Point } from '../utils/svg-builder';
 
 /** Configuration for aggregate visualization */
@@ -31,12 +26,12 @@ export interface AggregateVisualizeConfig {
 
 /** Colors for aggregate components */
 const AggregateColors = {
-  root: '#d6c9ff',        // Pastel purple - aggregate root
-  entity: '#c9d9ff',      // Pastel blue - entity
+  root: '#d6c9ff', // Pastel purple - aggregate root
+  entity: '#c9d9ff', // Pastel blue - entity
   valueObject: '#ffd9e8', // Pastel pink - value object
-  eventArrow: '#666666',  // Arrow color
-  subscribes: '#2196F3',  // Blue for subscription arrows
-  emits: '#4CAF50',       // Green for emit arrows
+  eventArrow: '#666666', // Arrow color
+  subscribes: '#2196F3', // Blue for subscription arrows
+  emits: '#4CAF50', // Green for emit arrows
   border: '#a0a0a0',
   text: {
     primary: '#1a1a1a',
@@ -112,8 +107,8 @@ export class AggregateRelationshipGenerator {
     // Render each context
     let currentY = this.CANVAS_PADDING + 40;
     for (const [contextName, contextAggregates] of aggregatesByContext) {
-      const contextLayouts = layouts.filter(l =>
-        contextAggregates.some(a => a.name === l.aggregate.name)
+      const contextLayouts = layouts.filter((l) =>
+        contextAggregates.some((a) => a.name === l.aggregate.name)
       );
       currentY = this.renderContext(svg, contextName, contextLayouts, currentY, width);
     }
@@ -139,9 +134,7 @@ export class AggregateRelationshipGenerator {
 
     // Apply context filter if specified
     if (this.config.contextFilter) {
-      aggregates = aggregates.filter(
-        a => a.context === this.config.contextFilter
-      );
+      aggregates = aggregates.filter((a) => a.context === this.config.contextFilter);
     }
 
     return aggregates;
@@ -164,9 +157,7 @@ export class AggregateRelationshipGenerator {
   }
 
   /** Calculate layout positions for all aggregates */
-  private calculateLayouts(
-    aggregatesByContext: Map<string, Aggregate[]>
-  ): AggregateLayout[] {
+  private calculateLayouts(aggregatesByContext: Map<string, Aggregate[]>): AggregateLayout[] {
     const layouts: AggregateLayout[] = [];
     let currentY = this.CANVAS_PADDING + 60; // Account for title
 
@@ -180,7 +171,9 @@ export class AggregateRelationshipGenerator {
 
       for (const aggregate of contextAggregates) {
         const height = this.calculateAggregateHeight(aggregate);
-        const x = this.CANVAS_PADDING + this.CONTEXT_PADDING +
+        const x =
+          this.CANVAS_PADDING +
+          this.CONTEXT_PADDING +
           col * (this.AGGREGATE_WIDTH + this.AGGREGATE_SPACING_X);
         const y = currentY + row * (this.AGGREGATE_MIN_HEIGHT + this.AGGREGATE_SPACING_Y);
 
@@ -201,7 +194,8 @@ export class AggregateRelationshipGenerator {
 
       // Move Y for next context
       const rowCount = Math.ceil(contextAggregates.length / this.config.aggregatesPerRow!);
-      currentY += rowCount * (this.AGGREGATE_MIN_HEIGHT + this.AGGREGATE_SPACING_Y) + this.CONTEXT_PADDING;
+      currentY +=
+        rowCount * (this.AGGREGATE_MIN_HEIGHT + this.AGGREGATE_SPACING_Y) + this.CONTEXT_PADDING;
     }
 
     return layouts;
@@ -252,16 +246,17 @@ export class AggregateRelationshipGenerator {
 
     // Calculate width based on max columns
     const maxCols = Math.min(
-      Math.max(...[...aggregatesByContext.values()].map(a => a.length)),
+      Math.max(...[...aggregatesByContext.values()].map((a) => a.length)),
       this.config.aggregatesPerRow!
     );
-    const width = this.CANVAS_PADDING * 2 +
+    const width =
+      this.CANVAS_PADDING * 2 +
       maxCols * this.AGGREGATE_WIDTH +
       (maxCols - 1) * this.AGGREGATE_SPACING_X +
       this.CONTEXT_PADDING * 2;
 
     // Calculate height based on layouts
-    const maxY = Math.max(...layouts.map(l => l.y + l.height));
+    const maxY = Math.max(...layouts.map((l) => l.y + l.height));
     const height = maxY + this.CANVAS_PADDING + 80; // Extra space for legend
 
     return { width: Math.max(width, 600), height: Math.max(height, 400) };
@@ -269,16 +264,12 @@ export class AggregateRelationshipGenerator {
 
   /** Render the diagram title */
   private renderTitle(svg: SvgBuilder, width: number): void {
-    svg.text(
-      { x: width / 2, y: 30 },
-      'Aggregate Relationships',
-      {
-        fontSize: 20,
-        fontWeight: 'bold',
-        fill: AggregateColors.text.primary,
-        textAnchor: 'middle',
-      }
-    );
+    svg.text({ x: width / 2, y: 30 }, 'Aggregate Relationships', {
+      fontSize: 20,
+      fontWeight: 'bold',
+      fill: AggregateColors.text.primary,
+      textAnchor: 'middle',
+    });
   }
 
   /** Render a bounded context section */
@@ -292,15 +283,11 @@ export class AggregateRelationshipGenerator {
     if (layouts.length === 0) return startY;
 
     // Context header
-    svg.text(
-      { x: this.CANVAS_PADDING, y: startY },
-      `📦 ${contextName}`,
-      {
-        fontSize: 16,
-        fontWeight: 'bold',
-        fill: AggregateColors.text.primary,
-      }
-    );
+    svg.text({ x: this.CANVAS_PADDING, y: startY }, `📦 ${contextName}`, {
+      fontSize: 16,
+      fontWeight: 'bold',
+      fill: AggregateColors.text.primary,
+    });
 
     // Render each aggregate
     for (const layout of layouts) {
@@ -308,28 +295,37 @@ export class AggregateRelationshipGenerator {
     }
 
     // Calculate next Y position
-    const maxY = Math.max(...layouts.map(l => l.y + l.height));
+    const maxY = Math.max(...layouts.map((l) => l.y + l.height));
     return maxY + this.AGGREGATE_SPACING_Y;
   }
 
   /** Render aggregate header (name, folder) */
   private renderAggregateHeader(svg: SvgBuilder, layout: AggregateLayout): void {
     const { aggregate, x, y, width, height } = layout;
-    svg.rect({ x, y }, { width, height }, {
-      fill: AggregateColors.root, stroke: AggregateColors.border, strokeWidth: 2, rx: 8, shadow: true,
-    });
-
-    const displayName = aggregate.name.replace(/Aggregate$/, '');
-    svg.text(
-      { x: x + this.AGGREGATE_PADDING, y: y + 25 }, `🔷 ${displayName}`,
-      { fontSize: 14, fontWeight: 'bold', fill: AggregateColors.text.primary }
+    svg.rect(
+      { x, y },
+      { width, height },
+      {
+        fill: AggregateColors.root,
+        stroke: AggregateColors.border,
+        strokeWidth: 2,
+        rx: 8,
+        shadow: true,
+      }
     );
 
+    const displayName = aggregate.name.replace(/Aggregate$/, '');
+    svg.text({ x: x + this.AGGREGATE_PADDING, y: y + 25 }, `🔷 ${displayName}`, {
+      fontSize: 14,
+      fontWeight: 'bold',
+      fill: AggregateColors.text.primary,
+    });
+
     if (aggregate.folder_name) {
-      svg.text(
-        { x: x + this.AGGREGATE_PADDING, y: y + 42 }, `(${aggregate.folder_name})`,
-        { fontSize: 10, fill: AggregateColors.text.tertiary }
-      );
+      svg.text({ x: x + this.AGGREGATE_PADDING, y: y + 42 }, `(${aggregate.folder_name})`, {
+        fontSize: 10,
+        fill: AggregateColors.text.tertiary,
+      });
     }
   }
 
@@ -344,10 +340,11 @@ export class AggregateRelationshipGenerator {
   ): number {
     if (items.length === 0) return startY;
 
-    svg.text(
-      { x: x + this.AGGREGATE_PADDING, y: startY }, header,
-      { fontSize: 11, fontWeight: 'bold', fill: AggregateColors.text.secondary }
-    );
+    svg.text({ x: x + this.AGGREGATE_PADDING, y: startY }, header, {
+      fontSize: 11,
+      fontWeight: 'bold',
+      fill: AggregateColors.text.secondary,
+    });
     let currentY = startY + 18;
 
     const maxItems = options?.maxItems;
@@ -377,19 +374,38 @@ export class AggregateRelationshipGenerator {
     const { aggregate, x, y } = layout;
     let currentY = y + this.HEADER_HEIGHT;
 
-    currentY = this.renderDetailSection(svg, x, currentY, 'Entities:', (aggregate.entities || []).map(
-      entity => ({ render: (ix, iy) => this.renderEntity(svg, entity, ix, iy) })
-    ));
-    currentY = this.renderDetailSection(svg, x, currentY, 'Value Objects:', (aggregate.value_objects || []).map(
-      vo => ({ render: (ix, iy) => this.renderValueObject(svg, vo, ix, iy) })
-    ));
-    this.renderDetailSection(svg, x, currentY, 'Subscribes to:', aggregate.event_handlers.map(
-      handler => ({
-        render: (ix: number, iy: number) => svg.text(
-          { x: ix, y: iy }, `← ${handler.event_type}`, { fontSize: 10, fill: AggregateColors.subscribes }
-        )
-      })
-    ), { maxItems: 3 });
+    currentY = this.renderDetailSection(
+      svg,
+      x,
+      currentY,
+      'Entities:',
+      (aggregate.entities || []).map((entity) => ({
+        render: (ix, iy) => this.renderEntity(svg, entity, ix, iy),
+      }))
+    );
+    currentY = this.renderDetailSection(
+      svg,
+      x,
+      currentY,
+      'Value Objects:',
+      (aggregate.value_objects || []).map((vo) => ({
+        render: (ix, iy) => this.renderValueObject(svg, vo, ix, iy),
+      }))
+    );
+    this.renderDetailSection(
+      svg,
+      x,
+      currentY,
+      'Subscribes to:',
+      aggregate.event_handlers.map((handler) => ({
+        render: (ix: number, iy: number) =>
+          svg.text({ x: ix, y: iy }, `← ${handler.event_type}`, {
+            fontSize: 10,
+            fill: AggregateColors.subscribes,
+          }),
+      })),
+      { maxItems: 3 }
+    );
   }
 
   /** Render an entity indicator */
@@ -407,33 +423,20 @@ export class AggregateRelationshipGenerator {
     );
 
     const identityText = entity.identity_field ? ` (${entity.identity_field})` : '';
-    svg.text(
-      { x: x + 16, y: y - 2 },
-      `${entity.name}${identityText}`,
-      {
-        fontSize: 10,
-        fill: AggregateColors.text.secondary,
-      }
-    );
+    svg.text({ x: x + 16, y: y - 2 }, `${entity.name}${identityText}`, {
+      fontSize: 10,
+      fill: AggregateColors.text.secondary,
+    });
   }
 
   /** Render a value object indicator */
-  private renderValueObject(
-    svg: SvgBuilder,
-    vo: AggregateValueObject,
-    x: number,
-    y: number
-  ): void {
+  private renderValueObject(svg: SvgBuilder, vo: AggregateValueObject, x: number, y: number): void {
     // Small circle for value object
     const immutableIndicator = vo.is_immutable ? '❄️' : '';
-    svg.text(
-      { x, y: y - 2 },
-      `◇ ${vo.name} ${immutableIndicator}`,
-      {
-        fontSize: 10,
-        fill: AggregateColors.text.secondary,
-      }
-    );
+    svg.text({ x, y: y - 2 }, `◇ ${vo.name} ${immutableIndicator}`, {
+      fontSize: 10,
+      fill: AggregateColors.text.secondary,
+    });
   }
 
   /** Build maps of event emitters and subscribers from aggregate layouts */
@@ -543,15 +546,11 @@ export class AggregateRelationshipGenerator {
     const legendY = height - 50;
     const legendX = this.CANVAS_PADDING;
 
-    svg.text(
-      { x: legendX, y: legendY },
-      'Legend:',
-      {
-        fontSize: 11,
-        fontWeight: 'bold',
-        fill: AggregateColors.text.secondary,
-      }
-    );
+    svg.text({ x: legendX, y: legendY }, 'Legend:', {
+      fontSize: 11,
+      fontWeight: 'bold',
+      fill: AggregateColors.text.secondary,
+    });
 
     // Aggregate root
     svg.rect(
@@ -563,14 +562,10 @@ export class AggregateRelationshipGenerator {
         rx: 3,
       }
     );
-    svg.text(
-      { x: legendX + 80, y: legendY },
-      '🔷 Aggregate Root',
-      {
-        fontSize: 10,
-        fill: AggregateColors.text.secondary,
-      }
-    );
+    svg.text({ x: legendX + 80, y: legendY }, '🔷 Aggregate Root', {
+      fontSize: 10,
+      fill: AggregateColors.text.secondary,
+    });
 
     // Entity
     svg.rect(
@@ -582,24 +577,16 @@ export class AggregateRelationshipGenerator {
         rx: 2,
       }
     );
-    svg.text(
-      { x: legendX + 220, y: legendY },
-      'Entity',
-      {
-        fontSize: 10,
-        fill: AggregateColors.text.secondary,
-      }
-    );
+    svg.text({ x: legendX + 220, y: legendY }, 'Entity', {
+      fontSize: 10,
+      fill: AggregateColors.text.secondary,
+    });
 
     // Value Object
-    svg.text(
-      { x: legendX + 290, y: legendY },
-      '◇ Value Object',
-      {
-        fontSize: 10,
-        fill: AggregateColors.text.secondary,
-      }
-    );
+    svg.text({ x: legendX + 290, y: legendY }, '◇ Value Object', {
+      fontSize: 10,
+      fill: AggregateColors.text.secondary,
+    });
 
     // Event arrow
     if (this.config.showEventFlow) {
@@ -609,14 +596,10 @@ export class AggregateRelationshipGenerator {
         AggregateColors.emits,
         2
       );
-      svg.text(
-        { x: legendX + 435, y: legendY },
-        '→ Event Flow',
-        {
-          fontSize: 10,
-          fill: AggregateColors.text.secondary,
-        }
-      );
+      svg.text({ x: legendX + 435, y: legendY }, '→ Event Flow', {
+        fontSize: 10,
+        fill: AggregateColors.text.secondary,
+      });
     }
   }
 
@@ -632,36 +615,24 @@ export class AggregateRelationshipGenerator {
       }
     );
 
-    svg.text(
-      { x: 300, y: 80 },
-      'No Aggregates Found',
-      {
-        fontSize: 18,
-        fontWeight: 'bold',
-        fill: '#666666',
-        textAnchor: 'middle',
-      }
-    );
+    svg.text({ x: 300, y: 80 }, 'No Aggregates Found', {
+      fontSize: 18,
+      fontWeight: 'bold',
+      fill: '#666666',
+      textAnchor: 'middle',
+    });
 
-    svg.text(
-      { x: 300, y: 110 },
-      'Use --include-domain flag when generating manifest',
-      {
-        fontSize: 12,
-        fill: '#999999',
-        textAnchor: 'middle',
-      }
-    );
+    svg.text({ x: 300, y: 110 }, 'Use --include-domain flag when generating manifest', {
+      fontSize: 12,
+      fill: '#999999',
+      textAnchor: 'middle',
+    });
 
-    svg.text(
-      { x: 300, y: 130 },
-      'Ensure aggregates follow *Aggregate.* naming convention',
-      {
-        fontSize: 12,
-        fill: '#999999',
-        textAnchor: 'middle',
-      }
-    );
+    svg.text({ x: 300, y: 130 }, 'Ensure aggregates follow *Aggregate.* naming convention', {
+      fontSize: 12,
+      fill: '#999999',
+      textAnchor: 'middle',
+    });
 
     return svg.build();
   }
