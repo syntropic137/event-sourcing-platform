@@ -147,8 +147,12 @@ impl Manifest {
                             .path
                             .strip_prefix(&context.path)
                             .unwrap_or(&slice.path)
-                            .to_string_lossy()
-                            .to_string(),
+                            .components()
+                            .map(|c| c.as_os_str().to_string_lossy())
+                            .collect::<Vec<_>>()
+                            // Forward slashes on every platform, so a manifest
+                            // generated on Windows matches one generated elsewhere.
+                            .join("/"),
                         files,
                         slice_type: slice.slice_type.clone(),
                         slice_types: slice.patterns(),
