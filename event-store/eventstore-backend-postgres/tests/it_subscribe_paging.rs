@@ -239,9 +239,13 @@ async fn prefix_filtered_replay_pages_only_matching_events() {
         .filter(|(agg, _)| agg.starts_with("Order-"))
         .cloned()
         .collect();
+    assert_eq!(expected.len(), 16);
 
     let mut stream = store.subscribe(request(&tenant, "Order-", 0));
     assert_eq!(until_caught_up(&mut stream).await, expected);
+    // The page bound applies after the filter (#455): 5 full pages of
+    // matching events, then a short page of 1 ends the replay.
+    assert_eq!(store.subscribe_page_queries(), 6);
 }
 
 /// A live burst spanning many pages is drained page after page without
