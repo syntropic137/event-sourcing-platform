@@ -29,7 +29,7 @@ interface VisualizeConfig {
   minContextHeight?: number;
 }
 
-interface LayerConfig {
+export interface LayerConfig {
   applications?: string[];
   infrastructure?: Array<{ name: string; description?: string }>;
   packages?: string[];
@@ -291,53 +291,93 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
   }
 
   /**
+   * The labelled item lists a context box shows, in order. Height and
+   * rendering both read this, so they cannot disagree.
+   *
+   * - Slices grouped by Event Modeling pattern (command, view, automation,
+   *   translation); a slice declaring several patterns is listed under its
+   *   first and names the rest (`ingest (+ automation)`).
+   * - Commands with the events their decision builds (`Create → Created`)
+   *   when the manifest maps them (`relationships.command_to_events`), else
+   *   the commands alone.
+   * - Events. Rust enum variants (`ItemEvent::Created`) show by variant name.
+   */
+  private contextSections(context: BoundedContext): Array<{ header: string; items: string[]; maxItems?: number }> {
+    const sections: Array<{ header: string; items: string[]; maxItems?: number }> = [];
+    const short = (name: string) => name.replace(/^.*::/, '');
+
+    const aggregateNames = (this.manifest.domain?.aggregates || [])
+      .filter(agg => agg.context === context.name).map(agg => agg.name.replace(/Aggregate$/, ''));
+    sections.push({ header: 'Aggregates:', items: aggregateNames });
+
+    const groups: Array<{ header: string; types: string[] }> = [
+      { header: '⚡ Command slices', types: ['command'] },
+      { header: '📊 View slices', types: ['view', 'query'] },
+      { header: '🤖 Automation slices', types: ['automation', 'saga'] },
+      { header: '🔁 Translation slices', types: ['translation'] },
+      { header: '🔀 Mixed slices', types: ['mixed'] },
+    ];
+    const features = this.filterFeatures(context.features || []);
+    const typeOf = (f: Feature) => (f.slice_types && f.slice_types[0]) || f.slice_type || 'unknown';
+    const label = (f: Feature) => {
+      const rest = (f.slice_types || []).slice(1);
+      return rest.length > 0 ? `${f.name} (+ ${rest.join(', ')})` : f.name;
+    };
+    const maxItems = this.visualizeConfig.maxFeaturesPerSection;
+    for (const group of groups) {
+      const items = features.filter(f => group.types.includes(typeOf(f))).map(label);
+      sections.push({ header: group.header, items, maxItems });
+    }
+    const known = groups.flatMap(g => g.types);
+    sections.push({
+      header: '📁 Other',
+      items: features.filter(f => !known.includes(typeOf(f))).map(label),
+      maxItems,
+    });
+
+    const links = this.manifest.domain?.relationships?.command_to_events || {};
+    const commands = (this.manifest.domain?.commands || []).filter(cmd => cmd.context === context.name);
+    const hasLinks = commands.some(cmd => links[cmd.name]);
+    sections.push({
+      header: hasLinks ? '⚡ Commands → events' : '⚡ Commands',
+      items: commands.map(cmd => {
+        const name = short(cmd.name).replace(/Command$/, '');
+        const mapped = links[cmd.name];
+        // No entry means the manifest could not tell; only an explicit [] means none.
+        if (!hasLinks || mapped === undefined) return name;
+        const events = mapped.map(short);
+        if (events.length === 0) return `${name} → (none)`;
+        const shown = events.length > 3 ? [...events.slice(0, 3), `+${events.length - 3}`] : events;
+        return `${name} → ${shown.join(', ')}`;
+      }),
+    });
+
+    const eventNames = (this.manifest.domain?.events || [])
+      .filter(evt => evt.context === context.name).map(evt => short(evt.name).replace(/Event$/, ''));
+    sections.push({ header: '📨 Events', items: eventNames });
+
+    return sections.filter(s => s.items.length > 0);
+  }
+
+  /**
    * Calculate required height for a context box based on its content
    */
   private calculateContextHeight(context: BoundedContext): number {
     // Base height: header + padding
     let height = 50;
-
-    // Aggregates section
-    const contextAggregates = (this.manifest.domain?.aggregates || [])
-      .filter(agg => agg.context === context.name);
-    if (contextAggregates.length > 0) {
-      height += this.SECTION_HEADER_HEIGHT;
-      height += contextAggregates.length * this.FEATURE_LINE_HEIGHT;
-      height += 5;
-    }
-
-    // Features section (flat list of all slices)
-    const features = this.filterFeatures(context.features || []);
-    if (features.length > 0) {
-      const maxFeatures = this.visualizeConfig.maxFeaturesPerSection;
-      const displayCount = maxFeatures
-        ? Math.min(features.length, maxFeatures)
-        : features.length;
-      height += this.SECTION_HEADER_HEIGHT + (displayCount * this.FEATURE_LINE_HEIGHT);
-      if (maxFeatures && features.length > maxFeatures) {
+    for (const section of this.contextSections(context)) {
+      const shown = section.maxItems ? Math.min(section.items.length, section.maxItems) : section.items.length;
+      height += this.SECTION_HEADER_HEIGHT + shown * this.FEATURE_LINE_HEIGHT;
+      if (section.maxItems && section.items.length > section.maxItems) {
         height += this.FEATURE_LINE_HEIGHT;
       }
-    }
-
-    // Commands section
-    const contextCommands = (this.manifest.domain?.commands || [])
-      .filter(cmd => cmd.context === context.name);
-    if (contextCommands.length > 0) {
-      height += this.SECTION_HEADER_HEIGHT + (contextCommands.length * this.FEATURE_LINE_HEIGHT);
-    }
-
-    // Events section
-    const contextEvents = (this.manifest.domain?.events || [])
-      .filter(evt => evt.context === context.name);
-    if (contextEvents.length > 0) {
-      height += this.SECTION_HEADER_HEIGHT + (contextEvents.length * this.FEATURE_LINE_HEIGHT);
+      height += 5;
     }
 
     // Ensure minimum height
     const minHeight = this.visualizeConfig.minContextHeight || this.MIN_CONTEXT_HEIGHT;
     return Math.max(height, minHeight);
   }
-
   /**
    * Render domain contexts in grid layout
    */
@@ -408,7 +448,7 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     y: number,
     header: string,
     items: string[],
-    options?: { maxItems?: number; trailingGap?: number }
+    options?: { maxItems?: number; trailingGap?: number; maxChars?: number }
   ): number {
     if (items.length === 0) return y;
 
@@ -422,9 +462,11 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     const maxItems = options?.maxItems;
     const displayItems = maxItems ? items.slice(0, maxItems) : items;
     for (const item of displayItems) {
+      const fits = !options?.maxChars || item.length <= options.maxChars;
+      const shown = fits ? item : `${item.slice(0, Math.max(0, (options?.maxChars ?? 0) - 1))}…`;
       svg.text(
         { x: x + 5, y: currentY },
-        `• ${item}`,
+        `• ${shown}`,
         { fontSize: this.FONT_SIZE_FEATURE, fontFamily: this.FONT_HEADER, fill: this.colors.text.primary }
       );
       currentY += this.FEATURE_LINE_HEIGHT;
@@ -459,24 +501,25 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       fill: fillColors[index % 3], stroke: this.colors.border.medium, strokeWidth: 1.5, rx: 8, shadow: true
     });
 
+    const count = context.aggregate_count ?? 0;
+    const fullTitle = `${context.name} (${count} ${count === 1 ? 'aggregate' : 'aggregates'})`;
+    // About 8.5 px per character at the bold context font size.
+    const titleChars = Math.floor((width - 30) / 8.5);
+    const title = fullTitle.length > titleChars ? `${fullTitle.slice(0, Math.max(0, titleChars - 1))}…` : fullTitle;
     svg.text(
-      { x: pos.x + 15, y: pos.y + 25 }, context.name,
+      { x: pos.x + 15, y: pos.y + 25 }, title,
       { fontSize: this.FONT_SIZE_CONTEXT, fontWeight: 'bold', fontFamily: this.FONT_HEADER, fill: this.colors.text.primary }
     );
 
-    const aggregateNames = (this.manifest.domain?.aggregates || [])
-      .filter(agg => agg.context === context.name).map(agg => agg.name.replace(/Aggregate$/, ''));
-    const featureNames = this.filterFeatures(context.features || []).map(f => f.name);
-    const commandNames = (this.manifest.domain?.commands || [])
-      .filter(cmd => cmd.context === context.name).map(cmd => cmd.name.replace(/Command$/, ''));
-    const eventNames = (this.manifest.domain?.events || [])
-      .filter(evt => evt.context === context.name).map(evt => evt.name.replace(/Event$/, ''));
-
     let currentY = pos.y + 50;
-    currentY = this.renderItemSection(svg, pos.x + 15, currentY, 'Aggregates:', aggregateNames, { trailingGap: 5 });
-    currentY = this.renderItemSection(svg, pos.x + 15, currentY, '📋 Features', featureNames, { maxItems: this.visualizeConfig.maxFeaturesPerSection });
-    currentY = this.renderItemSection(svg, pos.x + 15, currentY, '⚡ Commands', commandNames);
-    this.renderItemSection(svg, pos.x + 15, currentY, '📨 Events', eventNames);
+    for (const section of this.contextSections(context)) {
+      currentY = this.renderItemSection(svg, pos.x + 15, currentY, section.header, section.items, {
+        maxItems: section.maxItems,
+        trailingGap: 5,
+        // About 6.5 px per character at the feature font size; keep inside the box.
+        maxChars: Math.floor((width - 40) / 6.5),
+      });
+    }
   }
   
   /**
@@ -694,14 +737,9 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       }
     }
     
-    // Set default infrastructure if not provided
-    if (!this.layerConfig.infrastructure) {
-      this.layerConfig.infrastructure = [
-        { name: 'PostgreSQL', description: 'Event Store' },
-        { name: 'Redis', description: 'Cache' },
-        { name: 'MinIO', description: 'Artifacts' }
-      ];
-    }
+    // Infrastructure is never assumed: a project names its own (the CLI's
+    // --layers file), and without that the row is left out rather than
+    // showing services the project may not use.
   }
   
   /**

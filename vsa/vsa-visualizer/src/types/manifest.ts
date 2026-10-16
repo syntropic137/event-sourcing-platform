@@ -177,6 +177,7 @@ export interface ValueObjectField {
 
 export interface Relationships {
   command_to_aggregate: Record<string, string>;
+  command_to_events?: Record<string, string[]>; // NEW in v2.4.0 - each command and the events its decision builds
   aggregate_to_events: Record<string, string[]>;
   event_to_handlers: Record<string, string[]>;
   event_to_projections?: Record<string, string[]>; // NEW in v2.1.0
@@ -225,6 +226,7 @@ export interface Feature {
   path: string;
   files: string[];
   slice_type?: SliceType;  // NEW in v2.2.0 - command, query, mixed, or unknown
+  slice_types?: SliceType[]; // NEW in v2.4.0 - every pattern the slice declares, primary first
 }
 
 /**
