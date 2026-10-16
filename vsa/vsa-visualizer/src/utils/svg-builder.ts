@@ -19,7 +19,7 @@ export interface RectStyle {
   fill?: string;
   stroke?: string;
   strokeWidth?: number;
-  rx?: number;  // border radius
+  rx?: number; // border radius
   opacity?: number;
   shadow?: boolean;
 }
@@ -54,19 +54,19 @@ export class SvgBuilder {
     // Add defs section if we have any
     if (this.defs.length > 0) {
       svg += '  <defs>\n';
-      svg += this.defs.map(d => `    ${d}`).join('\n') + '\n';
+      svg += this.defs.map((d) => `    ${d}`).join('\n') + '\n';
       svg += '  </defs>\n';
     }
 
     // Add styles section if we have any
     if (this.styles.length > 0) {
       svg += '  <style>\n';
-      svg += this.styles.map(s => `    ${s}`).join('\n') + '\n';
+      svg += this.styles.map((s) => `    ${s}`).join('\n') + '\n';
       svg += '  </style>\n';
     }
 
     // Add all elements
-    svg += this.elements.map(e => `  ${e}`).join('\n') + '\n';
+    svg += this.elements.map((e) => `  ${e}`).join('\n') + '\n';
     svg += '</svg>';
 
     return svg;
@@ -111,7 +111,7 @@ export class SvgBuilder {
       strokeWidth = 1,
       rx = 0,
       opacity = 1,
-      shadow = false
+      shadow = false,
     } = style;
 
     const filter = shadow ? ' filter="url(#shadow)"' : '';
@@ -134,7 +134,7 @@ export class SvgBuilder {
       fontWeight = 'normal',
       fontFamily = 'Arial, Helvetica, sans-serif',
       fill = '#000000',
-      textAnchor = 'start'
+      textAnchor = 'start',
     } = style;
 
     // Escape special XML characters
@@ -159,11 +159,7 @@ export class SvgBuilder {
    */
   multilineText(pos: Point, lines: string[], style: TextStyle = {}, lineHeight: number = 20): this {
     lines.forEach((line, index) => {
-      this.text(
-        { x: pos.x, y: pos.y + (index * lineHeight) },
-        line,
-        style
-      );
+      this.text({ x: pos.x, y: pos.y + index * lineHeight }, line, style);
     });
     return this;
   }
@@ -172,8 +168,9 @@ export class SvgBuilder {
    * Add a line
    */
   line(start: Point, end: Point, stroke: string = '#cccccc', strokeWidth: number = 1): this {
-    const line = `<line x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" ` +
-                 `stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
+    const line =
+      `<line x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" ` +
+      `stroke="${stroke}" stroke-width="${strokeWidth}"/>`;
     this.elements.push(line);
     return this;
   }
@@ -247,34 +244,34 @@ export class GroupBuilder {
 export const ArchitectureColors = {
   // Bounded contexts - Pastel colors
   context: {
-    primary: '#d6c9ff',      // Pastel purple
-    secondary: '#c9d9ff',    // Pastel blue
-    tertiary: '#ffd9e8',     // Pastel pink
+    primary: '#d6c9ff', // Pastel purple
+    secondary: '#c9d9ff', // Pastel blue
+    tertiary: '#ffd9e8', // Pastel pink
   },
 
   // Infrastructure layer
   infrastructure: {
-    primary: '#cce5ff',      // Light blue
+    primary: '#cce5ff', // Light blue
     secondary: '#d9f0ff',
   },
 
   // Applications layer
   application: {
-    primary: '#e8e8e8',      // Light gray
+    primary: '#e8e8e8', // Light gray
     secondary: '#f5f5f5',
   },
 
   // Packages/Libraries ecosystem
   ecosystem: {
-    primary: '#d4f1d4',      // Light green
+    primary: '#d4f1d4', // Light green
     secondary: '#e5f7e5',
   },
 
   // Text
   text: {
-    primary: '#1a1a1a',      // Almost black
-    secondary: '#666666',    // Medium gray
-    tertiary: '#999999',     // Light gray
+    primary: '#1a1a1a', // Almost black
+    secondary: '#666666', // Medium gray
+    tertiary: '#999999', // Light gray
   },
 
   // Borders

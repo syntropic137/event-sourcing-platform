@@ -111,12 +111,17 @@ describe('CLI Integration Tests', () => {
   describe('--layers', () => {
     it('draws only the infrastructure the layers file names', () => {
       const plain = path.join(tempDir, 'plain');
-      execSync(`node ${cliPath} ${fixturePath} --format svg --output ${plain}`, { encoding: 'utf-8' });
+      execSync(`node ${cliPath} ${fixturePath} --format svg --output ${plain}`, {
+        encoding: 'utf-8',
+      });
       const without = fs.readFileSync(path.join(plain, 'vsa-overview.svg'), 'utf-8');
       expect(without).not.toContain('PostgreSQL');
 
       const layers = path.join(tempDir, 'layers.json');
-      fs.writeFileSync(layers, JSON.stringify({ infrastructure: [{ name: 'EventStoreX', description: 'Events' }] }));
+      fs.writeFileSync(
+        layers,
+        JSON.stringify({ infrastructure: [{ name: 'EventStoreX', description: 'Events' }] })
+      );
       const named = path.join(tempDir, 'named');
       execSync(`node ${cliPath} ${fixturePath} --format svg --output ${named} --layers ${layers}`, {
         encoding: 'utf-8',
@@ -127,10 +132,13 @@ describe('CLI Integration Tests', () => {
 
     it('fails on a missing layers file', () => {
       expect(() => {
-        execSync(`node ${cliPath} ${fixturePath} --format svg --output ${tempDir} --layers ${path.join(tempDir, 'nope.json')}`, {
-          encoding: 'utf-8',
-          stdio: 'pipe',
-        });
+        execSync(
+          `node ${cliPath} ${fixturePath} --format svg --output ${tempDir} --layers ${path.join(tempDir, 'nope.json')}`,
+          {
+            encoding: 'utf-8',
+            stdio: 'pipe',
+          }
+        );
       }).toThrow(/Layers file not found/);
     });
   });
