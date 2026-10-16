@@ -1004,6 +1004,13 @@ describe('ArchitectureSvgGenerator', () => {
               slice_type: 'translation',
               slice_types: ['translation'],
             },
+            {
+              name: 'file',
+              path: 'slices/file',
+              files: [],
+              slice_type: 'automation',
+              slice_types: ['automation'],
+            },
           ],
         },
       ],
@@ -1107,6 +1114,12 @@ describe('ArchitectureSvgGenerator', () => {
       expect(svg).toContain('📊 View slices');
       expect(svg).toContain('🔁 Translation slices');
       expect(svg).toContain('ship (+ automation)');
+      expect(svg).toContain('🤖 Automation slices');
+      // The automation group lists `file`, after the command group that lists `ship`.
+      expect(svg.indexOf('🤖 Automation slices')).toBeGreaterThan(
+        svg.indexOf('ship (+ automation)')
+      );
+      expect(svg.indexOf('• file<')).toBeGreaterThan(svg.indexOf('🤖 Automation slices'));
     });
 
     it('lists each command variant with the events it builds', () => {
@@ -1138,6 +1151,7 @@ describe('ArchitectureSvgGenerator', () => {
 
     it('counts commands and events per variant in the CQRS row', () => {
       const svg = new ArchitectureSvgGenerator(rustManifest).generate();
+      expect(svg).toContain('1 view slice');
       expect(svg).toContain('4 total');
       expect(svg).toContain('2 total');
     });
