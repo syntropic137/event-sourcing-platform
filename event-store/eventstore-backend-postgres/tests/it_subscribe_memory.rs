@@ -14,6 +14,10 @@
 //! 64 MiB. Measured on a debug build: about 35-39 MiB with paging, and
 //! about 1.2 GiB with the page bound removed or on the parent of #369.
 //!
+//! Half the subscribers filter by a prefix every aggregate matches, so the
+//! same history crosses both query arms: dropping the page bound from
+//! either one alone still breaks the budget (#455).
+//!
 //! Peak RSS comes from `/proc/self/status` (`VmHWM`), so the test is
 //! Linux-only. It is the only test in this binary, so no other test's
 //! allocations count against it. Postgres runs out of process.
@@ -32,6 +36,8 @@ use futures::StreamExt;
 use tokio::sync::Barrier;
 
 const SUBSCRIBERS: usize = 8;
+/// Matches every aggregate `write_history` writes.
+const PREFIX: &str = "Order-";
 const AGGREGATES: u64 = 50;
 const EVENTS_PER_AGGREGATE: u64 = 1_000;
 const TOTAL_EVENTS: usize = (AGGREGATES * EVENTS_PER_AGGREGATE) as usize;
@@ -67,7 +73,7 @@ fn event(tenant: &str, aggregate_id: &str, nonce: u64) -> proto::EventData {
 /// Append the whole history, one request per aggregate.
 async fn write_history(store: &PostgresStore, tenant: &str) {
     for a in 0..AGGREGATES {
-        let aggregate_id = format!("Order-{a}");
+        let aggregate_id = format!("{PREFIX}{a}");
         store
             .append(proto::AppendRequest {
                 tenant_id: tenant.into(),
@@ -105,12 +111,17 @@ fn reset_peak_rss() -> u64 {
     proc_status_bytes("VmRSS:")
 }
 
-/// Replay from 0 to the caught-up marker. Waits at `barrier` after the
+/// Replay `prefix` from 0 to the caught-up marker. Waits at `barrier` after the
 /// first event, so all subscribers are mid-replay at the same time.
-async fn replay(store: Arc<PostgresStore>, tenant: String, barrier: Arc<Barrier>) -> usize {
+async fn replay(
+    store: Arc<PostgresStore>,
+    tenant: String,
+    prefix: &'static str,
+    barrier: Arc<Barrier>,
+) -> usize {
     let mut stream = store.subscribe(proto::SubscribeRequest {
         tenant_id: tenant,
-        aggregate_id_prefix: String::new(),
+        aggregate_id_prefix: prefix.into(),
         from_global_nonce: 0,
     });
     let mut delivered = 0;
@@ -146,7 +157,15 @@ async fn concurrent_replays_stay_within_the_rss_bound() {
     let baseline = reset_peak_rss();
     let barrier = Arc::new(Barrier::new(SUBSCRIBERS));
     let subscribers: Vec<_> = (0..SUBSCRIBERS)
-        .map(|_| tokio::spawn(replay(store.clone(), tenant.clone(), barrier.clone())))
+        .map(|i| {
+            let prefix = if i % 2 == 0 { "" } else { PREFIX };
+            tokio::spawn(replay(
+                store.clone(),
+                tenant.clone(),
+                prefix,
+                barrier.clone(),
+            ))
+        })
         .collect();
     for s in subscribers {
         assert_eq!(s.await.expect("join"), TOTAL_EVENTS, "every event replayed");
