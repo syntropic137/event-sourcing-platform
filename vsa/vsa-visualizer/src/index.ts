@@ -21,7 +21,11 @@ program
   .argument('[manifest]', 'Path to manifest JSON file or - for stdin', '-')
   .option('-o, --output <dir>', 'Output directory', 'docs/architecture')
   .option('-f, --format <type>', 'Output format: "mermaid" or "svg"', 'mermaid')
-  .option('-t, --type <diagram>', 'Diagram type: "architecture", "aggregates", or "all"', 'architecture')
+  .option(
+    '-t, --type <diagram>',
+    'Diagram type: "architecture", "aggregates", or "all"',
+    'architecture'
+  )
   .option(
     '-l, --layers <file>',
     'JSON file naming the layers the manifest cannot know: applications, infrastructure, packages, libraries (SVG architecture diagram)'
@@ -48,7 +52,10 @@ For more information, see: https://github.com/your-org/vsa
 `
   )
   .action(
-    async (manifestPath: string, options: { output: string; format: string; type: string; verbose: boolean; layers?: string }) => {
+    async (
+      manifestPath: string,
+      options: { output: string; format: string; type: string; verbose: boolean; layers?: string }
+    ) => {
       try {
         // Validate format
         if (options.format !== 'mermaid' && options.format !== 'svg') {
@@ -130,9 +137,8 @@ For more information, see: https://github.com/your-org/vsa
 
         // Handle SVG format separately
         if (options.format === 'svg') {
-          const diagramTypes = options.type === 'all'
-            ? ['architecture', 'aggregates']
-            : [options.type];
+          const diagramTypes =
+            options.type === 'all' ? ['architecture', 'aggregates'] : [options.type];
 
           for (const diagramType of diagramTypes) {
             if (diagramType === 'architecture') {
@@ -140,7 +146,10 @@ For more information, see: https://github.com/your-org/vsa
                 console.log('[vsa-visualizer] Generating SVG architecture diagram...');
               }
 
-              const svgGenerator = new ArchitectureSvgGenerator(manifest, readLayers(options.layers));
+              const svgGenerator = new ArchitectureSvgGenerator(
+                manifest,
+                readLayers(options.layers)
+              );
               const svgContent = svgGenerator.generate();
               const svgPath = path.join(options.output, 'vsa-overview.svg');
               writeFile(svgPath, svgContent);
