@@ -6,15 +6,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-use crate::config::{ContextType, SliceType, VsaConfig};
+use crate::config::{ArchitectureType, ContextType, SliceType, VsaConfig};
 use crate::domain::DomainModel;
 use crate::error::Result;
 use crate::scanner::Scanner;
-use crate::scanners::DomainScanner;
+use crate::scanners::{DomainScanner, SliceScanner};
 
 /// VSA manifest schema version
+/// v2.4.0 - Rust enum variants as commands/events, command_to_events, slices as features (hexagonal), slice_types
 /// v2.3.0 - Added aggregate entities, value_objects, and folder_name for relationship visualization
-pub const MANIFEST_SCHEMA_VERSION: &str = "2.3.0";
+pub const MANIFEST_SCHEMA_VERSION: &str = "2.4.0";
 
 /// VSA manifest
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,6 +57,11 @@ pub struct FeatureManifest {
     /// Detected from file contents: *Command.* = command, *Query.*/*Projection.* = query
     #[serde(default)]
     pub slice_type: SliceType,
+    /// Every Event Modeling pattern the slice declares (`type: [command,
+    /// automation]`), primary first - NEW in v2.4.0. Filled for
+    /// hexagonal-event-sourced-vsa, where features are the scanned slices.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub slice_types: Vec<SliceType>,
 }
 
 /// Domain manifest containing all domain model components
@@ -80,6 +86,10 @@ pub struct DomainManifest {
 pub struct Relationships {
     /// Maps command name to aggregate name
     pub command_to_aggregate: HashMap<String, String>,
+    /// Maps each command to the events deciding it produces - NEW in v2.4.0.
+    /// Filled where the decision is readable (Rust enum `match` arms).
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
+    pub command_to_events: HashMap<String, Vec<String>>,
     /// Maps aggregate name to list of events it emits
     pub aggregate_to_events: HashMap<String, Vec<String>>,
     /// Maps event type to list of aggregates that handle it
@@ -115,9 +125,42 @@ impl Manifest {
 
         let mut context_manifests = Vec::new();
 
+        // Under hexagonal-event-sourced-vsa a context's features are its slices,
+        // as the slice rules see them (`<context>/slices/<name>/`), not every
+        // directory of the context.
+        let slices = if config.architecture == ArchitectureType::HexagonalEventSourcedVsa {
+            Some(SliceScanner::for_config(config, &root).scan()?)
+        } else {
+            None
+        };
+
         for context in &contexts {
-            let features = scanner.scan_features(&context.path)?;
             let mut feature_manifests = Vec::new();
+            if let Some(slices) = &slices {
+                for slice in slices.iter().filter(|s| s.path.starts_with(&context.path)) {
+                    let mut files: Vec<String> =
+                        slice.files.iter().map(|f| f.name.clone()).collect();
+                    files.sort();
+                    feature_manifests.push(FeatureManifest {
+                        name: slice.name.clone(),
+                        path: slice
+                            .path
+                            .strip_prefix(&context.path)
+                            .unwrap_or(&slice.path)
+                            .components()
+                            .map(|c| c.as_os_str().to_string_lossy())
+                            .collect::<Vec<_>>()
+                            // Forward slashes on every platform, so a manifest
+                            // generated on Windows matches one generated elsewhere.
+                            .join("/"),
+                        files,
+                        slice_type: slice.slice_type.clone(),
+                        slice_types: slice.patterns(),
+                    });
+                }
+            }
+            let features =
+                if slices.is_some() { Vec::new() } else { scanner.scan_features(&context.path)? };
 
             for feature in features {
                 let files = scanner.scan_feature_files(&feature.path)?;
@@ -131,6 +174,7 @@ impl Manifest {
                     path: feature.relative_path.to_string_lossy().to_string(),
                     files: file_names,
                     slice_type,
+                    slice_types: Vec::new(),
                 });
             }
 
@@ -466,6 +510,7 @@ impl Manifest {
     fn build_relationships(model: &DomainModel) -> Relationships {
         let mut command_to_aggregate = HashMap::new();
         let mut aggregate_to_events = HashMap::new();
+        let mut command_to_events: HashMap<String, Vec<String>> = HashMap::new();
         let mut event_to_handlers = HashMap::new();
         let mut event_to_projections = HashMap::new();
         let mut projection_to_read_model = HashMap::new();
@@ -476,6 +521,12 @@ impl Manifest {
 
             for handler in &aggregate.command_handlers {
                 command_to_aggregate.insert(handler.command_type.clone(), aggregate.name.clone());
+                if !handler.emits_events.is_empty() {
+                    command_to_events
+                        .entry(handler.command_type.clone())
+                        .or_default()
+                        .extend(handler.emits_events.iter().cloned());
+                }
 
                 // Collect events emitted by this command handler
                 for event in &handler.emits_events {
@@ -517,6 +568,7 @@ impl Manifest {
 
         Relationships {
             command_to_aggregate,
+            command_to_events,
             aggregate_to_events,
             event_to_handlers,
             event_to_projections,
@@ -557,6 +609,7 @@ mod tests {
                         "ProductCreatedEvent.ts".to_string(),
                     ],
                     slice_type: SliceType::Command,
+                    slice_types: Vec::new(),
                 }],
                 context_type: ContextType::BoundedContext,
                 aggregate_count: 2,

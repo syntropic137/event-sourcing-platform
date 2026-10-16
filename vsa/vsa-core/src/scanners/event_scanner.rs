@@ -3,8 +3,9 @@
 //! Scans for event files and extracts basic metadata including versions.
 
 use crate::config::{EventConfig, FilenameConvention};
-use crate::domain::{Event, EventVersion};
+use crate::domain::{Event, EventField, EventVersion};
 use crate::error::Result;
+use crate::scanners::rust_source::{is_optional_type, rust_enum_variants};
 use crate::scanners::stem_matches_suffix;
 use std::fs;
 use std::path::Path;
@@ -75,9 +76,7 @@ impl<'a> EventScanner<'a> {
             } else if path.is_file() {
                 if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
                     if self.matches_pattern(file_name) {
-                        if let Some(event) = self.parse_event(&path, file_name, is_versioned)? {
-                            events.push(event);
-                        }
+                        events.extend(self.parse_event(&path, file_name, is_versioned)?);
                     }
                 }
             }
@@ -113,13 +112,41 @@ impl<'a> EventScanner<'a> {
         file_path: &Path,
         file_name: &str,
         is_versioned: bool,
-    ) -> Result<Option<Event>> {
+    ) -> Result<Vec<Event>> {
         // Extract event name and version from file name
         let (name, event_type, version) = self.extract_event_info(file_name, is_versioned)?;
 
-        // For now, we create a basic event without fields
-        // Fields will be populated by AST parser in Milestone 4
-        Ok(Some(Event {
+        // A Rust file declaring a `*Event` enum: one event per variant.
+        if file_name.ends_with(".rs") {
+            let content = fs::read_to_string(file_path)?;
+            let variants = rust_enum_variants(&content, "Event");
+            if !variants.is_empty() {
+                return Ok(variants
+                    .into_iter()
+                    .map(|(qualified, variant)| Event {
+                        name: qualified,
+                        context: None,
+                        event_type: variant.name.clone(),
+                        version: version.clone(),
+                        file_path: file_path.to_path_buf(),
+                        fields: variant
+                            .fields
+                            .into_iter()
+                            .map(|(name, field_type)| EventField {
+                                required: !is_optional_type(&field_type),
+                                name,
+                                field_type,
+                                line_number: variant.line,
+                            })
+                            .collect(),
+                        decorator_present: false,
+                    })
+                    .collect());
+            }
+        }
+
+        // One event per file; fields are not read for other languages yet.
+        Ok(vec![Event {
             name,
             context: None, // Will be set by domain scanner when scanning contexts
             event_type,
@@ -127,7 +154,7 @@ impl<'a> EventScanner<'a> {
             file_path: file_path.to_path_buf(),
             fields: Vec::new(),
             decorator_present: false, // Will be set by AST parser
-        }))
+        }])
     }
 
     /// Extract event name, type, and version from file name
@@ -329,7 +356,8 @@ mod tests {
         let config = create_test_config();
         let scanner = EventScanner::new(&config, root);
 
-        let event = scanner.parse_event(&file_path, "TaskCreatedEvent.ts", false).unwrap().unwrap();
+        let event =
+            scanner.parse_event(&file_path, "TaskCreatedEvent.ts", false).unwrap().remove(0);
 
         assert_eq!(event.name, "TaskCreatedEvent");
         assert_eq!(event.event_type, "TaskCreated");
