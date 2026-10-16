@@ -444,9 +444,9 @@ describe('ArchitectureSvgGenerator', () => {
       const generator = new ArchitectureSvgGenerator(manifest);
       const svg = generator.generate();
 
-      // Should have slice type section headers
-      expect(svg).toContain('⚡ Commands');
-      expect(svg).toContain('📊 Queries');
+      // Slices are grouped by Event Modeling pattern; 'query' is the old name for a view
+      expect(svg).toContain('⚡ Command slices');
+      expect(svg).toContain('📊 View slices');
       
       // Should list features under correct sections
       expect(svg).toContain('create-workspace');
@@ -842,6 +842,110 @@ describe('ArchitectureSvgGenerator', () => {
       expect(svg).toContain('<line');
       expect(svg).toContain('<polygon'); // Arrow heads
       expect(svg).toContain('fill="#666666"'); // Arrow color
+    });
+  });
+
+  describe('what the manifest says, and nothing it does not (#460)', () => {
+    const rustManifest = {
+      version: '0.23.0',
+      schema_version: '2.4.0',
+      generated_at: '2026-10-16T00:00:00Z',
+      bounded_contexts: [
+        {
+          name: 'orders',
+          path: 'contexts/orders',
+          context_type: 'bounded_context',
+          aggregate_count: 1,
+          features: [
+            { name: 'place', path: 'slices/place', files: [], slice_type: 'command', slice_types: ['command'] },
+            { name: 'ship', path: 'slices/ship', files: [], slice_type: 'command', slice_types: ['command', 'automation'] },
+            { name: 'pending', path: 'slices/pending', files: [], slice_type: 'view', slice_types: ['view'] },
+            { name: 'import', path: 'slices/import', files: [], slice_type: 'translation', slice_types: ['translation'] }
+          ]
+        }
+      ],
+      domain: {
+        aggregates: [
+          { name: 'order_aggregate', context: 'orders', file_path: 'x', line_count: 1, command_handlers: [], event_handlers: [] }
+        ],
+        commands: [
+          { name: 'OrderCommand::Place', context: 'orders', file_path: 'x', has_aggregate_id: false, fields: [] },
+          { name: 'OrderCommand::Ship', context: 'orders', file_path: 'x', has_aggregate_id: false, fields: [] },
+          { name: 'OrderCommand::Cancel', context: 'orders', file_path: 'x', has_aggregate_id: false, fields: [] },
+          { name: 'OrderCommand::Archive', context: 'orders', file_path: 'x', has_aggregate_id: false, fields: [] }
+        ],
+        events: [
+          { name: 'OrderEvent::Placed', context: 'orders', event_type: 'Placed', version: 'v1', file_path: 'x', emitted_by: [], handled_by: [], fields: [], decorator_present: false },
+          { name: 'OrderEvent::Shipped', context: 'orders', event_type: 'Shipped', version: 'v1', file_path: 'x', emitted_by: [], handled_by: [], fields: [], decorator_present: false }
+        ],
+        relationships: {
+          command_to_aggregate: {},
+          aggregate_to_events: {},
+          event_to_handlers: {},
+          command_to_events: {
+            'OrderCommand::Place': ['OrderEvent::Placed'],
+            'OrderCommand::Ship': ['OrderEvent::Shipped'],
+            'OrderCommand::Cancel': []
+          }
+        }
+      }
+    } as unknown as Manifest;
+
+    it('draws no infrastructure the project did not name', () => {
+      const svg = new ArchitectureSvgGenerator(rustManifest).generate();
+      expect(svg).not.toContain('PostgreSQL');
+      expect(svg).not.toContain('Redis');
+      expect(svg).not.toContain('MinIO');
+      expect(svg).not.toContain('>Infrastructure<');
+    });
+
+    it('draws the infrastructure a layers config names', () => {
+      const svg = new ArchitectureSvgGenerator(rustManifest, {
+        infrastructure: [{ name: 'ESP', description: 'Event store' }]
+      }).generate();
+      expect(svg).toContain('Infrastructure');
+      expect(svg).toContain('ESP');
+    });
+
+    it('groups slices by pattern and names a second pattern', () => {
+      const svg = new ArchitectureSvgGenerator(rustManifest).generate();
+      expect(svg).toContain('⚡ Command slices');
+      expect(svg).toContain('📊 View slices');
+      expect(svg).toContain('🔁 Translation slices');
+      expect(svg).toContain('ship (+ automation)');
+    });
+
+    it('lists each command variant with the events it builds', () => {
+      const svg = new ArchitectureSvgGenerator(rustManifest).generate();
+      expect(svg).toContain('⚡ Commands → events');
+      expect(svg).toContain('Place → Placed');
+      expect(svg).toContain('Ship → Shipped');
+      expect(svg).toContain('Cancel → (none)'); // an explicit [] means none
+      expect(svg).toContain('• Archive<'); // no entry: unknown, shown alone
+      expect(svg).not.toContain('Archive →');
+      expect(svg).not.toContain('OrderCommand::');
+      expect(svg).toContain('orders (1 aggregate)');
+    });
+
+    it('keeps a long context title inside its box', () => {
+      const name = 'a_context_name_long_enough_to_overflow_a_three_column_box';
+      const manifest = {
+        ...rustManifest,
+        bounded_contexts: [
+          { ...rustManifest.bounded_contexts![0], name },
+          { ...rustManifest.bounded_contexts![0], name: 'b' },
+          { ...rustManifest.bounded_contexts![0], name: 'c' }
+        ]
+      } as Manifest;
+      const svg = new ArchitectureSvgGenerator(manifest).generate();
+      expect(svg).not.toContain(`${name} (1 aggregate)`);
+      expect(svg).toContain('…');
+    });
+
+    it('counts commands and events per variant in the CQRS row', () => {
+      const svg = new ArchitectureSvgGenerator(rustManifest).generate();
+      expect(svg).toContain('4 total');
+      expect(svg).toContain('2 total');
     });
   });
 });
