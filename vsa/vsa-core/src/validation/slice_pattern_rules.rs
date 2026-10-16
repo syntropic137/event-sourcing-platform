@@ -16,6 +16,9 @@
 //!   that only keeps a view current is a view; once it issues commands it is an
 //!   automation and should say so.
 //!
+//! A slice may list several types (`type: [command, automation]`): each name
+//! is checked by VSA036-VSA038 and each pattern's shape rule runs.
+//!
 //! VSA039 and VSA040 are on by default for `hexagonal-event-sourced-vsa` and
 //! off for other architectures (`slices.saga.require_todo_view`,
 //! `slices.saga.require_command`, `slices.query.forbid_commands`).
@@ -47,9 +50,9 @@ fn scan(ctx: &ValidationContext) -> Result<Vec<Slice>> {
     SliceScanner::for_config(&ctx.config, &ctx.root).scan()
 }
 
-/// The `type:` the slice's manifest wrote, if any.
-fn written_type(slice: &Slice) -> Option<&str> {
-    slice.metadata.as_ref().map(|m| m.slice_type.as_str()).filter(|t| !t.is_empty())
+/// Every type the slice's manifest wrote that names a known slice type.
+fn declared_types(slice: &Slice) -> Vec<SliceType> {
+    slice.written_types().into_iter().filter_map(SliceType::from_name).collect()
 }
 
 fn valid_names() -> String {
@@ -74,24 +77,42 @@ impl ValidationRule for UnknownSliceTypeRule {
         report: &mut EnhancedValidationReport,
     ) -> Result<()> {
         for slice in scan(ctx)? {
-            let Some(written) = written_type(&slice) else { continue };
-            if SliceType::from_name(written).is_some() {
-                continue;
+            let written = slice.written_types();
+            for name in &written {
+                if SliceType::from_name(name).is_some() {
+                    continue;
+                }
+                report.errors.push(ValidationIssue {
+                    path: slice.path.clone(),
+                    code: self.code().to_string(),
+                    severity: Severity::Error,
+                    message: format!(
+                        "Slice '{}' declares unknown type '{}'. Known types: {}.",
+                        slice.name,
+                        name,
+                        valid_names()
+                    ),
+                    suggestions: vec![Suggestion::manual(
+                        "Set type: in slice.yaml to the Event Modeling pattern the slice implements",
+                    )],
+                });
             }
-            report.errors.push(ValidationIssue {
-                path: slice.path.clone(),
-                code: self.code().to_string(),
-                severity: Severity::Error,
-                message: format!(
-                    "Slice '{}' declares unknown type '{}'. Known types: {}.",
-                    slice.name,
-                    written,
-                    valid_names()
-                ),
-                suggestions: vec![Suggestion::manual(
-                    "Set type: in slice.yaml to the Event Modeling pattern the slice implements",
-                )],
-            });
+            // `mixed` names no pattern, so it cannot sit in a list of patterns.
+            if written.len() > 1 && declared_types(&slice).contains(&SliceType::Mixed) {
+                report.errors.push(ValidationIssue {
+                    path: slice.path.clone(),
+                    code: self.code().to_string(),
+                    severity: Severity::Error,
+                    message: format!(
+                        "Slice '{}' lists 'mixed' among several types. A type list names each \
+                         pattern the slice implements; 'mixed' names none.",
+                        slice.name
+                    ),
+                    suggestions: vec![Suggestion::manual(
+                        "List the patterns instead, e.g. type: [command, automation]",
+                    )],
+                });
+            }
         }
         Ok(())
     }
@@ -119,29 +140,28 @@ impl ValidationRule for UndeclaredSliceTypeRule {
         };
         let allowed: Vec<SliceType> = slices_config.types.iter().map(SliceType::pattern).collect();
         for slice in scan(ctx)? {
-            let Some(declared) = written_type(&slice).and_then(SliceType::from_name) else {
-                continue;
-            };
-            if allowed.contains(&declared.pattern()) {
-                continue;
+            for declared in declared_types(&slice) {
+                if allowed.contains(&declared.pattern()) {
+                    continue;
+                }
+                let allowed_names: Vec<&str> =
+                    slices_config.types.iter().map(SliceType::name).collect();
+                report.errors.push(ValidationIssue {
+                    path: slice.path.clone(),
+                    code: self.code().to_string(),
+                    severity: Severity::Error,
+                    message: format!(
+                        "Slice '{}' is type '{}', which slices.types [{}] does not allow.",
+                        slice.name,
+                        declared.name(),
+                        allowed_names.join(", ")
+                    ),
+                    suggestions: vec![Suggestion::manual(format!(
+                        "Add {} to slices.types in vsa.yaml, or change the slice's type",
+                        declared.pattern().name()
+                    ))],
+                });
             }
-            let allowed_names: Vec<&str> =
-                slices_config.types.iter().map(SliceType::name).collect();
-            report.errors.push(ValidationIssue {
-                path: slice.path.clone(),
-                code: self.code().to_string(),
-                severity: Severity::Error,
-                message: format!(
-                    "Slice '{}' is type '{}', which slices.types [{}] does not allow.",
-                    slice.name,
-                    declared.name(),
-                    allowed_names.join(", ")
-                ),
-                suggestions: vec![Suggestion::manual(format!(
-                    "Add {} to slices.types in vsa.yaml, or change the slice's type",
-                    declared.pattern().name()
-                ))],
-            });
         }
         Ok(())
     }
@@ -190,18 +210,17 @@ impl ValidationRule for DeprecatedSliceTypeNameRule {
         }
 
         for slice in scan(ctx)? {
-            let Some(declared) = written_type(&slice).and_then(SliceType::from_name) else {
-                continue;
-            };
-            if let Some((old, new)) = declared.deprecated_name() {
-                warn(
-                    &slice.path,
-                    format!(
-                        "Slice '{}' uses type '{old}', the deprecated name for '{new}'.",
-                        slice.name
-                    ),
-                    new,
-                );
+            for declared in declared_types(&slice) {
+                if let Some((old, new)) = declared.deprecated_name() {
+                    warn(
+                        &slice.path,
+                        format!(
+                            "Slice '{}' uses type '{old}', the deprecated name for '{new}'.",
+                            slice.name
+                        ),
+                        new,
+                    );
+                }
             }
         }
         Ok(())
@@ -287,10 +306,15 @@ impl ValidationRule for AutomationSliceShapeRule {
     ) -> Result<()> {
         let policy = ShapePolicy::from_config(&ctx.config);
         for slice in scan(ctx)? {
-            let pattern = slice.slice_type.pattern();
-            if !matches!(pattern, SliceType::Automation | SliceType::Translation) {
+            // An automation also listed as a translation is checked once, as
+            // the stricter automation.
+            let pattern = if slice.has_pattern(&SliceType::Automation) {
+                SliceType::Automation
+            } else if slice.has_pattern(&SliceType::Translation) {
+                SliceType::Translation
+            } else {
                 continue;
-            }
+            };
             let mut missing = Vec::new();
             if pattern == SliceType::Automation
                 && policy.automation_needs_todo_view
@@ -356,7 +380,7 @@ impl ValidationRule for ViewSliceIssuesNoCommandRule {
             return Ok(());
         }
         for slice in scan(ctx)? {
-            if slice.slice_type.pattern() != SliceType::View {
+            if !slice.has_pattern(&SliceType::View) {
                 continue;
             }
             let Some((file, reference)) = first_command_reference(&slice) else { continue };
@@ -602,13 +626,151 @@ mod tests {
     #[test]
     fn empty_or_non_string_type_is_unknown() {
         let (_t, ctx) = hex();
-        for (name, value) in [("empty", "\"\""), ("number", "123"), ("list", "[view]")] {
+        for (name, value) in [
+            ("empty", "\"\""),
+            ("number", "123"),
+            ("empty_list", "[]"),
+            ("list_with_number", "[command, 123]"),
+            ("list_with_empty", "[command, \"\"]"),
+        ] {
             let dir = ctx.root.join("orders/slices").join(name);
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join("slice.yaml"), format!("name: {name}\ntype: {value}\n")).unwrap();
         }
         let (errors, _) = codes(&UnknownSliceTypeRule, &ctx);
-        assert_eq!(errors.len(), 3, "{errors:?}");
+        assert_eq!(errors.len(), 5, "{errors:?}");
+    }
+
+    // A command slice that also keeps the to-do list and the processor issuing
+    // its command: decides through the domain, appends through a port.
+    const HANDLER: &str = "use crate::domain::{decide, ItemCommand};\n\
+                           use crate::ports::EventStore;\n\
+                           pub fn handle(s: &mut impl EventStore) { let _ = decide(ItemCommand::Place); }\n";
+
+    fn all_errors(ctx: &ValidationContext) -> Vec<String> {
+        use crate::validation::{CommandSliceReachesDomainRule, CommandSliceReachesPortRule};
+        let rules: [&dyn ValidationRule; 6] = [
+            &UnknownSliceTypeRule,
+            &UndeclaredSliceTypeRule,
+            &AutomationSliceShapeRule,
+            &ViewSliceIssuesNoCommandRule,
+            &CommandSliceReachesDomainRule,
+            &CommandSliceReachesPortRule,
+        ];
+        rules.iter().flat_map(|r| codes(*r, ctx).0).collect()
+    }
+
+    #[test]
+    fn a_one_entry_list_is_that_type() {
+        let (_t, ctx) = hex();
+        slice(&ctx.root, "place", "[command]", &[("place_handler.rs", HANDLER)]);
+        let slices = scan(&ctx).unwrap();
+        assert_eq!(slices[0].slice_type, SliceType::Command);
+        assert_eq!(slices[0].patterns(), vec![SliceType::Command]);
+        assert!(all_errors(&ctx).is_empty());
+    }
+
+    #[test]
+    fn command_hosting_an_automation_passes_both_sets_of_checks() {
+        let (_t, ctx) = hex();
+        slice(
+            &ctx.root,
+            "place",
+            "[command, automation]",
+            &[
+                ("place_handler.rs", HANDLER),
+                ("place_to_do.rs", "pub struct PendingPlacements;\n"),
+                ("place_process.rs", PROCESSOR),
+            ],
+        );
+        let slices = scan(&ctx).unwrap();
+        assert_eq!(slices[0].slice_type, SliceType::Command, "the first entry stays primary");
+        assert_eq!(slices[0].patterns(), vec![SliceType::Command, SliceType::Automation]);
+        assert!(all_errors(&ctx).is_empty(), "{:?}", all_errors(&ctx));
+    }
+
+    #[test]
+    fn command_hosting_an_automation_runs_the_automation_checks() {
+        let (_t, ctx) = hex();
+        // Reaches the domain and a port, but keeps no to-do list.
+        slice(&ctx.root, "place", "[command, automation]", &[("place_handler.rs", HANDLER)]);
+        let errors = all_errors(&ctx);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("automation slice 'place' is missing a to-do list view"));
+    }
+
+    #[test]
+    fn command_hosting_an_automation_runs_the_command_checks() {
+        let (_t, ctx) = hex();
+        // A to-do list and a command, but the slice never reaches a port.
+        slice(
+            &ctx.root,
+            "place",
+            "[automation, command]",
+            &[
+                ("place_to_do.rs", "pub struct PendingPlacements;\n"),
+                ("place_process.rs", PROCESSOR),
+            ],
+        );
+        let errors = all_errors(&ctx);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("Command slice 'place' never imports a port"));
+    }
+
+    #[test]
+    fn each_listed_type_must_be_known_allowed_and_current() {
+        let slices = SlicesConfig {
+            types: vec![SliceType::Command, SliceType::View],
+            ..SlicesConfig::default()
+        };
+        let (_t, ctx) = make_ctx(ArchitectureType::HexagonalEventSourcedVsa, slices);
+        slice(&ctx.root, "a", "[command, bogus]", &[]);
+        slice(&ctx.root, "b", "[command, automation]", &[]);
+        slice(&ctx.root, "c", "[command, mixed]", &[]);
+        slice(&ctx.root, "d", "[command, query]", &[]);
+        let (unknown, _) = codes(&UnknownSliceTypeRule, &ctx);
+        assert_eq!(unknown.len(), 2, "{unknown:?}");
+        assert!(unknown.iter().any(|e| e.contains("'a' declares unknown type 'bogus'")));
+        assert!(unknown.iter().any(|e| e.contains("'c' lists 'mixed'")));
+        let (undeclared, _) = codes(&UndeclaredSliceTypeRule, &ctx);
+        assert_eq!(undeclared.len(), 2, "{undeclared:?}");
+        assert!(undeclared.iter().any(|e| e.contains("'b' is type 'automation'")));
+        assert!(undeclared.iter().any(|e| e.contains("'c' is type 'mixed'")));
+        let (_, deprecated) = codes(&DeprecatedSliceTypeNameRule, &ctx);
+        assert_eq!(deprecated.len(), 1, "{deprecated:?}");
+        assert!(deprecated[0].contains("'d' uses type 'query'"));
+    }
+
+    #[test]
+    fn a_secondary_view_needs_its_projection() {
+        use crate::validation::RequireProjectionForQueryRule;
+        let (_t, ctx) = hex();
+        slice(&ctx.root, "place", "[command, view]", &[("place_handler.rs", HANDLER)]);
+        let (errors, _) = codes(&RequireProjectionForQueryRule, &ctx);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+    }
+
+    #[test]
+    fn a_secondary_translation_must_issue_a_command() {
+        let (_t, ctx) = hex();
+        slice(&ctx.root, "import", "[command, translation]", &[("webhook.rs", "pub fn on() {}\n")]);
+        let (errors, _) = codes(&AutomationSliceShapeRule, &ctx);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].starts_with("translation slice 'import'"), "{}", errors[0]);
+    }
+
+    #[test]
+    fn a_view_listed_beside_a_command_issuer_is_still_a_view() {
+        let (_t, ctx) = hex();
+        slice(
+            &ctx.root,
+            "pending",
+            "[automation, view]",
+            &[("pending_projection.rs", TODO_PROJECTION), ("process.rs", PROCESSOR)],
+        );
+        let (errors, _) = codes(&ViewSliceIssuesNoCommandRule, &ctx);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("View slice 'pending' issues a command"));
     }
 
     #[test]

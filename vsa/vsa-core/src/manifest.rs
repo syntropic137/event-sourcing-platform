@@ -348,9 +348,11 @@ impl Manifest {
         let mapping = yaml.as_mapping()?;
         let key = |s: &str| serde_yaml::Value::String(s.to_string());
 
-        // Priority 1: Explicit `type:` field
+        // Priority 1: Explicit `type:` field. A list (`type: [command,
+        // automation]`) is recorded by its first entry, as the scanner does.
         if let Some(type_val) = mapping.get(key("type")) {
-            if let Some(type_str) = type_val.as_str() {
+            let first = type_val.as_sequence().and_then(|seq| seq.first()).unwrap_or(type_val);
+            if let Some(type_str) = first.as_str() {
                 return Some(SliceType::from_name(type_str).unwrap_or(SliceType::Unknown));
             }
         }
