@@ -104,3 +104,23 @@ fn a_command_decided_in_several_arms_gets_every_event() {
         serde_json::json!(["OrderEvent::Flagged", "OrderEvent::Placed"])
     );
 }
+
+#[test]
+fn snake_case_projections_are_in_the_manifest_with_their_events() {
+    let dir = workspace();
+    let slice = "contexts/orders/slices/order_totals";
+    write(dir.path(), &format!("{slice}/slice.yaml"), "name: order_totals\ntype: view\n");
+    write(
+        dir.path(),
+        &format!("{slice}/order_totals_projection.rs"),
+        "pub fn apply(e: &OrderEvent) { if let OrderEvent::Placed { .. } = e {} }\n",
+    );
+    let m = manifest(dir.path());
+    let projections = &m["domain"]["projections"];
+    assert_eq!(names(projections), ["order_totals_projection"], "{projections}");
+    assert_eq!(projections[0]["subscribed_events"], serde_json::json!(["OrderEvent::Placed"]));
+    assert_eq!(
+        m["domain"]["relationships"]["event_to_projections"]["OrderEvent::Placed"],
+        serde_json::json!(["order_totals_projection"])
+    );
+}

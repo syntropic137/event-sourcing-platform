@@ -826,6 +826,13 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     const commandCount = domain.commands.length;
     const eventCount = domain.events.length;
     const projectionCount = domain.projections?.length || 0;
+    // View slices are the read side too; a project whose projections the
+    // manifest cannot name still shows how many views it keeps.
+    const viewSliceCount = this.filterContexts(this.manifest.bounded_contexts || [])
+      .flatMap((ctx) => ctx.features || [])
+      .filter((f) =>
+        ['view', 'query'].includes((f.slice_types && f.slice_types[0]) || f.slice_type || '')
+      ).length;
 
     // Calculate box positions
     const commandX = this.PADDING;
@@ -859,7 +866,10 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       { width: boxWidth, height: boxHeight },
       'Projections',
       projectionCount,
-      this.CQRS_COLORS.projection
+      this.CQRS_COLORS.projection,
+      viewSliceCount > 0
+        ? `${viewSliceCount} view ${viewSliceCount === 1 ? 'slice' : 'slices'}`
+        : undefined
     );
 
     // Arrows
@@ -886,7 +896,8 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     dims: { width: number; height: number },
     label: string,
     count: number,
-    colors: { fill: string; stroke: string }
+    colors: { fill: string; stroke: string },
+    detail?: string
   ): void {
     // Box
     svg.rect(pos, dims, {
@@ -910,6 +921,13 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       fontFamily: this.FONT_HEADER,
       fill: '#666666',
     });
+    if (detail) {
+      svg.text({ x: pos.x + 20, y: pos.y + 88 }, detail, {
+        fontSize: 14,
+        fontFamily: this.FONT_HEADER,
+        fill: '#666666',
+      });
+    }
   }
 
   /**

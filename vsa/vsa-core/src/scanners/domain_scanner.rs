@@ -150,7 +150,8 @@ impl DomainScanner {
         // false positives and improve performance. Current implementation scans from context
         // root which can be overly broad for large codebases.
         let context_path = domain_path.parent().unwrap_or(domain_path);
-        let projection_scanner = ProjectionScanner::new(None, context_path);
+        let projection_scanner = ProjectionScanner::new(None, context_path)
+            .with_snake_case(self.filename_convention == FilenameConvention::SnakeCase);
         model.projections = projection_scanner.scan()?;
 
         // Tag projections with context
