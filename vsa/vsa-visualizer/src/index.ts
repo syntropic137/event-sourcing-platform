@@ -8,7 +8,7 @@ import { ManifestValidationError } from './types/manifest';
 import { OverviewGenerator } from './generators/overview-generator';
 import { AggregateGenerator } from './generators/aggregate-generator';
 import { FlowsGenerator } from './generators/flows-generator';
-import { ArchitectureSvgGenerator } from './generators/architecture-svg-generator';
+import { ArchitectureSvgGenerator, LayerConfig } from './generators/architecture-svg-generator';
 import { AggregateRelationshipGenerator } from './generators/aggregate-relationship-generator';
 import { writeFile, writeFiles, ensureDirectoryExists } from './utils/file-writer';
 
@@ -21,7 +21,15 @@ program
   .argument('[manifest]', 'Path to manifest JSON file or - for stdin', '-')
   .option('-o, --output <dir>', 'Output directory', 'docs/architecture')
   .option('-f, --format <type>', 'Output format: "mermaid" or "svg"', 'mermaid')
-  .option('-t, --type <diagram>', 'Diagram type: "architecture", "aggregates", or "all"', 'architecture')
+  .option(
+    '-t, --type <diagram>',
+    'Diagram type: "architecture", "aggregates", or "all"',
+    'architecture'
+  )
+  .option(
+    '-l, --layers <file>',
+    'JSON file naming the layers the manifest cannot know: applications, infrastructure, packages, libraries (SVG architecture diagram)'
+  )
   .option('-v, --verbose', 'Enable verbose logging', false)
   .addHelpText(
     'after',
@@ -44,7 +52,10 @@ For more information, see: https://github.com/your-org/vsa
 `
   )
   .action(
-    async (manifestPath: string, options: { output: string; format: string; type: string; verbose: boolean }) => {
+    async (
+      manifestPath: string,
+      options: { output: string; format: string; type: string; verbose: boolean; layers?: string }
+    ) => {
       try {
         // Validate format
         if (options.format !== 'mermaid' && options.format !== 'svg') {
@@ -126,9 +137,8 @@ For more information, see: https://github.com/your-org/vsa
 
         // Handle SVG format separately
         if (options.format === 'svg') {
-          const diagramTypes = options.type === 'all'
-            ? ['architecture', 'aggregates']
-            : [options.type];
+          const diagramTypes =
+            options.type === 'all' ? ['architecture', 'aggregates'] : [options.type];
 
           for (const diagramType of diagramTypes) {
             if (diagramType === 'architecture') {
@@ -136,7 +146,10 @@ For more information, see: https://github.com/your-org/vsa
                 console.log('[vsa-visualizer] Generating SVG architecture diagram...');
               }
 
-              const svgGenerator = new ArchitectureSvgGenerator(manifest);
+              const svgGenerator = new ArchitectureSvgGenerator(
+                manifest,
+                readLayers(options.layers)
+              );
               const svgContent = svgGenerator.generate();
               const svgPath = path.join(options.output, 'vsa-overview.svg');
               writeFile(svgPath, svgContent);
@@ -281,6 +294,25 @@ async function readStdin(): Promise<string> {
       reject(error);
     });
   });
+}
+
+/**
+ * Read the --layers file: what the manifest cannot know (applications,
+ * infrastructure, packages, libraries). Without it those rows are inferred
+ * (packages) or left out (infrastructure), never invented.
+ */
+function readLayers(file: string | undefined): LayerConfig | undefined {
+  if (!file) return undefined;
+  if (!fs.existsSync(file)) {
+    console.error(`Error: Layers file not found: ${file}`);
+    process.exit(1);
+  }
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf-8')) as LayerConfig;
+  } catch (error) {
+    console.error(`Error: Layers file is not valid JSON: ${file}: ${(error as Error).message}`);
+    process.exit(1);
+  }
 }
 
 program.parse();

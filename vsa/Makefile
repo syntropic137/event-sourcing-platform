@@ -60,7 +60,7 @@ vsa-list: ## List contexts and features
 
 # VSA Visualizer targets
 visualizer-install: ## Install visualizer dependencies
-	cd vsa-visualizer && npm install
+	cd vsa-visualizer && npm install --no-workspaces
 
 visualizer-build: ## Build visualizer
 	cd vsa-visualizer && npm run build

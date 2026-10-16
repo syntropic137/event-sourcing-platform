@@ -79,3 +79,30 @@ fn projection_runner_that_issues_commands_is_not_a_view() {
     );
     validate(dir.path()).failure().stdout(contains("View slice 'order_totals' issues a command"));
 }
+
+#[test]
+fn command_slice_hosting_its_processor_gets_both_sets_of_checks() {
+    let dir = workspace();
+    set_validation_line(dir.path(), "  types: [command]", "  types: [command, automation]");
+    // The command slice also keeps the to-do list and the processor issuing its command.
+    write(dir.path(), PLACE, "name: place_order\ntype: [command, automation]\n");
+    validate(dir.path())
+        .failure()
+        .stdout(contains("automation slice 'place_order' is missing a to-do list view"));
+    let slice = "contexts/orders/slices/place_order";
+    write(dir.path(), &format!("{slice}/place_order_to_do.rs"), "pub struct PendingOrders;\n");
+    validate(dir.path()).success();
+    // The command checks still run: drop the port and VSA035 fails it.
+    write(
+        dir.path(),
+        &format!("{slice}/place_order_handler.rs"),
+        "use crate::domain::commands::order_command::OrderCommand;\n\
+         use crate::domain::aggregate_order::order_aggregate::decide;\n\
+         pub fn place_order(id: u64) -> Result<(), String> {\n\
+             decide(false, OrderCommand::Place { id }).map(|_| ())\n\
+         }\n",
+    );
+    validate(dir.path())
+        .failure()
+        .stdout(contains("Command slice 'place_order' never imports a port"));
+}
