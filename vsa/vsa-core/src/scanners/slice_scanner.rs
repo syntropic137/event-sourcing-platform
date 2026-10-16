@@ -83,9 +83,17 @@ pub struct SliceManifest {
     #[serde(default)]
     pub name: String,
 
-    /// Explicit slice type as written (`type:`), empty when absent
+    /// Explicit slice type as written (`type:`), empty when absent. For a list
+    /// (`type: [command, automation]`) this is the first entry.
     #[serde(rename = "type", default)]
     pub slice_type: String,
+
+    /// The entries after the first when `type:` is a list, as written. A slice
+    /// that hosts more than one pattern (a command slice that also keeps the
+    /// to-do list and processor issuing that command) declares each one, and
+    /// every declared pattern's checks run. Empty for a single `type:`.
+    #[serde(skip)]
+    pub more_types: Vec<String>,
 
     /// For query slices: the projection class name
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -115,14 +123,21 @@ impl SliceManifest {
     pub fn from_yaml(value: &serde_yaml::Value) -> Self {
         let get = |key: &str| value.get(key);
         let string = |key: &str| get(key).and_then(|v| v.as_str()).map(str::to_string);
-        // `type:` as written. A present but empty or non-string value is kept
-        // in a form no slice type matches, so VSA036 reports it instead of the
-        // slice silently counting as undeclared.
-        let written_type = match get("type") {
-            None => String::new(),
-            Some(v) => match v.as_str() {
-                Some(t) if !t.trim().is_empty() => t.to_string(),
-                _ => format!("<{}>", serde_yaml::to_string(v).unwrap_or_default().trim()),
+        // `type:` as written: one name, or a non-empty list of names. A present
+        // but empty, non-string or otherwise malformed value is kept in a form
+        // no slice type matches, so VSA036 reports it instead of the slice
+        // silently counting as undeclared.
+        let (written_type, more_types) = match get("type") {
+            None => (String::new(), Vec::new()),
+            Some(v) => match written_type_names(v) {
+                Some(mut names) => {
+                    let first = names.remove(0);
+                    (first, names)
+                }
+                None => (
+                    format!("<{}>", serde_yaml::to_string(v).unwrap_or_default().trim()),
+                    Vec::new(),
+                ),
             },
         };
         // `projection:` is either a name or a mapping with a `name:`.
@@ -147,12 +162,25 @@ impl SliceManifest {
         Self {
             name: string("name").unwrap_or_default(),
             slice_type: written_type,
+            more_types,
             projection,
             subscribes_to,
             returns: string("returns"),
             description: string("description"),
             inferred_type,
         }
+    }
+}
+
+/// The names a `type:` value lists: `Some([name])` for a non-empty string,
+/// `Some(names)` for a non-empty list of non-empty strings, `None` otherwise.
+fn written_type_names(value: &serde_yaml::Value) -> Option<Vec<String>> {
+    let name =
+        |v: &serde_yaml::Value| v.as_str().filter(|t| !t.trim().is_empty()).map(str::to_string);
+    match value.as_sequence() {
+        Some(seq) if !seq.is_empty() => seq.iter().map(name).collect(),
+        Some(_) => None,
+        None => name(value).map(|n| vec![n]),
     }
 }
 
@@ -452,6 +480,39 @@ fn is_skipped_dir(entry: &walkdir::DirEntry) -> bool {
 }
 
 impl Slice {
+    /// Every type `type:` declares, as written: the first, then the rest of a
+    /// list. Empty when slice.yaml declares no type.
+    pub fn written_types(&self) -> Vec<&str> {
+        let Some(manifest) = self.metadata.as_ref() else { return Vec::new() };
+        std::iter::once(manifest.slice_type.as_str())
+            .chain(manifest.more_types.iter().map(String::as_str))
+            .filter(|t| !t.is_empty())
+            .collect()
+    }
+
+    /// The Event Modeling patterns this slice implements, without duplicates:
+    /// [`Slice::slice_type`]'s pattern first, then each further entry of a
+    /// `type:` list. A single-type slice has exactly one.
+    pub fn patterns(&self) -> Vec<SliceType> {
+        let mut patterns = vec![self.slice_type.pattern()];
+        if let Some(manifest) = self.metadata.as_ref().filter(|_| self.type_explicit) {
+            for name in &manifest.more_types {
+                let pattern = SliceType::from_name(name).unwrap_or_default().pattern();
+                if !patterns.contains(&pattern) {
+                    patterns.push(pattern);
+                }
+            }
+        }
+        patterns
+    }
+
+    /// Whether this slice implements `pattern` (compared as patterns, so
+    /// `Query` matches `View` and `Saga` matches `Automation`).
+    pub fn has_pattern(&self, pattern: &SliceType) -> bool {
+        let pattern = pattern.pattern();
+        self.patterns().contains(&pattern)
+    }
+
     /// Check if this slice has a handler
     pub fn has_handler(&self) -> bool {
         self.files.iter().any(|f| f.file_type == SliceFileType::Handler)
@@ -712,6 +773,7 @@ returns: OrderDetail
         let manifest = Some(SliceManifest {
             name: "test_slice".to_string(),
             slice_type: "saga".to_string(),
+            more_types: Vec::new(),
             projection: None,
             subscribes_to: vec![],
             returns: None,
@@ -790,6 +852,7 @@ returns: OrderDetail
         let manifest = Some(SliceManifest {
             name: "test_slice".to_string(),
             slice_type: "mixed".to_string(),
+            more_types: Vec::new(),
             projection: None,
             subscribes_to: vec![],
             returns: None,
@@ -814,6 +877,7 @@ returns: OrderDetail
         let manifest = Some(SliceManifest {
             name: "test_slice".to_string(),
             slice_type: "invalid_type".to_string(), // Unrecognized type
+            more_types: Vec::new(),
             projection: None,
             subscribes_to: vec![],
             returns: None,
