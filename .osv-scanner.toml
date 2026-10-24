@@ -46,6 +46,10 @@ reason = "serialize-javascript pinned at 6.x by webpack plugins (copy-webpack-pl
 id = "GHSA-qj8w-gfj5-8c6v"
 reason = "serialize-javascript pinned at 6.x by webpack plugins. Awaiting upstream major bump."
 
+[[IgnoredVulns]]
+id = "GHSA-m5mm-p8h7-m29v"
+reason = "serialize-javascript pinned at 6.x by webpack plugins (copy-webpack-plugin 11, css-minimizer-webpack-plugin 5), same as GHSA-5c6j-r48x-rmvq. Fix needs 7.1.3 (major). Docs-site build only; serializes repo-authored config, not untrusted input. Awaiting upstream major bump."
+
 # npm: vsce 2.15.0 → xml2js 0.4.23
 # DEFERRED: `vsce` 2.15.0 is the DEPRECATED package. Its maintained successor is
 # `@vscode/vsce` (3.x). Evaluate migrating rather than waiting on the old package.
@@ -87,6 +91,14 @@ reason = "linkify-it pinned at 3.x by vsce -> markdown-it 12.3.2. Fix needs link
 [[IgnoredVulns]]
 id = "GHSA-v245-v573-v5vm"
 reason = "Duplicate advisory for GHSA-22p9-wv53-3rq4 (linkify-it, pinned by vsce -> markdown-it). Migrate from deprecated vsce to @vscode/vsce."
+
+[[IgnoredVulns]]
+id = "GHSA-r7fv-28h4-cvq7"
+reason = "markdown-it 12.3.2 pinned by vsce 2.15.0 (same root cause as GHSA-6v5v-wf23-fmfq). Fix needs markdown-it 14.3.2 (major). Build-time only (VS Code extension packaging), never parses untrusted input. Migrate from deprecated vsce to @vscode/vsce."
+
+[[IgnoredVulns]]
+id = "GHSA-vfgh-jcmw-g37q"
+reason = "markdown-it 12.3.2 pinned by vsce 2.15.0 (same root cause as GHSA-6v5v-wf23-fmfq). Fix needs markdown-it 14.3.3 (major). Build-time only, never parses untrusted input. Migrate from deprecated vsce to @vscode/vsce."
 
 
 # npm: braces (GHSA-vfj7-8cjw-p6xm, stack-exhaustion DoS on deeply nested patterns).
