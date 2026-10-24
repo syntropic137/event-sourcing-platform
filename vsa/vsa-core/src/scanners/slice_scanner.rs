@@ -1,11 +1,16 @@
 //! Slice scanner and type detection
 //!
 //! Scans for vertical slices and detects their type (command, query, saga).
+//! Slices are found in `<root>/<slices.path>/` (one context at the root) and in
+//! `<root>/<context>/<slices.path>/` for every context directory under the root
+//! (the hexagonal, multi-context layout). A slice's files are read recursively,
+//! so `internal/` and other subfolders count.
+//!
 //! Slice type can be determined:
-//! 1. Explicitly via `slice.yaml` metadata file
-//! 2. Implicitly from file contents (has *Command.* = command, has *Query.* = query, etc.)
+//! 1. Explicitly via `slice.yaml` metadata file (`type:`, or section keys)
+//! 2. Implicitly from file names (has *Command.* = command, has *Query.* = query, etc.)
 
-use crate::config::{SliceType, SlicesConfig};
+use crate::config::{ArchitectureType, SliceType, SlicesConfig, VsaConfig};
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -75,11 +80,20 @@ pub enum SliceFileType {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SliceManifest {
     /// Slice name
+    #[serde(default)]
     pub name: String,
 
-    /// Explicit slice type
-    #[serde(rename = "type")]
+    /// Explicit slice type as written (`type:`), empty when absent. For a list
+    /// (`type: [command, automation]`) this is the first entry.
+    #[serde(rename = "type", default)]
     pub slice_type: String,
+
+    /// The entries after the first when `type:` is a list, as written. A slice
+    /// that hosts more than one pattern (a command slice that also keeps the
+    /// to-do list and processor issuing that command) declares each one, and
+    /// every declared pattern's checks run. Empty for a single `type:`.
+    #[serde(skip)]
+    pub more_types: Vec<String>,
 
     /// For query slices: the projection class name
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -96,69 +110,156 @@ pub struct SliceManifest {
     /// Description
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+
+    /// Type implied by section keys (`command:`, `query:`, `projection:`,
+    /// `read_model:`) when there is no `type:`
+    #[serde(skip)]
+    pub inferred_type: Option<SliceType>,
+}
+
+impl SliceManifest {
+    /// Build a manifest from parsed YAML without failing on optional or
+    /// differently-shaped keys.
+    pub fn from_yaml(value: &serde_yaml::Value) -> Self {
+        let get = |key: &str| value.get(key);
+        let string = |key: &str| get(key).and_then(|v| v.as_str()).map(str::to_string);
+        // `type:` as written: one name, or a non-empty list of names. A present
+        // but empty, non-string or otherwise malformed value is kept in a form
+        // no slice type matches, so VSA036 reports it instead of the slice
+        // silently counting as undeclared.
+        let (written_type, more_types) = match get("type") {
+            None => (String::new(), Vec::new()),
+            Some(v) => match written_type_names(v) {
+                Some(mut names) => {
+                    let first = names.remove(0);
+                    (first, names)
+                }
+                None => (
+                    format!("<{}>", serde_yaml::to_string(v).unwrap_or_default().trim()),
+                    Vec::new(),
+                ),
+            },
+        };
+        // `projection:` is either a name or a mapping with a `name:`.
+        let projection = get("projection").and_then(|v| {
+            v.as_str().map(str::to_string).or_else(|| v.get("name")?.as_str().map(str::to_string))
+        });
+        let subscribes_to = get("subscribes_to")
+            .and_then(|v| v.as_sequence())
+            .map(|seq| seq.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+
+        let has = |key: &str| get(key).is_some();
+        let has_command = has("command");
+        let has_view = has("query") || has("projection") || has("read_model");
+        let inferred_type = match (has_command, has_view) {
+            (true, true) => Some(SliceType::Mixed),
+            (false, true) => Some(SliceType::Query),
+            (true, false) => Some(SliceType::Command),
+            (false, false) => None,
+        };
+
+        Self {
+            name: string("name").unwrap_or_default(),
+            slice_type: written_type,
+            more_types,
+            projection,
+            subscribes_to,
+            returns: string("returns"),
+            description: string("description"),
+            inferred_type,
+        }
+    }
+}
+
+/// The names a `type:` value lists: `Some([name])` for a non-empty string,
+/// `Some(names)` for a non-empty list of non-empty strings, `None` otherwise.
+fn written_type_names(value: &serde_yaml::Value) -> Option<Vec<String>> {
+    let name =
+        |v: &serde_yaml::Value| v.as_str().filter(|t| !t.trim().is_empty()).map(str::to_string);
+    match value.as_sequence() {
+        Some(seq) if !seq.is_empty() => seq.iter().map(name).collect(),
+        Some(_) => None,
+        None => name(value).map(|n| vec![n]),
+    }
 }
 
 /// Scanner for finding and analyzing slices
 pub struct SliceScanner<'a> {
-    #[allow(dead_code)]
     config: Option<&'a SlicesConfig>,
     root: &'a Path,
+    per_context: bool,
 }
 
 impl<'a> SliceScanner<'a> {
     /// Create a new slice scanner
     pub fn new(config: Option<&'a SlicesConfig>, root: &'a Path) -> Self {
-        Self { config, root }
+        Self { config, root, per_context: false }
+    }
+
+    /// Scanner for validation rules: also scans `<root>/<context>/<slices>/`
+    /// when the architecture keeps slices per bounded context
+    /// (`hexagonal-event-sourced-vsa`). Other architectures keep the
+    /// single-root scan until their consumers have been checked against the
+    /// wider one.
+    pub fn for_config(config: &'a VsaConfig, root: &'a Path) -> Self {
+        let per_context = config.architecture == ArchitectureType::HexagonalEventSourcedVsa;
+        Self { config: config.slices.as_ref(), root, per_context }
+    }
+
+    /// Also scan `<root>/<context>/<slices>/` for every context under the root.
+    pub fn per_context(mut self, enabled: bool) -> Self {
+        self.per_context = enabled;
+        self
     }
 
     /// Scan for all slices
     pub fn scan(&self) -> Result<Vec<Slice>> {
         let mut slices = Vec::new();
+        for dir in self.slice_directories()? {
+            self.scan_slices_directory(&dir, &mut slices)?;
+        }
+        Ok(slices)
+    }
 
-        // If we have a slices config, use the configured path
-        let slices_path = if let Some(config) = self.config {
-            self.root.join(&config.path)
-        } else {
-            // Default: look in "slices" directory
-            self.root.join("slices")
-        };
+    /// Directories that hold slices.
+    ///
+    /// `<root>/<path>` covers a project whose root is a single context.
+    /// `<root>/<context>/<path>` covers the multi-context layout, where each
+    /// bounded context keeps its own `slices/`. Before both were scanned, a
+    /// multi-context project had no slices as far as the slice rules could see.
+    fn slice_directories(&self) -> Result<Vec<PathBuf>> {
+        let relative =
+            self.config.map(|c| c.path.clone()).unwrap_or_else(|| PathBuf::from("slices"));
+        let mut dirs = Vec::new();
 
-        if slices_path.exists() && slices_path.is_dir() {
-            self.scan_slices_directory(&slices_path, &mut slices)?;
+        let direct = self.root.join(&relative);
+        if direct.is_dir() {
+            dirs.push(direct);
         }
 
-        // Also scan for legacy structure (contexts with features)
-        // This maintains backward compatibility with v1 VSA config
-        self.scan_legacy_structure(self.root, slices.as_mut_slice())?;
+        if !self.per_context || !self.root.is_dir() {
+            return Ok(dirs);
+        }
 
-        Ok(slices)
+        for context in sorted_subdirectories(self.root)? {
+            let candidate = context.join(&relative);
+            if candidate.is_dir() && !dirs.contains(&candidate) {
+                dirs.push(candidate);
+            }
+        }
+
+        Ok(dirs)
     }
 
     /// Scan a slices directory for individual slice folders
     fn scan_slices_directory(&self, dir: &Path, slices: &mut Vec<Slice>) -> Result<()> {
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                // Skip hidden directories
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if !name.starts_with('.') && !name.starts_with('_') {
-                        if let Some(slice) = self.analyze_slice(&path)? {
-                            slices.push(slice);
-                        }
-                    }
-                }
+        for path in sorted_subdirectories(dir)? {
+            if let Some(slice) = self.analyze_slice(&path)? {
+                slices.push(slice);
             }
         }
 
-        Ok(())
-    }
-
-    /// Scan legacy structure (contexts/features)
-    fn scan_legacy_structure(&self, _dir: &Path, _slices: &mut [Slice]) -> Result<()> {
-        // TODO: Implement legacy structure scanning if needed
-        // For now, we focus on the modern slices/ structure
         Ok(())
     }
 
@@ -193,7 +294,10 @@ impl<'a> SliceScanner<'a> {
         }))
     }
 
-    /// Scan files within a slice directory
+    /// Scan files within a slice directory, recursively.
+    ///
+    /// Subfolders (`internal/`, `handlers/`) are part of the slice. Hidden
+    /// folders and build/cache folders are not.
     fn scan_slice_files(&self, slice_path: &Path) -> Result<Vec<SliceFile>> {
         let mut files = Vec::new();
 
@@ -201,15 +305,22 @@ impl<'a> SliceScanner<'a> {
             return Ok(files);
         }
 
-        for entry in fs::read_dir(slice_path)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            if path.is_file() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    let file_type = self.classify_file(name);
-                    files.push(SliceFile { name: name.to_string(), path: path.clone(), file_type });
-                }
+        let walker = walkdir::WalkDir::new(slice_path)
+            .sort_by_file_name()
+            .into_iter()
+            .filter_entry(|e| e.depth() == 0 || !is_skipped_dir(e));
+        for entry in walker {
+            let entry = entry.map_err(std::io::Error::from)?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if let Some(name) = entry.file_name().to_str() {
+                let file_type = self.classify_file(name);
+                files.push(SliceFile {
+                    name: name.to_string(),
+                    path: entry.path().to_path_buf(),
+                    file_type,
+                });
             }
         }
 
@@ -228,10 +339,10 @@ impl<'a> SliceScanner<'a> {
 
         // Check for test files first (they might contain other keywords)
         if name.contains(".test.")
+            || name.contains(".spec.")
             || name.contains("_test.")
             || name.starts_with("test_")
-            || name.ends_with("_test.py")
-            || name.ends_with("_test.ts")
+            || name == "conftest.py"
         {
             return SliceFileType::Test;
         }
@@ -241,45 +352,57 @@ impl<'a> SliceScanner<'a> {
             return SliceFileType::Manifest;
         }
 
-        // Classify by suffix
-        if base.ends_with("Command") {
+        // Classify by role: PascalCase suffix (`PlaceOrderHandler.ts`),
+        // snake_case suffix (`place_order_handler.rs`) or the bare role name
+        // (`handler.py`, `projection.py`).
+        let has_role = |pascal: &str, snake: &str| {
+            base.ends_with(pascal) || base.ends_with(&format!("_{snake}")) || base == snake
+        };
+        if has_role("Command", "command") {
             SliceFileType::Command
-        } else if base.ends_with("Query") {
+        } else if has_role("Query", "query") {
             SliceFileType::Query
-        } else if base.ends_with("Event") {
+        } else if has_role("Event", "event") {
             SliceFileType::Event
-        } else if base.ends_with("Handler") {
+        } else if has_role("Handler", "handler") {
             SliceFileType::Handler
-        } else if base.ends_with("Projection") {
+        } else if has_role("Projection", "projection") {
             SliceFileType::Projection
-        } else if base.ends_with("Controller") || base.ends_with("Adapter") {
+        } else if has_role("Controller", "controller") || has_role("Adapter", "adapter") {
             SliceFileType::Controller
-        } else if base.ends_with("Saga") {
+        } else if has_role("Saga", "saga") {
             SliceFileType::Saga
         } else {
             SliceFileType::Other
         }
     }
 
-    /// Read and parse slice.yaml if present
+    /// Read and parse slice.yaml if present.
+    ///
+    /// The manifest is read leniently: `type:` may be absent (the type is then
+    /// inferred from section keys such as `query:` or `projection:`), and
+    /// `projection:` may be a name or a mapping with a `name:`. A file that is
+    /// not valid YAML is reported on stderr and treated as absent, so one bad
+    /// manifest does not stop every slice rule.
     fn read_slice_manifest(&self, slice_path: &Path) -> Result<Option<SliceManifest>> {
         let yaml_path = slice_path.join("slice.yaml");
         let yml_path = slice_path.join("slice.yml");
 
-        let manifest_path = if yaml_path.exists() {
-            Some(yaml_path)
+        let path = if yaml_path.exists() {
+            yaml_path
         } else if yml_path.exists() {
-            Some(yml_path)
+            yml_path
         } else {
-            None
+            return Ok(None);
         };
 
-        if let Some(path) = manifest_path {
-            let content = fs::read_to_string(path)?;
-            let manifest: SliceManifest = serde_yaml::from_str(&content)?;
-            Ok(Some(manifest))
-        } else {
-            Ok(None)
+        let content = fs::read_to_string(&path)?;
+        match serde_yaml::from_str::<serde_yaml::Value>(&content) {
+            Ok(value) => Ok(Some(SliceManifest::from_yaml(&value))),
+            Err(e) => {
+                eprintln!("  ⚠ Warning: could not parse {}: {}", path.display(), e);
+                Ok(None)
+            }
         }
     }
 
@@ -291,14 +414,16 @@ impl<'a> SliceScanner<'a> {
     ) -> (SliceType, bool) {
         // 1. Explicit: Check slice.yaml first
         if let Some(manifest) = metadata {
-            let slice_type = match manifest.slice_type.to_lowercase().as_str() {
-                "command" => SliceType::Command,
-                "query" => SliceType::Query,
-                "saga" => SliceType::Saga,
-                "mixed" => SliceType::Mixed,
-                _ => SliceType::Unknown, // Default to Unknown for unrecognized types
-            };
-            return (slice_type, true);
+            if !manifest.slice_type.is_empty() {
+                // Unknown for unrecognized types; VSA036 reports them.
+                let slice_type =
+                    SliceType::from_name(&manifest.slice_type).unwrap_or(SliceType::Unknown);
+                return (slice_type, true);
+            }
+            // No `type:`: section keys in slice.yaml say what the slice is.
+            if let Some(slice_type) = manifest.inferred_type.clone() {
+                return (slice_type, false);
+            }
         }
 
         // 2. Implicit: Detect from file contents
@@ -325,7 +450,69 @@ impl<'a> SliceScanner<'a> {
     }
 }
 
+/// Subdirectories of `dir`, sorted, skipping hidden, `_`-prefixed and
+/// build/cache folders. A directory that cannot be read is an error, so a scan
+/// never reports success over slices it could not see.
+fn sorted_subdirectories(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut dirs = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        let keep = path.is_dir()
+            && path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| !n.starts_with('.') && !n.starts_with('_') && !is_skipped_name(n));
+        if keep {
+            dirs.push(path);
+        }
+    }
+    dirs.sort();
+    Ok(dirs)
+}
+
+fn is_skipped_name(name: &str) -> bool {
+    matches!(name, "node_modules" | "__pycache__" | "target" | "dist" | "build")
+}
+
+fn is_skipped_dir(entry: &walkdir::DirEntry) -> bool {
+    entry.file_type().is_dir()
+        && entry.file_name().to_str().is_some_and(|n| n.starts_with('.') || is_skipped_name(n))
+}
+
 impl Slice {
+    /// Every type `type:` declares, as written: the first, then the rest of a
+    /// list. Empty when slice.yaml declares no type.
+    pub fn written_types(&self) -> Vec<&str> {
+        let Some(manifest) = self.metadata.as_ref() else { return Vec::new() };
+        std::iter::once(manifest.slice_type.as_str())
+            .chain(manifest.more_types.iter().map(String::as_str))
+            .filter(|t| !t.is_empty())
+            .collect()
+    }
+
+    /// The Event Modeling patterns this slice implements, without duplicates:
+    /// [`Slice::slice_type`]'s pattern first, then each further entry of a
+    /// `type:` list. A single-type slice has exactly one.
+    pub fn patterns(&self) -> Vec<SliceType> {
+        let mut patterns = vec![self.slice_type.pattern()];
+        if let Some(manifest) = self.metadata.as_ref().filter(|_| self.type_explicit) {
+            for name in &manifest.more_types {
+                let pattern = SliceType::from_name(name).unwrap_or_default().pattern();
+                if !patterns.contains(&pattern) {
+                    patterns.push(pattern);
+                }
+            }
+        }
+        patterns
+    }
+
+    /// Whether this slice implements `pattern` (compared as patterns, so
+    /// `Query` matches `View` and `Saga` matches `Automation`).
+    pub fn has_pattern(&self, pattern: &SliceType) -> bool {
+        let pattern = pattern.pattern();
+        self.patterns().contains(&pattern)
+    }
+
     /// Check if this slice has a handler
     pub fn has_handler(&self) -> bool {
         self.files.iter().any(|f| f.file_type == SliceFileType::Handler)
@@ -586,10 +773,12 @@ returns: OrderDetail
         let manifest = Some(SliceManifest {
             name: "test_slice".to_string(),
             slice_type: "saga".to_string(),
+            more_types: Vec::new(),
             projection: None,
             subscribes_to: vec![],
             returns: None,
             description: None,
+            inferred_type: None,
         });
 
         let (slice_type, explicit) = scanner.detect_slice_type(&files, &manifest);
@@ -663,10 +852,12 @@ returns: OrderDetail
         let manifest = Some(SliceManifest {
             name: "test_slice".to_string(),
             slice_type: "mixed".to_string(),
+            more_types: Vec::new(),
             projection: None,
             subscribes_to: vec![],
             returns: None,
             description: None,
+            inferred_type: None,
         });
 
         let (slice_type, explicit) = scanner.detect_slice_type(&files, &manifest);
@@ -686,10 +877,12 @@ returns: OrderDetail
         let manifest = Some(SliceManifest {
             name: "test_slice".to_string(),
             slice_type: "invalid_type".to_string(), // Unrecognized type
+            more_types: Vec::new(),
             projection: None,
             subscribes_to: vec![],
             returns: None,
             description: None,
+            inferred_type: None,
         });
 
         let (slice_type, explicit) = scanner.detect_slice_type(&files, &manifest);
@@ -734,5 +927,95 @@ returns: OrderDetail
         assert!(slice.has_tests());
         assert!(!slice.has_controller());
         assert_eq!(slice.source_file_count(), 3); // Excludes test file
+    }
+
+    #[test]
+    fn finds_slices_in_every_context_of_a_multi_context_root() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        // Hexagonal layout: root/<context>/slices/<slice>/, nested handler, snake_case names.
+        let place = root.join("orders/slices/place_order/internal");
+        fs::create_dir_all(&place).unwrap();
+        fs::write(
+            root.join("orders/slices/place_order/slice.yaml"),
+            "name: place_order\ntype: command\n",
+        )
+        .unwrap();
+        fs::write(place.join("place_order_handler.rs"), "pub fn place() {}").unwrap();
+        fs::write(place.join("place_order_handler_test.rs"), "#[test] fn t() {}").unwrap();
+        let list = root.join("billing/slices/list_invoices");
+        fs::create_dir_all(&list).unwrap();
+        fs::write(list.join("list_invoices_projection.rs"), "").unwrap();
+        // Not slices: hidden and private context folders.
+        fs::create_dir_all(root.join("_shared/slices/not_a_slice")).unwrap();
+        fs::create_dir_all(root.join(".cache/slices/not_a_slice")).unwrap();
+
+        let config = create_test_config();
+        let single_root = SliceScanner::new(Some(&config), root).scan().unwrap();
+        assert!(single_root.is_empty(), "per-context scanning is opt-in");
+        let slices = SliceScanner::new(Some(&config), root).per_context(true).scan().unwrap();
+
+        let names: Vec<&str> = slices.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["list_invoices", "place_order"]);
+        let place = &slices[1];
+        assert_eq!(place.slice_type, SliceType::Command);
+        assert!(place.has_handler(), "nested snake_case handler is found");
+        assert!(place.has_tests());
+        assert!(slices[0].has_projection());
+        assert_eq!(slices[0].slice_type, SliceType::Query);
+    }
+
+    #[test]
+    fn classifies_snake_case_and_bare_role_names() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = create_test_config();
+        let scanner = SliceScanner::new(Some(&config), temp_dir.path());
+        assert_eq!(scanner.classify_file("place_order_handler.rs"), SliceFileType::Handler);
+        assert_eq!(scanner.classify_file("handler.py"), SliceFileType::Handler);
+        assert_eq!(scanner.classify_file("projection.py"), SliceFileType::Projection);
+        assert_eq!(scanner.classify_file("order_list_projection.rs"), SliceFileType::Projection);
+        assert_eq!(scanner.classify_file("place_order_command.rs"), SliceFileType::Command);
+        assert_eq!(scanner.classify_file("test_projection.py"), SliceFileType::Test);
+        assert_eq!(scanner.classify_file("place_handler_test.rs"), SliceFileType::Test);
+        assert_eq!(scanner.classify_file("conftest.py"), SliceFileType::Test);
+        // A role word inside a name is not a role.
+        assert_eq!(scanner.classify_file("handlers_registry.py"), SliceFileType::Other);
+        assert_eq!(scanner.classify_file("mod.rs"), SliceFileType::Other);
+    }
+
+    #[test]
+    fn manifest_without_type_and_with_projection_mapping_is_read() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        let slice = root.join("slices/get_installation");
+        fs::create_dir_all(&slice).unwrap();
+        fs::write(
+            slice.join("slice.yaml"),
+            "name: get_installation\nquery:\n  name: GetInstallationQuery\nprojection:\n  name: InstallationProjection\n  events: [github.AppInstalled]\n",
+        )
+        .unwrap();
+
+        let config = create_test_config();
+        let slices = SliceScanner::new(Some(&config), root).scan().unwrap();
+
+        assert_eq!(slices.len(), 1);
+        assert_eq!(slices[0].slice_type, SliceType::Query);
+        assert!(!slices[0].type_explicit);
+        let manifest = slices[0].metadata.as_ref().unwrap();
+        assert_eq!(manifest.projection.as_deref(), Some("InstallationProjection"));
+    }
+
+    #[test]
+    fn unparsable_manifest_does_not_abort_the_scan() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        let slice = root.join("slices/broken");
+        fs::create_dir_all(&slice).unwrap();
+        fs::write(slice.join("slice.yaml"), "name: [unclosed\n").unwrap();
+
+        let config = create_test_config();
+        let slices = SliceScanner::new(Some(&config), root).scan().unwrap();
+        assert_eq!(slices.len(), 1);
+        assert!(slices[0].metadata.is_none());
     }
 }

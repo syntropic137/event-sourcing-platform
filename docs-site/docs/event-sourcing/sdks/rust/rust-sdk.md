@@ -118,7 +118,7 @@ client.require_capabilities(&[capabilities::COMMIT_ORDERED_GLOBAL_NONCE]).await?
 | `tcp_keepalive` | 60s | |
 | `lazy_connect` | false | Connect on first RPC |
 
-Credentials go in the `authorization` header: `basic_auth(user, pass)` is what the ADR-024 nginx gateway (HTTP Basic Auth on its external port) expects; `bearer_token(t)` and `token_provider(p)` send `Bearer <token>` (use `SharedToken` and call `set` from a refresh task to rotate without reconnecting). Credentials are refused over plaintext to non-loopback hosts unless you set `allow_insecure_credentials(true)`; the gateway has no TLS yet (#301), so only do that on a trusted network. `Debug` output never contains secrets.
+Credentials go in the `authorization` header: `basic_auth(user, pass)` is what the ADR-024 nginx gateway (HTTP Basic Auth on its external port) expects; `bearer_token(t)` and `token_provider(p)` send `Bearer <token>` (use `SharedToken` and call `set` from a refresh task to rotate without reconnecting). Credentials are refused over plaintext to non-loopback hosts unless you set `allow_insecure_credentials(true)`; the gateway serves TLS on its external port (#301), so use `https://` (plus `TlsConfig::ca_certificate_pem` for a private CA) instead. `Debug` output never contains secrets.
 
 Configuration errors are `Error::Config`; failed capability/version checks are `Error::Incompatible`.
 
@@ -181,6 +181,19 @@ runner.run(cancel.clone()).await?; // catch-up, then live, until cancelled or an
 - **Rebuild**: `runner.rebuild()` resets that key's data and checkpoint only (in one transaction for transactional stores; checkpoint first for external ones). Stop other runners on the key first. Bump `version()` to build a new read model next to the old one.
 - **Side effects**: projections must be pure. Write to-do records in `handle` and attach a `LiveProcessor` with `with_live_processor`; it runs on its own task and is woken only by committed live events, never during replay (process-manager pattern, ADR-025). Failed passes retry with backoff, and one pass runs when going live (after replay) to resume items stranded by a crash; disable with `drain_pending_on_live_start(false)`. `process_pending` must be idempotent.
 - **Processor panics** never go unnoticed: by default a panicking pass (or a processor task that ends unexpectedly) stops the runner with `Error::LiveProcessorPanicked`; `on_processor_panic(ProcessorPanicPolicy::Restart)` logs it and retries the pass with the processor backoff instead. On cancellation the in-flight pass may finish within `with_processor_shutdown_grace` (default 10 s), then it is cancelled; when the runner fails or halts it is cancelled at once (idempotency makes this safe), so a pass blocked on an external service cannot delay a halt.
+
+### Processor-TODO-List
+
+The process-manager support above implements Dilger's Processor-TODO-List pattern (*Understanding Eventsourcing*, pp. 495-509; see [Foundations](https://github.com/syntropic137/event-sourcing-platform/blob/main/docs/FOUNDATIONS.md)):
+
+| Term | Meaning | Rust SDK |
+|------|---------|----------|
+| To-do list | View of pending work, computed from the system's state (pp. 496-498) | A `CheckpointedProjection` that only writes to-do records |
+| Processor | Takes each open entry and issues one command; the resulting event clears the entry (pp. 499-505) | `LiveProcessor` |
+| Projection runner | Keeps one view current from its checkpoint; never issues a command | `ProjectionRunner` |
+| Background runner | Platform hosting plumbing, not a book term: runs a context's projection runners and processors and owns no list or command, keeping Dilger's ownership rule (pp. 506-509) | Proposed: [#436](https://github.com/syntropic137/event-sourcing-platform/issues/436) |
+
+A service follows the log with `run` / `run_supervised`. A batch job (an import, a backfill) that must finish and report uses `run_until_idle` ([#440](https://github.com/syntropic137/event-sourcing-platform/pull/440)): catch up, one processor pass, repeat until a pass takes nothing and no new event arrived, then return `IdleExit::Idle`.
 
 ### Supervision
 

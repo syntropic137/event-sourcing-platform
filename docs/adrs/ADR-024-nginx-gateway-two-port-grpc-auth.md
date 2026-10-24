@@ -1,7 +1,7 @@
 # ADR-024: nginx Gateway Two-Port Authentication Model for the Event Store
 
 **Status:** Accepted
-**Date:** 2026-07-20
+**Date:** 2026-07-20 (TLS amendment 2026-10-07, #301)
 **Context:** The `eventstore-bin` gRPC service has no authentication, authorization, or TLS of its own.
 
 ---
@@ -34,7 +34,7 @@ proxying via `grpc_pass` (nginx's native HTTP/2/gRPC proxy support):
 | Port | Authentication | Consumers | Published to host? |
 |------|----------------|-----------|----------------------|
 | 80   | None | Same-Docker-network services, health checks | No |
-| 8081 | HTTP Basic Auth (when `ESP_GATEWAY_PASSWORD` is set) | Any external client | Yes — this is the only externally reachable port |
+| 8081 | TLS + HTTP Basic Auth (when `ESP_GATEWAY_PASSWORD` is set) | Any external client | Yes — this is the only externally reachable port |
 
 ### Port 80 — unauthenticated, network-internal
 
@@ -47,7 +47,40 @@ Enforced whenever `ESP_GATEWAY_PASSWORD` is non-empty. Generated via
 `docker-entrypoint.sh` into an nginx `auth_basic_user_file` at container
 start (`htpasswd -Bbc`, bcrypt). An unset password disables auth and logs a
 loud warning — acceptable for local development, **not** for any deployment
-reachable from outside the operator's own machine.
+reachable from outside the operator's own machine. Since #301 the gateway
+refuses to start without a password unless its published bind address
+(`ESP_GATEWAY_PUBLISH_BIND`) is loopback or `ESP_GATEWAY_ALLOW_UNAUTHENTICATED=true`.
+The gateway strips `Authorization` before proxying, so the credential never
+crosses the plaintext hop to `eventstore-bin`.
+
+### Port 8081 — TLS (amendment, #301)
+
+Basic Auth sends a reusable credential on every call, so the external port is
+TLS-only. nginx terminates TLS itself rather than relying on something in
+front of it: one component, the same behaviour on every deployment target,
+and no plaintext hop on the host network.
+
+- `ESP_GATEWAY_TLS=on` is the image default. The cert/key come from a mounted
+  directory (`/etc/nginx/tls/{fullchain,privkey}.pem`); the container exits
+  at startup if they are missing or fail `nginx -t` (fail closed).
+- TLS 1.2 and 1.3 only, ECDHE + AEAD ciphers (Mozilla intermediate), h2 via
+  ALPN. No plaintext listener on 8081 in TLS mode; plain HTTP gets a 400 and
+  never reaches the upstream. gRPC streaming timeouts are unchanged.
+- `ESP_GATEWAY_TLS=off` is for local dev: the root `docker-compose.yml`
+  sets it and binds `127.0.0.1`, and the entrypoint refuses plaintext when
+  the published bind address is not loopback.
+- Production path (`infra-as-code/` Ansible role, Proxmox and AWS): TLS on;
+  the deploy fails without a cert. Certs come from the controller
+  (`esp_gateway_tls_cert_src`), a host-side ACME client (certbot + deploy
+  hook), or a private CA generated on the host (Proxmox default).
+- Rotation: the gateway polls the mounted files and does a graceful
+  `nginx -s reload` (after `nginx -t`) when they change; a certbot deploy
+  hook can reload immediately. No restart, no dropped streams.
+- A tunnel (e.g. Cloudflare Tunnel) may terminate public TLS instead; it
+  should still connect to the gateway over TLS, or to a loopback-only
+  plaintext port on the same host (`esp_gateway_tls: false`).
+
+Procedures: `event-store/gateway/README.md` "TLS".
 
 ### `ESP_GATEWAY_PASSWORD` lifecycle
 
@@ -65,13 +98,14 @@ reachable from outside the operator's own machine.
 | Unauthenticated external access to the event store | Only port 8081 is published; it requires Basic Auth when configured |
 | Operator forgets to set a password | Loud startup warning; documented in `event-store/gateway/README.md` as a precondition for external exposure |
 | `eventstore-bin`'s own port (50051) exposed directly, bypassing the gateway | Root `docker-compose.yml` no longer publishes the `event-store` service's port to the host; only `gateway` does |
-| Credential sniffing in transit | Basic Auth over plaintext HTTP/2 is only acceptable behind TLS termination (e.g. a tunnel/load balancer that terminates TLS in front of the gateway) — **not yet wired up in this repo**, tracked as follow-up |
+| Credential sniffing in transit | Port 8081 is TLS-only by default and in every `infra-as-code/` deployment; missing certs stop the gateway/deploy instead of falling back to plaintext; plaintext dev mode refuses non-loopback binds. SDKs refuse credentials over plaintext to non-loopback hosts |
+| Expired certificate | Automated renewal (ACME) plus hot reload on file change; no restart needed |
 
 ## What This Is Not
 
 This is not a per-tenant or per-caller authorization model — one shared
-credential grants full access to every tenant behind the gateway. It is not
-mutual TLS, and it does not survive a compromised gateway host. It is the
+credential grants full access to every tenant behind the gateway. It uses
+server-side TLS only, not mutual TLS, and it does not survive a compromised gateway host. It is the
 minimum viable trust boundary: a stated, testable, "off by default until you
 configure it" gate, replacing an unstated assumption. A real multi-tenant
 authz model (per-tenant tokens validated at the gRPC layer, e.g. via a
@@ -99,14 +133,9 @@ ADR when undertaken.
 - `auth_basic` is checked per HTTP/2 request (per gRPC call), but against a
   single static credential with no per-tenant authorization; see the
   "Known limitation" note in `event-store/gateway/README.md`.
-- TLS termination in front of the gateway (tracked in #301) is not yet wired into this repo's
-  `docker-compose.yml` / `infra-as-code/` — Basic Auth credentials are only
-  safe in transit once that's added (e.g. via a tunnel or load balancer that
-  terminates TLS).
-  Until then the shipped defaults limit exposure: root compose binds the
-  gateway to 127.0.0.1 unless `ESP_GATEWAY_BIND` is set, and the AWS prod
-  config sets `allow_public_grpc: false` (gRPC ingress only from the admin
-  CIDRs).
+- Operators own certificate issuance for public names (ACME client or
+  controller-supplied files); the repo only automates a private CA. A
+  private CA must be distributed to clients out of band.
 
 ## References
 

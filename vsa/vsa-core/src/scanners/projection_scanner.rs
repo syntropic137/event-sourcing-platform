@@ -15,12 +15,24 @@ pub struct ProjectionScanner<'a> {
     #[allow(dead_code)]
     config: Option<&'a QuerySliceConfig>,
     root: &'a Path,
+    /// Rust reading for the manifest's domain scan under
+    /// `filename_convention: snake_case`: also match `*_projection` files, and
+    /// read a `.rs` projection's subscriptions as the `*Event::Variant`s its
+    /// code refers to. Off by default, so the
+    /// projection validation rules see what they always saw.
+    snake_case: bool,
 }
 
 impl<'a> ProjectionScanner<'a> {
     /// Create a new projection scanner
     pub fn new(config: Option<&'a QuerySliceConfig>, root: &'a Path) -> Self {
-        Self { config, root }
+        Self { config, root, snake_case: false }
+    }
+
+    /// Turn on the Rust reading (`inbox_projection.rs`, `*Event::Variant` subscriptions).
+    pub fn with_snake_case(mut self, enabled: bool) -> Self {
+        self.snake_case = enabled;
+        self
     }
 
     /// Scan for projections
@@ -77,9 +89,12 @@ impl<'a> ProjectionScanner<'a> {
             .or_else(|| file_name.strip_suffix(".rs"))
             .unwrap_or(file_name);
 
-        // Check if it ends with "Projection" (e.g., WorkflowListProjection.py)
+        // Check if it ends with "Projection" (e.g., WorkflowListProjection.py),
+        // its snake_case form (e.g., inbox_projection.rs),
         // OR if it's exactly named "projection" (e.g., projection.py)
-        name_without_ext.ends_with("Projection") || name_without_ext == "projection"
+        name_without_ext.ends_with("Projection")
+            || (self.snake_case && name_without_ext.ends_with("_projection"))
+            || name_without_ext == "projection"
     }
 
     /// Parse projection metadata from a file
@@ -116,8 +131,13 @@ impl<'a> ProjectionScanner<'a> {
         // Extract projection name from file name or class name in content
         let name = self.extract_projection_name_from_content(&content, file_name)?;
 
-        // Extract subscribed events from content
-        let subscribed_events = self.extract_subscribed_events(&content);
+        // Extract subscribed events from content. Rust: the `*Event::Variant`s
+        // the code (not its comments, literals or tests) matches on.
+        let subscribed_events = if self.snake_case && file_name.ends_with(".rs") {
+            rust_event_variants_referenced(&content)
+        } else {
+            self.extract_subscribed_events(&content)
+        };
 
         // Extract read model from content
         let read_model = self.extract_read_model(&content);
@@ -475,6 +495,62 @@ impl<'a> ProjectionScanner<'a> {
     }
 }
 
+/// The `*Event::Variant` paths Rust `source` refers to in code (comments,
+/// literals and test items blanked), sorted and without duplicates.
+fn rust_event_variants_referenced(source: &str) -> Vec<String> {
+    static PATH: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let path = PATH.get_or_init(|| {
+        Regex::new(r"\b([A-Z][A-Za-z0-9_]*Event)::([A-Z][A-Za-z0-9_]*)\b").expect("valid regex")
+    });
+    let code = crate::scanners::rust_source::rust_code_only(source);
+    let found: std::collections::BTreeSet<String> =
+        path.captures_iter(&code).map(|m| format!("{}::{}", &m[1], &m[2])).collect();
+    found.into_iter().collect()
+}
+
+#[cfg(test)]
+mod rust_projection_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn snake_case_rust_projections_and_their_event_variants() {
+        let temp = TempDir::new().unwrap();
+        let slice = temp.path().join("slices/inbox/internal");
+        fs::create_dir_all(&slice).unwrap();
+        fs::write(
+            slice.join("inbox_projection.rs"),
+            "// folds ItemEvent::Deleted too\n\
+             pub fn apply(e: &ItemEvent) { match e { ItemEvent::Created { .. } => {}, ItemEvent::Filed { .. } => {}, _ => {} } }\n\
+             #[cfg(test)]\nmod tests { fn t() { let _ = ItemEvent::Restored; } }\n",
+        )
+        .unwrap();
+        fs::write(slice.join("inbox_projection_test.rs"), "fn t() {}\n").unwrap();
+        let projections =
+            ProjectionScanner::new(None, temp.path()).with_snake_case(true).scan().unwrap();
+        assert!(
+            ProjectionScanner::new(None, temp.path()).scan().unwrap().is_empty(),
+            "off by default: validation is unchanged"
+        );
+        assert_eq!(projections.len(), 1, "{projections:?}");
+        assert_eq!(projections[0].name, "inbox_projection");
+        assert_eq!(projections[0].subscribed_events, ["ItemEvent::Created", "ItemEvent::Filed"]);
+    }
+
+    #[test]
+    fn default_scan_reads_a_rust_projection_as_it_always_did() {
+        // The validation rules use the default scanner; their reading of a
+        // PascalCase Rust projection must not change.
+        let temp = TempDir::new().unwrap();
+        let content = "pub fn apply(e: &ItemEvent) { if let ItemEvent::Created { .. } = e {} }\n";
+        fs::write(temp.path().join("InboxProjection.rs"), content).unwrap();
+        let scanner = ProjectionScanner::new(None, temp.path());
+        let projections = scanner.scan().unwrap();
+        assert_eq!(projections.len(), 1);
+        assert_eq!(projections[0].subscribed_events, scanner.extract_subscribed_events(content));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -489,6 +565,7 @@ mod tests {
             max_lines: Some(100),
             require_tests: true,
             adapters: vec!["rest".to_string()],
+            forbid_commands: None,
         }
     }
 

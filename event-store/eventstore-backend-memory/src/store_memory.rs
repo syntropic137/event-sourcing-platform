@@ -11,6 +11,7 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::{self as ts, StreamExt};
 
 use eventstore_core::fingerprint::batch_fingerprint;
+use eventstore_core::paging::{self, take_page};
 use eventstore_core::{proto, EventStore, StoreError, StoreStream};
 use proto::{
     AppendRequest, AppendResponse, ConcurrencyErrorDetail, EventData, ReadAllRequest,
@@ -359,87 +360,33 @@ impl EventStore for InMemoryStore {
 
         let stream_key = StreamKey::new(&req.tenant_id, &req.aggregate_id);
         let streams = self.streams.read();
-        let events = streams.get(&stream_key).cloned().unwrap_or_default();
-        if events.is_empty() {
-            return Ok(ReadStreamResponse {
-                events: vec![],
-                is_end: true,
-                next_from_aggregate_nonce: if req.forward {
-                    req.from_aggregate_nonce.max(1)
-                } else {
-                    req.from_aggregate_nonce
-                },
-            });
-        }
+        let events: &[EventData] = streams.get(&stream_key).map_or(&[], Vec::as_slice);
+        let nonce = |ev: &&EventData| ev.meta.as_ref().map_or(0, |m| m.aggregate_nonce);
+        let limit = if req.max_count == 0 {
+            usize::MAX
+        } else {
+            req.max_count as usize
+        };
 
-        let start_nonce = if req.from_aggregate_nonce <= 1 {
-            1
+        let from = if req.forward {
+            req.from_aggregate_nonce.max(1)
         } else {
             req.from_aggregate_nonce
         };
-
-        let mut page: Vec<EventData> = Vec::new();
-        if req.forward {
-            for ev in events.iter() {
-                let nonce = ev
-                    .meta
-                    .as_ref()
-                    .map(|m| m.aggregate_nonce)
-                    .unwrap_or_default();
-                if nonce >= start_nonce {
-                    page.push(ev.clone());
-                }
-                if page.len() as u32 >= req.max_count && req.max_count > 0 {
-                    break;
-                }
-            }
+        let (page, more) = if req.forward {
+            take_page(events.iter().filter(|ev| nonce(ev) >= from), limit)
         } else {
-            // For backward reads, iterate in reverse to get most recent first
-            for ev in events.iter().rev() {
-                let nonce = ev
-                    .meta
-                    .as_ref()
-                    .map(|m| m.aggregate_nonce)
-                    .unwrap_or_default();
-                if nonce <= start_nonce {
-                    page.push(ev.clone());
-                }
-                if page.len() as u32 >= req.max_count && req.max_count > 0 {
-                    break;
-                }
-            }
-        }
-
-        // Note: No need to reverse for backward reads - iter().rev() already
-        // returns events in the correct order (most recent first)
-
-        let next_from = if req.forward {
-            page.last()
-                .and_then(|ev| ev.meta.as_ref().map(|m| m.aggregate_nonce + 1))
-                .unwrap_or(start_nonce)
-        } else {
-            page.first()
-                .and_then(|ev| {
-                    ev.meta
-                        .as_ref()
-                        .map(|m| m.aggregate_nonce.saturating_sub(1))
-                })
-                .unwrap_or(0)
+            take_page(events.iter().rev().filter(|ev| nonce(ev) <= from), limit)
         };
-        let stream_end_nonce = events
+        let last = page
             .last()
-            .and_then(|ev| ev.meta.as_ref().map(|m| m.aggregate_nonce))
-            .unwrap_or(0);
-        let is_end = if req.forward {
-            page.is_empty() || next_from > stream_end_nonce
-        } else {
-            page.is_empty() || next_from == 0
-        };
+            .and_then(|ev| ev.meta.as_ref())
+            .map(|m| m.aggregate_nonce);
 
         Ok(ReadStreamResponse {
             events: page,
-            is_end,
-            next_from_aggregate_nonce: next_from,
+            is_end: !more,
+            next_from_aggregate_nonce: paging::next_cursor(req.forward, from, last),
         })
     }
 
@@ -457,56 +404,33 @@ impl EventStore for InMemoryStore {
             req.max_count.min(1000)
         } as usize;
 
-        let from_global = req.from_global_nonce;
+        let from = req.from_global_nonce;
         let all = self.all.read();
-
-        // Filter events by tenant and global_nonce
-        let filtered: Vec<EventData> = all
-            .iter()
-            .filter(|ev| {
-                ev.meta.as_ref().is_some_and(|m| {
-                    m.tenant_id == req.tenant_id
-                        && if req.forward {
-                            m.global_nonce >= from_global
-                        } else {
-                            m.global_nonce <= from_global
-                        }
-                })
+        // `all` is in global order: appends push under the write lock.
+        let in_range = |ev: &&EventData| {
+            ev.meta.as_ref().is_some_and(|m| {
+                m.tenant_id == req.tenant_id
+                    && if req.forward {
+                        m.global_nonce >= from
+                    } else {
+                        m.global_nonce <= from
+                    }
             })
-            .cloned()
-            .collect();
-
-        // Sort by global_nonce
-        let mut sorted = filtered;
-        if req.forward {
-            sorted.sort_by_key(|ev| ev.meta.as_ref().map(|m| m.global_nonce).unwrap_or(0));
-        } else {
-            sorted.sort_by_key(|ev| {
-                std::cmp::Reverse(ev.meta.as_ref().map(|m| m.global_nonce).unwrap_or(0))
-            });
-        }
-
-        // Apply limit
-        let page: Vec<EventData> = sorted.into_iter().take(max_count).collect();
-
-        // Determine if we've reached the end
-        let is_end = page.len() < max_count;
-
-        // Calculate next position for pagination
-        let next_from = if req.forward {
-            page.last()
-                .and_then(|ev| ev.meta.as_ref().map(|m| m.global_nonce + 1))
-                .unwrap_or(from_global)
-        } else {
-            page.first()
-                .and_then(|ev| ev.meta.as_ref().map(|m| m.global_nonce.saturating_sub(1)))
-                .unwrap_or(0)
         };
+        let (page, more) = if req.forward {
+            take_page(all.iter().filter(in_range), max_count)
+        } else {
+            take_page(all.iter().rev().filter(in_range), max_count)
+        };
+        let last = page
+            .last()
+            .and_then(|ev| ev.meta.as_ref())
+            .map(|m| m.global_nonce);
 
         Ok(ReadAllResponse {
             events: page,
-            is_end,
-            next_from_global_nonce: next_from,
+            is_end: !more,
+            next_from_global_nonce: paging::next_cursor(req.forward, from, last),
         })
     }
 

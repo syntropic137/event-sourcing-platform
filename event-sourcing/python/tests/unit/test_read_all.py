@@ -72,7 +72,7 @@ class TestReadAll:
 
         # Verify global ordering
         global_nonces = [e.metadata.global_nonce for e in events]
-        assert global_nonces == [0, 1, 2]
+        assert global_nonces == [1, 2, 3]  # numbered from 1, like the store
 
     @pytest.mark.asyncio
     async def test_read_all_pagination(self, memory_client: MemoryEventStoreClient) -> None:
@@ -107,6 +107,72 @@ class TestReadAll:
         assert is_end3 is True
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("forward", [True, False])
+    @pytest.mark.parametrize("page_size", [1, 2, 3, 4, 7])
+    async def test_read_all_pages_without_overlap(
+        self, memory_client: MemoryEventStoreClient, forward: bool, page_size: int
+    ) -> None:
+        """Pages concatenate to every event exactly once, is_end on the last (#403)."""
+        for i in range(6):
+            await memory_client.append_events(
+                f"TestAggregate-agg{i}",
+                [make_envelope(f"agg{i}", 1, f"event-{i}")],
+                expected_version=0,
+            )
+        expected = list(range(1, 7)) if forward else list(range(6, 0, -1))
+
+        cursor = 0 if forward else 1_000_000
+        seen: list[int | None] = []
+        calls = 0
+        while True:
+            calls += 1
+            page, is_end, cursor = await memory_client.read_all(
+                from_global_nonce=cursor, max_count=page_size, forward=forward
+            )
+            seen.extend(e.metadata.global_nonce for e in page)
+            if is_end:
+                break
+            assert len(page) == page_size
+        assert seen == expected
+        assert calls == -(-len(expected) // page_size)
+
+    @pytest.mark.asyncio
+    async def test_caller_global_nonces_are_replaced(
+        self, memory_client: MemoryEventStoreClient
+    ) -> None:
+        """The store numbers events; a claimed nonce cannot duplicate one (#405)."""
+        for aid in ("agg1", "agg2"):
+            envelope = make_envelope(aid, 1, aid)
+            claimed = EventEnvelope(
+                event=envelope.event,
+                metadata=envelope.metadata.model_copy(update={"global_nonce": 1}),
+            )
+            await memory_client.append_events(f"TestAggregate-{aid}", [claimed], expected_version=0)
+
+        events, _, _ = await memory_client.read_all(from_global_nonce=0, max_count=10)
+        assert [e.metadata.global_nonce for e in events] == [1, 2]
+
+        page, is_end, cursor = await memory_client.read_all(
+            from_global_nonce=1, max_count=1, forward=False
+        )
+        # Terminal backward cursor 0 names no event.
+        assert ([e.metadata.global_nonce for e in page], is_end, cursor) == ([1], True, 0)
+
+    @pytest.mark.asyncio
+    async def test_read_all_max_count_zero_is_default(
+        self, memory_client: MemoryEventStoreClient
+    ) -> None:
+        """max_count 0 means the default page size, like the store."""
+        await memory_client.append_events(
+            "TestAggregate-agg0", [make_envelope("agg0", 1, "e")], expected_version=0
+        )
+        page, is_end, _ = await memory_client.read_all(
+            from_global_nonce=0, max_count=0, forward=True
+        )
+        assert len(page) == 1
+        assert is_end is True
+
+    @pytest.mark.asyncio
     async def test_read_all_empty_store(self, memory_client: MemoryEventStoreClient) -> None:
         """Test that read_all returns is_end=True for empty store."""
         events, is_end, _ = await memory_client.read_all(
@@ -136,7 +202,7 @@ class TestReadAll:
         # Use deprecated method (exclusive start)
         events = await memory_client.read_all_events_from(after_global_nonce=0, limit=10)
 
-        assert len(events) == 1  # Only events after 0, so starting from 1
+        assert len(events) == 2  # global nonces start at 1, so both are after 0
 
 
 class TestMemoryClientEnvironmentGuard:

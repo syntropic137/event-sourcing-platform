@@ -27,7 +27,13 @@ services:
     image: event-sourcing-platform-gateway:latest
     container_name: event-store-gateway
     ports:
-      - "{{ eventstore_grpc_port }}:8081"
+      # TLS on (default): published on all interfaces. TLS off: loopback
+      # only, for a TLS terminator on this host (#301).
+      - "{{ '' if esp_gateway_tls | bool else '127.0.0.1:' }}{{ eventstore_grpc_port }}:8081"
+{% if esp_gateway_tls | bool %}
+    volumes:
+      - "{{ esp_gateway_tls_dir }}:/etc/nginx/tls:ro"
+{% endif %}
     # Explicit environment, NOT `env_file: .env` (unlike event-store above):
     # .env also carries DATABASE_URL/POSTGRES_PASSWORD. Gateway is the one
     # network-facing container in this stack; a gateway compromise (e.g. an
@@ -44,6 +50,9 @@ services:
       # value expanded a literal "$HOME" to the render host's actual $HOME.
       ESP_GATEWAY_USER: {{ esp_gateway_user | replace('$', '$$') | to_json }}
       ESP_GATEWAY_PASSWORD: {{ esp_gateway_password | replace('$', '$$') | to_json }}
+      ESP_GATEWAY_TLS: "{{ 'on' if esp_gateway_tls | bool else 'off' }}"
+      ESP_GATEWAY_PUBLISH_BIND: "{{ '0.0.0.0' if esp_gateway_tls | bool else '127.0.0.1' }}"
+      ESP_GATEWAY_TLS_RELOAD_INTERVAL: "{{ esp_gateway_tls_reload_interval | int }}"
     restart: unless-stopped
     depends_on:
       - event-store

@@ -68,14 +68,14 @@ proxmox-deploy-full: proxmox-render-local docker-build-and-save proxmox-terrafor
 	@echo "🎉 Deployment complete!"
 	@echo ""
 	@echo "📊 Connection info (ADR-024: all traffic goes through the auth gateway):"
-	@echo "   Event Store: 192.168.0.100:50051 (Basic Auth required - see ESP_GATEWAY_PASSWORD)"
+	@echo "   Event Store: https://192.168.0.100:50051 (TLS + Basic Auth - see ESP_GATEWAY_PASSWORD)"
+	@echo "   Self-signed CA for clients: proxmox/configure/ansible/envs/local/gateway-ca.pem"
 	@echo ""
 	@echo "🧪 Test with grpcurl - see event-store/gateway/README.md 'Verify' section"
 	@echo "   for the exact command (avoids base64 line-wrapping issues in a"
 	@echo "   shell-portable way)."
 	@echo ""
-	@echo "🔑 SDK clients (Rust, TypeScript, Python) send Basic Auth when configured;"
-	@echo "   plaintext to this host needs allow_insecure_credentials until TLS (#301)."
+	@echo "🔑 SDK clients (Rust, TypeScript, Python): https:// endpoint + that CA + Basic Auth."
 	@echo "   See event-store/gateway/README.md 'Client SDK support'."
 
 proxmox-destroy:

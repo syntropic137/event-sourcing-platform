@@ -4,6 +4,21 @@
 
 If you're working within the VSA monorepo:
 
+The visualizer is a member of the monorepo's workspace, so a bare `npm install`
+inside `vsa/vsa-visualizer` installs the whole workspace and fails on its
+`workspace:*` dependencies (`EUNSUPPORTEDPROTOCOL`). Install it on its own with
+`--no-workspaces`, or through pnpm:
+
+```bash
+# npm, this package only
+cd vsa/vsa-visualizer && npm install --no-workspaces && npm run build
+
+# or pnpm, from the repository root
+pnpm install --filter "@vsa/visualizer..." && pnpm --filter @vsa/visualizer build
+```
+
+The make targets do the npm route:
+
 ```bash
 # From vsa/ directory
 make visualizer-install

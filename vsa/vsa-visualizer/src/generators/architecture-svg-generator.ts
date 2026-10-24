@@ -1,6 +1,6 @@
 /**
  * Architecture SVG Generator
- * 
+ *
  * Generates SiYuan-style architecture diagrams in SVG format from VSA manifests.
  * Creates a clean, professional visualization showing:
  * - Applications layer (top)
@@ -29,7 +29,7 @@ interface VisualizeConfig {
   minContextHeight?: number;
 }
 
-interface LayerConfig {
+export interface LayerConfig {
   applications?: string[];
   infrastructure?: Array<{ name: string; description?: string }>;
   packages?: string[];
@@ -40,7 +40,7 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
   // Canvas dimensions
   private readonly CANVAS_WIDTH = 1400;
   private readonly BASE_CANVAS_HEIGHT = 1000;
-  
+
   // Layout constants
   private readonly PADDING = 40;
   private readonly SECTION_MARGIN = 20;
@@ -51,27 +51,27 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
   private readonly CQRS_BOX_HEIGHT = 120;
   private readonly FEATURE_LINE_HEIGHT = 18;
   private readonly SECTION_HEADER_HEIGHT = 20;
-  
+
   // Typography
   private readonly FONT_HEADER = 'Arial, Helvetica, sans-serif';
   private readonly FONT_SIZE_TITLE = 24;
   private readonly FONT_SIZE_SECTION = 16;
   private readonly FONT_SIZE_CONTEXT = 14;
   private readonly FONT_SIZE_FEATURE = 12;
-  
+
   // Color scheme
   private readonly colors = ArchitectureColors;
-  
+
   // CQRS colors
   private readonly CQRS_COLORS = {
     command: { fill: '#e3f2fd', stroke: '#1976d2' },
     event: { fill: '#fff3e0', stroke: '#f57c00' },
     projection: { fill: '#e8f5e9', stroke: '#388e3c' },
   };
-  
+
   private layerConfig: LayerConfig = {};
   private visualizeConfig: VisualizeConfig = {};
-  
+
   constructor(manifest: Manifest, config?: LayerConfig, visualizeConfig?: VisualizeConfig) {
     super(manifest);
     if (config) {
@@ -80,36 +80,36 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     if (visualizeConfig) {
       this.visualizeConfig = visualizeConfig;
     }
-    
+
     // Infer layer config from manifest if not provided
     this.inferLayerConfig();
   }
-  
+
   protected getTitle(): string {
     return 'Architecture Diagram';
   }
-  
+
   /**
    * Calculate required canvas height based on layers to be rendered
    */
   private calculateCanvasHeight(): number {
     let height = this.PADDING; // Start with padding
-    
+
     // Header height
     height += 60;
-    
+
     // Applications layer (if configured)
     if (this.layerConfig.applications && this.layerConfig.applications.length > 0) {
       height += 100;
     }
-    
+
     // Context layer - calculate based on actual content with per-row heights
     const contexts = this.filterContexts(this.manifest.bounded_contexts || []);
     if (contexts.length > 0) {
       const cols = Math.min(contexts.length, this.MAX_COLS);
       const rows = Math.ceil(contexts.length / cols);
-      const heights = contexts.map(ctx => this.calculateContextHeight(ctx));
-      
+      const heights = contexts.map((ctx) => this.calculateContextHeight(ctx));
+
       // Sum up max height per row
       let contextLayerHeight = 30; // Section header
       for (let row = 0; row < rows; row++) {
@@ -120,92 +120,88 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       }
       height += contextLayerHeight;
     }
-    
+
     // Add extra height for CQRS layer if it will be rendered
     if (this.shouldRenderCqrsLayer()) {
       height += this.CQRS_LAYER_HEIGHT;
     }
-    
+
     // Infrastructure layer
     if (this.layerConfig.infrastructure && this.layerConfig.infrastructure.length > 0) {
       height += 120;
     }
-    
+
     // Add bottom padding
     height += this.PADDING;
-    
+
     // Ensure minimum height
     return Math.max(height, this.BASE_CANVAS_HEIGHT);
   }
-  
+
   /**
    * Generate the SVG diagram
    */
   generate(): string {
     const canvasHeight = this.calculateCanvasHeight();
     const svg = new SvgBuilder(this.CANVAS_WIDTH, canvasHeight);
-    
+
     // Add shadow filter
     svg.addShadowFilter();
-    
+
     // Add global styles
     svg.addStyle(`
       .context-box { cursor: pointer; }
       .context-box:hover { opacity: 0.9; }
     `);
-    
+
     // Render layers from top to bottom
     let currentY = this.PADDING;
-    
+
     // 1. Header
     currentY = this.renderHeader(svg, currentY);
     currentY += this.SECTION_MARGIN;
-    
+
     // 2. Applications layer (if configured)
     if (this.layerConfig.applications && this.layerConfig.applications.length > 0) {
       currentY = this.renderApplicationsLayer(svg, currentY);
       currentY += this.SECTION_MARGIN * 2;
     }
-    
+
     // 3. Domain contexts (main section)
     const contextsEndY = this.renderContextsLayer(svg, currentY);
     let infraStartY = contextsEndY + this.SECTION_MARGIN * 2;
-    
+
     // 4. CQRS Pattern layer (if domain data available)
     if (this.shouldRenderCqrsLayer()) {
       infraStartY = this.renderCqrsLayer(svg, infraStartY);
       infraStartY += this.SECTION_MARGIN * 2;
     }
-    
+
     // 5. Infrastructure layer (if configured)
     if (this.layerConfig.infrastructure && this.layerConfig.infrastructure.length > 0) {
       this.renderInfrastructureLayer(svg, infraStartY);
     }
-    
+
     // 6. Ecosystem sidebar (right side)
     this.renderEcosystemSidebar(svg);
-    
+
     return svg.build();
   }
-  
+
   /**
    * Render the header with title
    */
   private renderHeader(svg: SvgBuilder, startY: number): number {
     const centerX = (this.CANVAS_WIDTH - this.SIDEBAR_WIDTH - this.PADDING) / 2 + this.PADDING;
-    
-    svg.text(
-      { x: centerX, y: startY + this.FONT_SIZE_TITLE },
-      '🏗️ Architecture and Ecosystem',
-      {
-        fontSize: this.FONT_SIZE_TITLE,
-        fontWeight: 'bold',
-        fontFamily: this.FONT_HEADER,
-        fill: this.colors.text.primary,
-        textAnchor: 'middle'
-      }
-    );
-    
+
+    svg.text({ x: centerX, y: startY + this.FONT_SIZE_TITLE }, '🏗️ Architecture and Ecosystem', {
+      fontSize: this.FONT_SIZE_TITLE,
+      fontWeight: 'bold',
+      fontFamily: this.FONT_HEADER,
+      fill: this.colors.text.primary,
+      textAnchor: 'middle',
+    });
+
     // Horizontal line under header
     const lineY = startY + this.FONT_SIZE_TITLE + 10;
     svg.line(
@@ -214,37 +210,37 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       this.colors.border.light,
       2
     );
-    
+
     return lineY + 10;
   }
-  
+
   /**
    * Render applications layer (CLI, Dashboard, UI, etc.)
    */
   private renderApplicationsLayer(svg: SvgBuilder, startY: number): number {
     const applications = this.layerConfig.applications || [];
     if (applications.length === 0) return startY;
-    
-    const availableWidth = this.CANVAS_WIDTH - this.SIDEBAR_WIDTH - (this.PADDING * 2) - this.SECTION_MARGIN;
-    const boxWidth = Math.min(200, (availableWidth - ((applications.length - 1) * 10)) / applications.length);
-    const boxHeight = 60;
-    
-    // Section title
-    svg.text(
-      { x: this.PADDING, y: startY },
-      'Applications',
-      {
-        fontSize: this.FONT_SIZE_SECTION,
-        fontWeight: 'bold',
-        fontFamily: this.FONT_HEADER,
-        fill: this.colors.text.secondary
-      }
+
+    const availableWidth =
+      this.CANVAS_WIDTH - this.SIDEBAR_WIDTH - this.PADDING * 2 - this.SECTION_MARGIN;
+    const boxWidth = Math.min(
+      200,
+      (availableWidth - (applications.length - 1) * 10) / applications.length
     );
-    
+    const boxHeight = 60;
+
+    // Section title
+    svg.text({ x: this.PADDING, y: startY }, 'Applications', {
+      fontSize: this.FONT_SIZE_SECTION,
+      fontWeight: 'bold',
+      fontFamily: this.FONT_HEADER,
+      fill: this.colors.text.secondary,
+    });
+
     const boxStartY = startY + 10;
     let currentX = this.PADDING;
-    
-    applications.forEach(app => {
+
+    applications.forEach((app) => {
       // Application box
       svg.rect(
         { x: currentX, y: boxStartY },
@@ -254,29 +250,25 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
           stroke: this.colors.border.medium,
           strokeWidth: 1,
           rx: 8,
-          shadow: true
+          shadow: true,
         }
       );
-      
+
       // Application name (centered)
-      svg.text(
-        { x: currentX + boxWidth / 2, y: boxStartY + boxHeight / 2 + 5 },
-        app,
-        {
-          fontSize: this.FONT_SIZE_CONTEXT,
-          fontWeight: '500',
-          fontFamily: this.FONT_HEADER,
-          fill: this.colors.text.primary,
-          textAnchor: 'middle'
-        }
-      );
-      
+      svg.text({ x: currentX + boxWidth / 2, y: boxStartY + boxHeight / 2 + 5 }, app, {
+        fontSize: this.FONT_SIZE_CONTEXT,
+        fontWeight: '500',
+        fontFamily: this.FONT_HEADER,
+        fill: this.colors.text.primary,
+        textAnchor: 'middle',
+      });
+
       currentX += boxWidth + 10;
     });
-    
+
     return boxStartY + boxHeight + this.SECTION_MARGIN;
   }
-  
+
   /**
    * Filter contexts - exclude invalid modules unless configured to show them
    */
@@ -285,9 +277,84 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       return contexts;
     }
     // Only show valid bounded contexts (have aggregates)
-    return contexts.filter(ctx => 
-      ctx.context_type === undefined || ctx.context_type === 'bounded_context'
+    return contexts.filter(
+      (ctx) => ctx.context_type === undefined || ctx.context_type === 'bounded_context'
     );
+  }
+
+  /**
+   * The labelled item lists a context box shows, in order. Height and
+   * rendering both read this, so they cannot disagree.
+   *
+   * - Slices grouped by Event Modeling pattern (command, view, automation,
+   *   translation); a slice declaring several patterns is listed under its
+   *   first and names the rest (`ingest (+ automation)`).
+   * - Commands with the events their decision builds (`Create → Created`)
+   *   when the manifest maps them (`relationships.command_to_events`), else
+   *   the commands alone.
+   * - Events. Rust enum variants (`ItemEvent::Created`) show by variant name.
+   */
+  private contextSections(
+    context: BoundedContext
+  ): Array<{ header: string; items: string[]; maxItems?: number }> {
+    const sections: Array<{ header: string; items: string[]; maxItems?: number }> = [];
+    const short = (name: string) => name.replace(/^.*::/, '');
+
+    const aggregateNames = (this.manifest.domain?.aggregates || [])
+      .filter((agg) => agg.context === context.name)
+      .map((agg) => agg.name.replace(/Aggregate$/, ''));
+    sections.push({ header: 'Aggregates:', items: aggregateNames });
+
+    const groups: Array<{ header: string; types: string[] }> = [
+      { header: '⚡ Command slices', types: ['command'] },
+      { header: '📊 View slices', types: ['view', 'query'] },
+      { header: '🤖 Automation slices', types: ['automation', 'saga'] },
+      { header: '🔁 Translation slices', types: ['translation'] },
+      { header: '🔀 Mixed slices', types: ['mixed'] },
+    ];
+    const features = this.filterFeatures(context.features || []);
+    const typeOf = (f: Feature) => (f.slice_types && f.slice_types[0]) || f.slice_type || 'unknown';
+    const label = (f: Feature) => {
+      const rest = (f.slice_types || []).slice(1);
+      return rest.length > 0 ? `${f.name} (+ ${rest.join(', ')})` : f.name;
+    };
+    const maxItems = this.visualizeConfig.maxFeaturesPerSection;
+    for (const group of groups) {
+      const items = features.filter((f) => group.types.includes(typeOf(f))).map(label);
+      sections.push({ header: group.header, items, maxItems });
+    }
+    const known = groups.flatMap((g) => g.types);
+    sections.push({
+      header: '📁 Other',
+      items: features.filter((f) => !known.includes(typeOf(f))).map(label),
+      maxItems,
+    });
+
+    const links = this.manifest.domain?.relationships?.command_to_events || {};
+    const commands = (this.manifest.domain?.commands || []).filter(
+      (cmd) => cmd.context === context.name
+    );
+    const hasLinks = commands.some((cmd) => links[cmd.name]);
+    sections.push({
+      header: hasLinks ? '⚡ Commands → events' : '⚡ Commands',
+      items: commands.map((cmd) => {
+        const name = short(cmd.name).replace(/Command$/, '');
+        const mapped = links[cmd.name];
+        // No entry means the manifest could not tell; only an explicit [] means none.
+        if (!hasLinks || mapped === undefined) return name;
+        const events = mapped.map(short);
+        if (events.length === 0) return `${name} → (none)`;
+        const shown = events.length > 3 ? [...events.slice(0, 3), `+${events.length - 3}`] : events;
+        return `${name} → ${shown.join(', ')}`;
+      }),
+    });
+
+    const eventNames = (this.manifest.domain?.events || [])
+      .filter((evt) => evt.context === context.name)
+      .map((evt) => short(evt.name).replace(/Event$/, ''));
+    sections.push({ header: '📨 Events', items: eventNames });
+
+    return sections.filter((s) => s.items.length > 0);
   }
 
   /**
@@ -296,48 +363,21 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
   private calculateContextHeight(context: BoundedContext): number {
     // Base height: header + padding
     let height = 50;
-
-    // Aggregates section
-    const contextAggregates = (this.manifest.domain?.aggregates || [])
-      .filter(agg => agg.context === context.name);
-    if (contextAggregates.length > 0) {
-      height += this.SECTION_HEADER_HEIGHT;
-      height += contextAggregates.length * this.FEATURE_LINE_HEIGHT;
-      height += 5;
-    }
-
-    // Features section (flat list of all slices)
-    const features = this.filterFeatures(context.features || []);
-    if (features.length > 0) {
-      const maxFeatures = this.visualizeConfig.maxFeaturesPerSection;
-      const displayCount = maxFeatures
-        ? Math.min(features.length, maxFeatures)
-        : features.length;
-      height += this.SECTION_HEADER_HEIGHT + (displayCount * this.FEATURE_LINE_HEIGHT);
-      if (maxFeatures && features.length > maxFeatures) {
+    for (const section of this.contextSections(context)) {
+      const shown = section.maxItems
+        ? Math.min(section.items.length, section.maxItems)
+        : section.items.length;
+      height += this.SECTION_HEADER_HEIGHT + shown * this.FEATURE_LINE_HEIGHT;
+      if (section.maxItems && section.items.length > section.maxItems) {
         height += this.FEATURE_LINE_HEIGHT;
       }
-    }
-
-    // Commands section
-    const contextCommands = (this.manifest.domain?.commands || [])
-      .filter(cmd => cmd.context === context.name);
-    if (contextCommands.length > 0) {
-      height += this.SECTION_HEADER_HEIGHT + (contextCommands.length * this.FEATURE_LINE_HEIGHT);
-    }
-
-    // Events section
-    const contextEvents = (this.manifest.domain?.events || [])
-      .filter(evt => evt.context === context.name);
-    if (contextEvents.length > 0) {
-      height += this.SECTION_HEADER_HEIGHT + (contextEvents.length * this.FEATURE_LINE_HEIGHT);
+      height += 5;
     }
 
     // Ensure minimum height
     const minHeight = this.visualizeConfig.minContextHeight || this.MIN_CONTEXT_HEIGHT;
     return Math.max(height, minHeight);
   }
-
   /**
    * Render domain contexts in grid layout
    */
@@ -345,14 +385,15 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     const allContexts = this.manifest.bounded_contexts || [];
     const contexts = this.filterContexts(allContexts);
     if (contexts.length === 0) return startY;
-    
-    const availableWidth = this.CANVAS_WIDTH - this.SIDEBAR_WIDTH - (this.PADDING * 2) - this.SECTION_MARGIN;
-    
+
+    const availableWidth =
+      this.CANVAS_WIDTH - this.SIDEBAR_WIDTH - this.PADDING * 2 - this.SECTION_MARGIN;
+
     const grid = this.calculateGrid(contexts.length, availableWidth);
-    
+
     // Calculate heights for each context
-    const heights = contexts.map(ctx => this.calculateContextHeight(ctx));
-    
+    const heights = contexts.map((ctx) => this.calculateContextHeight(ctx));
+
     // Calculate max height per row
     const rowHeights: number[] = [];
     for (let row = 0; row < grid.rows; row++) {
@@ -361,43 +402,40 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       const rowMaxHeight = Math.max(...heights.slice(rowStart, rowEnd));
       rowHeights.push(rowMaxHeight);
     }
-    
+
     // Section title
-    svg.text(
-      { x: this.PADDING, y: startY },
-      'Domain Contexts (Bounded Contexts)',
-      {
-        fontSize: this.FONT_SIZE_SECTION,
-        fontWeight: 'bold',
-        fontFamily: this.FONT_HEADER,
-        fill: this.colors.text.secondary
-      }
-    );
-    
+    svg.text({ x: this.PADDING, y: startY }, 'Domain Contexts (Bounded Contexts)', {
+      fontSize: this.FONT_SIZE_SECTION,
+      fontWeight: 'bold',
+      fontFamily: this.FONT_HEADER,
+      fill: this.colors.text.secondary,
+    });
+
     const gridStartY = startY + 10;
-    
+
     // Calculate cumulative Y positions for each row
     const rowYPositions: number[] = [gridStartY];
     for (let i = 0; i < rowHeights.length - 1; i++) {
       rowYPositions.push(rowYPositions[i] + rowHeights[i] + 15);
     }
-    
+
     contexts.forEach((context, index) => {
       const col = index % grid.cols;
       const row = Math.floor(index / grid.cols);
       const pos = {
         x: this.PADDING + col * (grid.cellWidth + 15),
-        y: rowYPositions[row]
+        y: rowYPositions[row],
       };
       const contextHeight = heights[index];
       this.renderContext(svg, context, pos, grid.cellWidth, contextHeight, index);
     });
-    
+
     // Return total height used
-    const totalHeight = rowYPositions[rowYPositions.length - 1] + rowHeights[rowHeights.length - 1] + 15;
+    const totalHeight =
+      rowYPositions[rowYPositions.length - 1] + rowHeights[rowHeights.length - 1] + 15;
     return totalHeight;
   }
-  
+
   /**
    * Render a labeled section with bullet-point items.
    * Returns the updated Y position after rendering.
@@ -408,34 +446,37 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     y: number,
     header: string,
     items: string[],
-    options?: { maxItems?: number; trailingGap?: number }
+    options?: { maxItems?: number; trailingGap?: number; maxChars?: number }
   ): number {
     if (items.length === 0) return y;
 
-    svg.text(
-      { x, y },
-      header,
-      { fontSize: this.FONT_SIZE_FEATURE, fontWeight: '600', fontFamily: this.FONT_HEADER, fill: this.colors.text.secondary }
-    );
+    svg.text({ x, y }, header, {
+      fontSize: this.FONT_SIZE_FEATURE,
+      fontWeight: '600',
+      fontFamily: this.FONT_HEADER,
+      fill: this.colors.text.secondary,
+    });
     let currentY = y + this.SECTION_HEADER_HEIGHT;
 
     const maxItems = options?.maxItems;
     const displayItems = maxItems ? items.slice(0, maxItems) : items;
     for (const item of displayItems) {
-      svg.text(
-        { x: x + 5, y: currentY },
-        `• ${item}`,
-        { fontSize: this.FONT_SIZE_FEATURE, fontFamily: this.FONT_HEADER, fill: this.colors.text.primary }
-      );
+      const fits = !options?.maxChars || item.length <= options.maxChars;
+      const shown = fits ? item : `${item.slice(0, Math.max(0, (options?.maxChars ?? 0) - 1))}…`;
+      svg.text({ x: x + 5, y: currentY }, `• ${shown}`, {
+        fontSize: this.FONT_SIZE_FEATURE,
+        fontFamily: this.FONT_HEADER,
+        fill: this.colors.text.primary,
+      });
       currentY += this.FEATURE_LINE_HEIGHT;
     }
 
     if (maxItems && items.length > maxItems) {
-      svg.text(
-        { x: x + 5, y: currentY },
-        `• ... and ${items.length - maxItems} more`,
-        { fontSize: this.FONT_SIZE_FEATURE, fontFamily: this.FONT_HEADER, fill: this.colors.text.tertiary }
-      );
+      svg.text({ x: x + 5, y: currentY }, `• ... and ${items.length - maxItems} more`, {
+        fontSize: this.FONT_SIZE_FEATURE,
+        fontFamily: this.FONT_HEADER,
+        fill: this.colors.text.tertiary,
+      });
       currentY += this.FEATURE_LINE_HEIGHT;
     }
 
@@ -453,59 +494,77 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     height: number,
     index: number
   ): void {
-    const fillColors = [this.colors.context.primary, this.colors.context.secondary, this.colors.context.tertiary];
+    const fillColors = [
+      this.colors.context.primary,
+      this.colors.context.secondary,
+      this.colors.context.tertiary,
+    ];
 
-    svg.rect(pos, { width, height }, {
-      fill: fillColors[index % 3], stroke: this.colors.border.medium, strokeWidth: 1.5, rx: 8, shadow: true
-    });
-
-    svg.text(
-      { x: pos.x + 15, y: pos.y + 25 }, context.name,
-      { fontSize: this.FONT_SIZE_CONTEXT, fontWeight: 'bold', fontFamily: this.FONT_HEADER, fill: this.colors.text.primary }
+    svg.rect(
+      pos,
+      { width, height },
+      {
+        fill: fillColors[index % 3],
+        stroke: this.colors.border.medium,
+        strokeWidth: 1.5,
+        rx: 8,
+        shadow: true,
+      }
     );
 
-    const aggregateNames = (this.manifest.domain?.aggregates || [])
-      .filter(agg => agg.context === context.name).map(agg => agg.name.replace(/Aggregate$/, ''));
-    const featureNames = this.filterFeatures(context.features || []).map(f => f.name);
-    const commandNames = (this.manifest.domain?.commands || [])
-      .filter(cmd => cmd.context === context.name).map(cmd => cmd.name.replace(/Command$/, ''));
-    const eventNames = (this.manifest.domain?.events || [])
-      .filter(evt => evt.context === context.name).map(evt => evt.name.replace(/Event$/, ''));
+    const count = context.aggregate_count ?? 0;
+    const fullTitle = `${context.name} (${count} ${count === 1 ? 'aggregate' : 'aggregates'})`;
+    // About 8.5 px per character at the bold context font size.
+    const titleChars = Math.floor((width - 30) / 8.5);
+    const title =
+      fullTitle.length > titleChars
+        ? `${fullTitle.slice(0, Math.max(0, titleChars - 1))}…`
+        : fullTitle;
+    svg.text({ x: pos.x + 15, y: pos.y + 25 }, title, {
+      fontSize: this.FONT_SIZE_CONTEXT,
+      fontWeight: 'bold',
+      fontFamily: this.FONT_HEADER,
+      fill: this.colors.text.primary,
+    });
 
     let currentY = pos.y + 50;
-    currentY = this.renderItemSection(svg, pos.x + 15, currentY, 'Aggregates:', aggregateNames, { trailingGap: 5 });
-    currentY = this.renderItemSection(svg, pos.x + 15, currentY, '📋 Features', featureNames, { maxItems: this.visualizeConfig.maxFeaturesPerSection });
-    currentY = this.renderItemSection(svg, pos.x + 15, currentY, '⚡ Commands', commandNames);
-    this.renderItemSection(svg, pos.x + 15, currentY, '📨 Events', eventNames);
+    for (const section of this.contextSections(context)) {
+      currentY = this.renderItemSection(svg, pos.x + 15, currentY, section.header, section.items, {
+        maxItems: section.maxItems,
+        trailingGap: 5,
+        // About 6.5 px per character at the feature font size; keep inside the box.
+        maxChars: Math.floor((width - 40) / 6.5),
+      });
+    }
   }
-  
+
   /**
    * Render infrastructure layer (databases, caches, etc.)
    */
   private renderInfrastructureLayer(svg: SvgBuilder, startY: number): number {
     const infrastructure = this.layerConfig.infrastructure || [];
     if (infrastructure.length === 0) return startY;
-    
-    const availableWidth = this.CANVAS_WIDTH - this.SIDEBAR_WIDTH - (this.PADDING * 2) - this.SECTION_MARGIN;
-    const boxWidth = Math.min(180, (availableWidth - ((infrastructure.length - 1) * 10)) / infrastructure.length);
-    const boxHeight = 70;
-    
-    // Section title
-    svg.text(
-      { x: this.PADDING, y: startY },
-      'Infrastructure',
-      {
-        fontSize: this.FONT_SIZE_SECTION,
-        fontWeight: 'bold',
-        fontFamily: this.FONT_HEADER,
-        fill: this.colors.text.secondary
-      }
+
+    const availableWidth =
+      this.CANVAS_WIDTH - this.SIDEBAR_WIDTH - this.PADDING * 2 - this.SECTION_MARGIN;
+    const boxWidth = Math.min(
+      180,
+      (availableWidth - (infrastructure.length - 1) * 10) / infrastructure.length
     );
-    
+    const boxHeight = 70;
+
+    // Section title
+    svg.text({ x: this.PADDING, y: startY }, 'Infrastructure', {
+      fontSize: this.FONT_SIZE_SECTION,
+      fontWeight: 'bold',
+      fontFamily: this.FONT_HEADER,
+      fill: this.colors.text.secondary,
+    });
+
     const boxStartY = startY + 10;
     let currentX = this.PADDING;
-    
-    infrastructure.forEach(infra => {
+
+    infrastructure.forEach((infra) => {
       // Infrastructure box
       svg.rect(
         { x: currentX, y: boxStartY },
@@ -515,68 +574,74 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
           stroke: this.colors.border.medium,
           strokeWidth: 1,
           rx: 6,
-          shadow: true
+          shadow: true,
         }
       );
-      
+
       // Name
-      svg.text(
-        { x: currentX + boxWidth / 2, y: boxStartY + 25 },
-        infra.name,
-        {
-          fontSize: this.FONT_SIZE_CONTEXT,
-          fontWeight: '500',
-          fontFamily: this.FONT_HEADER,
-          fill: this.colors.text.primary,
-          textAnchor: 'middle'
-        }
-      );
-      
+      svg.text({ x: currentX + boxWidth / 2, y: boxStartY + 25 }, infra.name, {
+        fontSize: this.FONT_SIZE_CONTEXT,
+        fontWeight: '500',
+        fontFamily: this.FONT_HEADER,
+        fill: this.colors.text.primary,
+        textAnchor: 'middle',
+      });
+
       // Description (if provided)
       if (infra.description) {
-        svg.text(
-          { x: currentX + boxWidth / 2, y: boxStartY + 45 },
-          infra.description,
-          {
-            fontSize: this.FONT_SIZE_FEATURE,
-            fontFamily: this.FONT_HEADER,
-            fill: this.colors.text.secondary,
-            textAnchor: 'middle'
-          }
-        );
+        svg.text({ x: currentX + boxWidth / 2, y: boxStartY + 45 }, infra.description, {
+          fontSize: this.FONT_SIZE_FEATURE,
+          fontFamily: this.FONT_HEADER,
+          fill: this.colors.text.secondary,
+          textAnchor: 'middle',
+        });
       }
-      
+
       currentX += boxWidth + 10;
     });
-    
+
     return boxStartY + boxHeight;
   }
-  
+
   /**
    * Render packages list in sidebar.
    */
-  private renderPackagesSection(svg: SvgBuilder, sidebarX: number, startY: number, packages: string[]): number {
+  private renderPackagesSection(
+    svg: SvgBuilder,
+    sidebarX: number,
+    startY: number,
+    packages: string[]
+  ): number {
     if (packages.length === 0) return startY;
 
     const sidebarContentWidth = this.SIDEBAR_WIDTH - this.SECTION_MARGIN * 2;
-    svg.text(
-      { x: sidebarX, y: startY }, 'Packages',
-      { fontSize: this.FONT_SIZE_SECTION, fontWeight: 'bold', fontFamily: this.FONT_HEADER, fill: this.colors.text.secondary }
-    );
+    svg.text({ x: sidebarX, y: startY }, 'Packages', {
+      fontSize: this.FONT_SIZE_SECTION,
+      fontWeight: 'bold',
+      fontFamily: this.FONT_HEADER,
+      fill: this.colors.text.secondary,
+    });
     let currentY = startY + 20;
 
     const packageBoxHeight = packages.length * 22 + 20;
     svg.rect(
-      { x: sidebarX, y: currentY }, { width: sidebarContentWidth, height: packageBoxHeight },
-      { fill: this.colors.ecosystem.primary, stroke: this.colors.border.light, strokeWidth: 1, rx: 6 }
+      { x: sidebarX, y: currentY },
+      { width: sidebarContentWidth, height: packageBoxHeight },
+      {
+        fill: this.colors.ecosystem.primary,
+        stroke: this.colors.border.light,
+        strokeWidth: 1,
+        rx: 6,
+      }
     );
     currentY += 20;
 
     for (const pkg of packages) {
-      svg.text(
-        { x: sidebarX + 15, y: currentY }, `• ${pkg}`,
-        { fontSize: this.FONT_SIZE_FEATURE, fontFamily: this.FONT_HEADER, fill: this.colors.text.primary }
-      );
+      svg.text({ x: sidebarX + 15, y: currentY }, `• ${pkg}`, {
+        fontSize: this.FONT_SIZE_FEATURE,
+        fontFamily: this.FONT_HEADER,
+        fill: this.colors.text.primary,
+      });
       currentY += 22;
     }
     return currentY + 20;
@@ -586,33 +651,46 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
    * Render libraries list in sidebar.
    */
   private renderLibrariesSection(
-    svg: SvgBuilder, sidebarX: number, startY: number,
+    svg: SvgBuilder,
+    sidebarX: number,
+    startY: number,
     libraries: Array<{ name: string; repo?: string }>
   ): number {
     if (libraries.length === 0) return startY;
 
     const sidebarContentWidth = this.SIDEBAR_WIDTH - this.SECTION_MARGIN * 2;
-    svg.text(
-      { x: sidebarX, y: startY }, 'Libraries',
-      { fontSize: this.FONT_SIZE_SECTION, fontWeight: 'bold', fontFamily: this.FONT_HEADER, fill: this.colors.text.secondary }
-    );
+    svg.text({ x: sidebarX, y: startY }, 'Libraries', {
+      fontSize: this.FONT_SIZE_SECTION,
+      fontWeight: 'bold',
+      fontFamily: this.FONT_HEADER,
+      fill: this.colors.text.secondary,
+    });
     let currentY = startY + 20;
 
     for (const lib of libraries) {
       const boxHeight = lib.repo ? 65 : 45;
       svg.rect(
-        { x: sidebarX, y: currentY }, { width: sidebarContentWidth, height: boxHeight },
-        { fill: this.colors.ecosystem.secondary, stroke: this.colors.border.light, strokeWidth: 1, rx: 6 }
+        { x: sidebarX, y: currentY },
+        { width: sidebarContentWidth, height: boxHeight },
+        {
+          fill: this.colors.ecosystem.secondary,
+          stroke: this.colors.border.light,
+          strokeWidth: 1,
+          rx: 6,
+        }
       );
-      svg.text(
-        { x: sidebarX + 15, y: currentY + 25 }, lib.name,
-        { fontSize: this.FONT_SIZE_CONTEXT, fontWeight: '500', fontFamily: this.FONT_HEADER, fill: this.colors.text.primary }
-      );
+      svg.text({ x: sidebarX + 15, y: currentY + 25 }, lib.name, {
+        fontSize: this.FONT_SIZE_CONTEXT,
+        fontWeight: '500',
+        fontFamily: this.FONT_HEADER,
+        fill: this.colors.text.primary,
+      });
       if (lib.repo) {
-        svg.text(
-          { x: sidebarX + 15, y: currentY + 45 }, lib.repo,
-          { fontSize: this.FONT_SIZE_FEATURE - 1, fontFamily: this.FONT_HEADER, fill: this.colors.text.tertiary }
-        );
+        svg.text({ x: sidebarX + 15, y: currentY + 45 }, lib.repo, {
+          fontSize: this.FONT_SIZE_FEATURE - 1,
+          fontFamily: this.FONT_HEADER,
+          fill: this.colors.text.tertiary,
+        });
       }
       currentY += boxHeight + 10;
     }
@@ -632,49 +710,64 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     currentY = this.renderPackagesSection(svg, sidebarX, currentY, packages);
     this.renderLibrariesSection(svg, sidebarX, currentY, libraries);
   }
-  
+
   /**
    * Calculate grid layout for contexts
    */
   private calculateGrid(itemCount: number, availableWidth: number): GridLayout {
     const cols = Math.min(itemCount, this.MAX_COLS);
     const rows = Math.ceil(itemCount / cols);
-    const cellWidth = (availableWidth - ((cols - 1) * 15)) / cols;
-    
+    const cellWidth = (availableWidth - (cols - 1) * 15) / cols;
+
     return {
       cols,
       rows,
       cellWidth,
-      cellHeight: this.MIN_CONTEXT_HEIGHT
+      cellHeight: this.MIN_CONTEXT_HEIGHT,
     };
   }
-  
+
   /**
    * Get position for item in grid
    */
-  private getGridPosition(index: number, grid: GridLayout, startX: number, startY: number, cellHeight?: number): Point {
+  private getGridPosition(
+    index: number,
+    grid: GridLayout,
+    startX: number,
+    startY: number,
+    cellHeight?: number
+  ): Point {
     const col = index % grid.cols;
     const row = Math.floor(index / grid.cols);
     const height = cellHeight ?? this.MIN_CONTEXT_HEIGHT;
-    
+
     return {
       x: startX + col * (grid.cellWidth + 15),
-      y: startY + row * (height + 15)
+      y: startY + row * (height + 15),
     };
   }
-  
+
   /**
    * Filter out infrastructure and organizational folders from features
    */
   private filterFeatures(features: Feature[]): Feature[] {
-    const excluded = ['domain', 'slices', 'ports', 'application', 'events', 'commands', 'queries', 'read_models', 'services'];
-    return features.filter(f => 
-      !excluded.includes(f.name) && 
-      !f.name.startsWith('_') &&
-      !f.name.startsWith('aggregate_')  // Aggregate folders are shown in Aggregates section
+    const excluded = [
+      'domain',
+      'slices',
+      'ports',
+      'application',
+      'events',
+      'commands',
+      'queries',
+      'read_models',
+      'services',
+    ];
+    return features.filter(
+      (f) =>
+        !excluded.includes(f.name) && !f.name.startsWith('_') && !f.name.startsWith('aggregate_') // Aggregate folders are shown in Aggregates section
     );
   }
-  
+
   /**
    * Infer layer configuration from manifest if not explicitly provided
    */
@@ -682,7 +775,7 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     // Infer packages from context paths
     if (!this.layerConfig.packages && this.manifest.bounded_contexts) {
       const packageSet = new Set<string>();
-      this.manifest.bounded_contexts.forEach(context => {
+      this.manifest.bounded_contexts.forEach((context) => {
         const pathParts = context.path.split('/');
         const packagesIndex = pathParts.indexOf('packages');
         if (packagesIndex !== -1 && packagesIndex + 1 < pathParts.length) {
@@ -693,17 +786,12 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
         this.layerConfig.packages = Array.from(packageSet).sort();
       }
     }
-    
-    // Set default infrastructure if not provided
-    if (!this.layerConfig.infrastructure) {
-      this.layerConfig.infrastructure = [
-        { name: 'PostgreSQL', description: 'Event Store' },
-        { name: 'Redis', description: 'Cache' },
-        { name: 'MinIO', description: 'Artifacts' }
-      ];
-    }
+
+    // Infrastructure is never assumed: a project names its own (the CLI's
+    // --layers file), and without that the row is left out rather than
+    // showing services the project may not use.
   }
-  
+
   /**
    * Check if CQRS layer should be rendered (if domain data is available)
    */
@@ -711,43 +799,46 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     return !!(
       this.manifest.domain &&
       (this.manifest.domain.commands.length > 0 ||
-       this.manifest.domain.events.length > 0 ||
-       (this.manifest.domain.projections && this.manifest.domain.projections.length > 0))
+        this.manifest.domain.events.length > 0 ||
+        (this.manifest.domain.projections && this.manifest.domain.projections.length > 0))
     );
   }
-  
+
   /**
    * Render CQRS Pattern layer showing Commands → Events → Projections
    */
   private renderCqrsLayer(svg: SvgBuilder, startY: number): number {
-    const availableWidth = this.CANVAS_WIDTH - this.SIDEBAR_WIDTH - (this.PADDING * 2);
+    const availableWidth = this.CANVAS_WIDTH - this.SIDEBAR_WIDTH - this.PADDING * 2;
     const boxWidth = (availableWidth - 40) / 3; // 3 boxes with spacing
     const boxHeight = this.CQRS_BOX_HEIGHT;
     const boxY = startY + 60;
     const spacing = 20;
-    
+
     // Section title
-    svg.text(
-      { x: this.PADDING, y: startY + 30 },
-      'CQRS Pattern',
-      {
-        fontSize: this.FONT_SIZE_SECTION,
-        fontWeight: 'bold',
-        fontFamily: this.FONT_HEADER,
-        fill: this.colors.text.primary
-      }
-    );
-    
+    svg.text({ x: this.PADDING, y: startY + 30 }, 'CQRS Pattern', {
+      fontSize: this.FONT_SIZE_SECTION,
+      fontWeight: 'bold',
+      fontFamily: this.FONT_HEADER,
+      fill: this.colors.text.primary,
+    });
+
     const domain = this.manifest.domain!;
     const commandCount = domain.commands.length;
     const eventCount = domain.events.length;
     const projectionCount = domain.projections?.length || 0;
-    
+    // View slices are the read side too; a project whose projections the
+    // manifest cannot name still shows how many views it keeps.
+    const viewSliceCount = this.filterContexts(this.manifest.bounded_contexts || [])
+      .flatMap((ctx) => ctx.features || [])
+      .filter((f) =>
+        ['view', 'query'].includes((f.slice_types && f.slice_types[0]) || f.slice_type || '')
+      ).length;
+
     // Calculate box positions
     const commandX = this.PADDING;
     const eventX = commandX + boxWidth + spacing;
     const projectionX = eventX + boxWidth + spacing;
-    
+
     // Commands box
     this.renderCqrsBox(
       svg,
@@ -757,7 +848,7 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       commandCount,
       this.CQRS_COLORS.command
     );
-    
+
     // Events box
     this.renderCqrsBox(
       svg,
@@ -767,7 +858,7 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       eventCount,
       this.CQRS_COLORS.event
     );
-    
+
     // Projections box
     this.renderCqrsBox(
       svg,
@@ -775,34 +866,27 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
       { width: boxWidth, height: boxHeight },
       'Projections',
       projectionCount,
-      this.CQRS_COLORS.projection
+      this.CQRS_COLORS.projection,
+      viewSliceCount > 0
+        ? `${viewSliceCount} view ${viewSliceCount === 1 ? 'slice' : 'slices'}`
+        : undefined
     );
-    
+
     // Arrows
     const arrowY = boxY + boxHeight / 2;
     const arrowColor = '#666666';
-    
+
     // Command → Event arrow
-    svg.line(
-      { x: commandX + boxWidth, y: arrowY },
-      { x: eventX, y: arrowY },
-      arrowColor,
-      2
-    );
+    svg.line({ x: commandX + boxWidth, y: arrowY }, { x: eventX, y: arrowY }, arrowColor, 2);
     this.renderArrowHead(svg, { x: eventX - 5, y: arrowY }, arrowColor);
-    
+
     // Event → Projection arrow
-    svg.line(
-      { x: eventX + boxWidth, y: arrowY },
-      { x: projectionX, y: arrowY },
-      arrowColor,
-      2
-    );
+    svg.line({ x: eventX + boxWidth, y: arrowY }, { x: projectionX, y: arrowY }, arrowColor, 2);
     this.renderArrowHead(svg, { x: projectionX - 5, y: arrowY }, arrowColor);
-    
+
     return startY + this.CQRS_LAYER_HEIGHT;
   }
-  
+
   /**
    * Render a single CQRS box (Command, Event, or Projection)
    */
@@ -812,40 +896,40 @@ export class ArchitectureSvgGenerator extends BaseGenerator {
     dims: { width: number; height: number },
     label: string,
     count: number,
-    colors: { fill: string; stroke: string }
+    colors: { fill: string; stroke: string },
+    detail?: string
   ): void {
     // Box
     svg.rect(pos, dims, {
       fill: colors.fill,
       stroke: colors.stroke,
       strokeWidth: 2,
-      rx: 8
+      rx: 8,
     });
-    
+
     // Label
-    svg.text(
-      { x: pos.x + 20, y: pos.y + 35 },
-      label,
-      {
-        fontSize: 18,
-        fontWeight: 'bold',
-        fontFamily: this.FONT_HEADER,
-        fill: this.colors.text.primary
-      }
-    );
-    
+    svg.text({ x: pos.x + 20, y: pos.y + 35 }, label, {
+      fontSize: 18,
+      fontWeight: 'bold',
+      fontFamily: this.FONT_HEADER,
+      fill: this.colors.text.primary,
+    });
+
     // Count
-    svg.text(
-      { x: pos.x + 20, y: pos.y + 65 },
-      `${count} total`,
-      {
+    svg.text({ x: pos.x + 20, y: pos.y + 65 }, `${count} total`, {
+      fontSize: 14,
+      fontFamily: this.FONT_HEADER,
+      fill: '#666666',
+    });
+    if (detail) {
+      svg.text({ x: pos.x + 20, y: pos.y + 88 }, detail, {
         fontSize: 14,
         fontFamily: this.FONT_HEADER,
-        fill: '#666666'
-      }
-    );
+        fill: '#666666',
+      });
+    }
   }
-  
+
   /**
    * Render an arrow head
    */

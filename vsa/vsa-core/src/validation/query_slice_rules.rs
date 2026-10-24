@@ -8,7 +8,7 @@
 use super::{EnhancedValidationReport, Severity, Suggestion, ValidationContext, ValidationIssue};
 use crate::config::SliceType;
 use crate::error::Result;
-use crate::scanners::{ProjectionScanner, SliceScanner};
+use crate::scanners::{ProjectionScanner, SliceFileType, SliceScanner};
 
 use super::rules::ValidationRule;
 
@@ -46,11 +46,11 @@ impl ValidationRule for RequireProjectionForQueryRule {
         }
 
         // Scan for slices
-        let scanner = SliceScanner::new(slices_config, &ctx.root);
+        let scanner = SliceScanner::for_config(&ctx.config, &ctx.root);
         let slices = scanner.scan()?;
 
         for slice in slices {
-            if slice.slice_type == SliceType::Query && !slice.has_projection() {
+            if slice.has_pattern(&SliceType::View) && !slice.has_projection() {
                 // Suggest creating a projection
                 // Note: to_pascal_case already handles both '-' and '_' delimiters
                 let projection_name = format!("{}Projection", to_pascal_case(&slice.name));
@@ -62,7 +62,7 @@ impl ValidationRule for RequireProjectionForQueryRule {
                         code: self.code().to_string(),
                         severity: Severity::Error,
                         message: format!(
-                            "Query slice '{}' is missing a projection. Projections build read models from events.",
+                            "View (query) slice '{}' is missing a projection. Projections build read models from events.",
                             slice.name
                         ),
                         suggestions: vec![Suggestion::create_file(
@@ -79,7 +79,11 @@ impl ValidationRule for RequireProjectionForQueryRule {
 
 /// VSA008: Query slices must have a handler
 ///
-/// The handler executes the query against the projection's read model.
+/// The handler executes the query against the projection's read model. A
+/// slice declared with the older name `query` always answers queries, so it
+/// needs one. A `view` slice needs one only when it defines a query (a
+/// `*Query` / `*_query` file): a projection runner that only keeps a read
+/// model current is a complete view without a handler.
 pub struct RequireHandlerForQueryRule;
 
 impl ValidationRule for RequireHandlerForQueryRule {
@@ -96,15 +100,15 @@ impl ValidationRule for RequireHandlerForQueryRule {
         ctx: &ValidationContext,
         report: &mut EnhancedValidationReport,
     ) -> Result<()> {
-        // Get slices config if available
-        let slices_config = ctx.config.slices.as_ref();
-
         // Scan for slices
-        let scanner = SliceScanner::new(slices_config, &ctx.root);
+        let scanner = SliceScanner::for_config(&ctx.config, &ctx.root);
         let slices = scanner.scan()?;
 
         for slice in slices {
-            if slice.slice_type == SliceType::Query && !slice.has_handler() {
+            let answers_queries = slice.slice_type == SliceType::Query
+                || (slice.slice_type == SliceType::View
+                    && slice.files.iter().any(|f| f.file_type == SliceFileType::Query));
+            if answers_queries && !slice.has_handler() {
                 // Suggest creating a handler
                 // Note: to_pascal_case already handles both '-' and '_' delimiters
                 let handler_name = format!("{}Handler", to_pascal_case(&slice.name));
@@ -116,7 +120,7 @@ impl ValidationRule for RequireHandlerForQueryRule {
                         code: self.code().to_string(),
                         severity: Severity::Error,
                         message: format!(
-                            "Query slice '{}' is missing a handler. Handlers execute queries against the projection.",
+                            "View (query) slice '{}' is missing a handler. Handlers execute queries against the projection.",
                             slice.name
                         ),
                         suggestions: vec![Suggestion::create_file(

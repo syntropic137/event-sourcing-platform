@@ -57,6 +57,40 @@ def _stringify_map(values: dict) -> dict:
     return {key: str(value) for key, value in values.items()}
 
 
+_GATEWAY_TLS_KEYS = {
+    "enabled": "esp_gateway_tls",
+    "dir": "esp_gateway_tls_dir",
+    "cert_src": "esp_gateway_tls_cert_src",
+    "key_src": "esp_gateway_tls_key_src",
+    "self_signed": "esp_gateway_tls_self_signed",
+    "names": "esp_gateway_tls_names",
+    "ca_fetch_dest": "esp_gateway_tls_ca_fetch_dest",
+    "reload_interval": "esp_gateway_tls_reload_interval",
+}
+
+
+def _gateway_tls_vars(tls_cfg: dict | None) -> dict:
+    """Map a `gateway.tls` config block to event-store role vars (#301).
+
+    TLS is on unless `enabled: false` is explicit; unset keys fall back to the
+    role defaults. Unknown keys and a half-specified cert/key pair fail
+    rendering instead of deploying something unexpected.
+    """
+    tls_cfg = tls_cfg or {}
+    unknown = set(tls_cfg) - set(_GATEWAY_TLS_KEYS)
+    if unknown:
+        raise SystemExit(f"config error: unknown gateway.tls keys: {sorted(unknown)}")
+    if bool(tls_cfg.get("cert_src")) != bool(tls_cfg.get("key_src")):
+        raise SystemExit(
+            "config error: gateway.tls.cert_src and gateway.tls.key_src must be set together"
+        )
+    out = {"esp_gateway_tls": bool(tls_cfg.get("enabled", True))}
+    for key, var in _GATEWAY_TLS_KEYS.items():
+        if key != "enabled" and tls_cfg.get(key) not in (None, ""):
+            out[var] = tls_cfg[key]
+    return out
+
+
 def _build_aws_terraform_payload(cfg: dict) -> dict:
     """Build the Terraform tfvars payload for AWS."""
     provider_cfg = cfg["aws"]
@@ -158,6 +192,7 @@ def _build_aws_ansible_config(cfg: dict, ansible_env_dir: Path) -> None:
         "service_description": ansible_cfg["service"].get("description", "Event Store Service"),
         "esp_gateway_user": gateway_cfg.get("user", "admin"),
         "esp_gateway_password": gateway_password_lookup,
+        **_gateway_tls_vars(gateway_cfg.get("tls")),
     }
     write_yaml(ansible_env_dir / "group_vars" / "all.yml", group_vars_payload)
 
@@ -182,7 +217,7 @@ def _build_aws_ansible_config(cfg: dict, ansible_env_dir: Path) -> None:
             "  vars_files:\n"
             "    - group_vars/all.yml\n"
             "  roles:\n"
-            "    - role: ../../../shared/configure/ansible/roles/event-store\n"
+            "    - role: ../../../../../shared/configure/ansible/roles/event-store\n"
         ).format(host_group=ansible_cfg["inventory_host_group"])
         write_text(playbook_path, playbook_content)
 
@@ -303,6 +338,7 @@ ansible_python_interpreter=/usr/bin/python3
         "# Gateway configuration (ADR-024)": None,
         "esp_gateway_user": gateway_cfg.get("user", "admin"),
         "esp_gateway_password": gateway_password,
+        **_gateway_tls_vars(gateway_cfg.get("tls")),
         "# Service configuration": None,
         "service_user": service_cfg.get("user", "eventstore"),
         "service_group": service_cfg.get("group", "eventstore"),

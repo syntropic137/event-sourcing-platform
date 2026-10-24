@@ -82,6 +82,9 @@ Options:
   -V, --version        output the version number
   -o, --output <dir>   Output directory (default: "docs/architecture")
   -f, --format <type>  Output format: "mermaid" or "svg" (default: "mermaid")
+  -t, --type <diagram> Diagram type: "architecture", "aggregates" or "all" (default: "architecture")
+  -l, --layers <file>  JSON file naming applications, infrastructure, packages and libraries
+                       (SVG architecture diagram)
   -v, --verbose        Enable verbose logging (default: false)
   -h, --help           display help for command
 ```
@@ -98,9 +101,22 @@ Generates markdown files with Mermaid diagrams:
 Generates a single SVG architecture diagram:
 - `ARCHITECTURE.svg` - Complete system architecture including:
   - Bounded contexts grid layout
+  - Each context's slices grouped by Event Modeling pattern (command, view, automation, translation)
+  - Each command with the events its decision builds, when the manifest maps them (schema 2.4.0+)
   - CQRS pattern layer (Commands → Events → Projections)
-  - Infrastructure components
+  - Infrastructure components, only as named in a `--layers` file (none are assumed)
   - Package ecosystem
+
+A `--layers` file names what the manifest cannot know:
+
+```json
+{
+  "applications": ["CLI", "Web UI"],
+  "infrastructure": [{ "name": "Event store", "description": "Events" }],
+  "packages": ["core"],
+  "libraries": [{ "name": "event-sourcing-platform" }]
+}
+```
 
 **Perfect for:**
 - README.md embedding

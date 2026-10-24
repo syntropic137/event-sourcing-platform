@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::config::VsaConfig;
+use crate::config::{ValidationConfig, VsaConfig};
 use crate::error::Result;
 use crate::patterns::PatternMatcher;
 use crate::scanner::{ContextInfo, FeatureInfo, Scanner};
@@ -136,6 +136,29 @@ impl ValidationReport {
         self.errors.is_empty()
     }
 
+    /// Apply the config's exit policy to this report.
+    ///
+    /// Returns `Some(reason)` when the run must fail: there are errors and
+    /// `fail_on_errors` is set, or there are more warnings than `max_warnings`.
+    /// Returns `None` when the run passes. This is the single place the CLI
+    /// exit code is decided, so a gate built on `max_warnings: 0` bites.
+    pub fn gate_failure(&self, validation: &ValidationConfig) -> Option<String> {
+        let blocking_errors = validation.fail_on_errors && !self.errors.is_empty();
+        let over_budget = validation.max_warnings.is_some_and(|max| self.warnings.len() > max);
+        if !blocking_errors && !over_budget {
+            return None;
+        }
+        let budget = match validation.max_warnings {
+            Some(max) => format!("max_warnings = {max}"),
+            None => "no warning budget".to_string(),
+        };
+        Some(format!(
+            "Validation failed: {} error(s), {} warning(s) ({budget})",
+            self.errors.len(),
+            self.warnings.len()
+        ))
+    }
+
     /// Get total issue count
     pub fn total_issues(&self) -> usize {
         self.errors.len() + self.warnings.len()
@@ -181,6 +204,49 @@ mod tests {
             exceptions: Vec::new(),
             layer_separation: None,
         }
+    }
+
+    fn report(errors: usize, warnings: usize) -> ValidationReport {
+        let path = PathBuf::from("x");
+        ValidationReport {
+            errors: (0..errors)
+                .map(|_| ValidationError { path: path.clone(), message: "e".into() })
+                .collect(),
+            warnings: (0..warnings)
+                .map(|_| ValidationWarning { path: path.clone(), message: "w".into() })
+                .collect(),
+        }
+    }
+
+    fn policy(max_warnings: Option<usize>, fail_on_errors: bool) -> ValidationConfig {
+        ValidationConfig { max_warnings, fail_on_errors, ..ValidationConfig::default() }
+    }
+
+    #[test]
+    fn gate_fails_when_warnings_exceed_budget() {
+        assert!(report(0, 1).gate_failure(&policy(Some(0), true)).is_some());
+        assert!(report(0, 3).gate_failure(&policy(Some(2), true)).is_some());
+    }
+
+    #[test]
+    fn gate_passes_within_budget_or_without_one() {
+        assert!(report(0, 0).gate_failure(&policy(Some(0), true)).is_none());
+        assert!(report(0, 2).gate_failure(&policy(Some(2), true)).is_none());
+        assert!(report(0, 50).gate_failure(&policy(None, true)).is_none());
+    }
+
+    #[test]
+    fn gate_fails_on_errors_unless_disabled() {
+        assert!(report(1, 0).gate_failure(&policy(None, true)).is_some());
+        assert!(report(1, 0).gate_failure(&policy(None, false)).is_none());
+    }
+
+    #[test]
+    fn omitted_max_warnings_means_no_budget() {
+        let cfg: ValidationConfig = serde_yaml::from_str("fail_on_errors: true").unwrap();
+        assert_eq!(cfg.max_warnings, None);
+        let cfg: ValidationConfig = serde_yaml::from_str("max_warnings: 0").unwrap();
+        assert_eq!(cfg.max_warnings, Some(0));
     }
 
     #[test]

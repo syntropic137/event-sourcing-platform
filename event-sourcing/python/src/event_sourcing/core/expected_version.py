@@ -23,8 +23,7 @@ class ExpectedVersion:
         # Require an exact version (standard OCC)
         await client.append_events(stream, events, expected_version=ExpectedVersion.exact(3))
 
-        # Skip version check
-        await client.append_events(stream, events, expected_version=ExpectedVersion.ANY)
+    ``ANY`` does not skip the check: see its note.
     """
 
     NO_STREAM: int = 0
@@ -35,12 +34,11 @@ class ExpectedVersion:
     """
 
     ANY: None = None
-    """Skip version check entirely.
+    """Intended to skip the version check, but the store has no such mode.
 
-    The gRPC client defaults ``expected_aggregate_nonce`` to 0 when
-    ``expected_version`` is ``None``, so this currently has the same
-    wire behavior as ``NO_STREAM``. Use explicitly when you want to
-    document intent.
+    Both clients send ``None`` as ``expected_aggregate_nonce = 0``, so this
+    behaves exactly like ``NO_STREAM``: appending to an existing stream
+    raises ``StreamAlreadyExistsError``. Pass an exact version instead.
     """
 
     @staticmethod

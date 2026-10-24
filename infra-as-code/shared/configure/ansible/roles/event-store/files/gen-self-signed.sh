@@ -1,0 +1,1 @@
+../../../../../../../event-store/gateway/gen-self-signed.sh

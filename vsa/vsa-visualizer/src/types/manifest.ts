@@ -62,10 +62,10 @@ export interface Aggregate {
   line_count: number;
   command_handlers: CommandHandler[];
   event_handlers: EventHandler[];
-  entities?: AggregateEntity[];       // NEW in v2.3.0 - entities within this aggregate
+  entities?: AggregateEntity[]; // NEW in v2.3.0 - entities within this aggregate
   value_objects?: AggregateValueObject[]; // NEW in v2.3.0 - value objects within this aggregate
-  folder_name?: string;               // NEW in v2.3.0 - aggregate_* folder name if using DDD convention
-  context?: string;                   // NEW in v2.3.0 - bounded context this aggregate belongs to
+  folder_name?: string; // NEW in v2.3.0 - aggregate_* folder name if using DDD convention
+  context?: string; // NEW in v2.3.0 - bounded context this aggregate belongs to
 }
 
 /**
@@ -73,7 +73,7 @@ export interface Aggregate {
  */
 export interface AggregateEntity {
   name: string;
-  identity_field?: string;  // e.g., "isolation_id"
+  identity_field?: string; // e.g., "isolation_id"
   file_path: string;
   line_count: number;
 }
@@ -107,7 +107,7 @@ export interface Command {
   target_aggregate?: string;
   has_aggregate_id: boolean;
   fields: Field[];
-  context?: string;                 // NEW in v2.3.0 - bounded context this command belongs to
+  context?: string; // NEW in v2.3.0 - bounded context this command belongs to
 }
 
 export interface Event {
@@ -119,7 +119,7 @@ export interface Event {
   handled_by: string[];
   fields: Field[];
   decorator_present: boolean;
-  context?: string;                 // NEW in v2.3.0 - bounded context this event belongs to
+  context?: string; // NEW in v2.3.0 - bounded context this event belongs to
 }
 
 export interface Field {
@@ -177,6 +177,7 @@ export interface ValueObjectField {
 
 export interface Relationships {
   command_to_aggregate: Record<string, string>;
+  command_to_events?: Record<string, string[]>; // NEW in v2.4.0 - each command and the events its decision builds
   aggregate_to_events: Record<string, string[]>;
   event_to_handlers: Record<string, string[]>;
   event_to_projections?: Record<string, string[]>; // NEW in v2.1.0
@@ -184,10 +185,13 @@ export interface Relationships {
 }
 
 /**
- * Slice type - classifies whether a feature/slice is command or query
+ * Slice type - the Event Modeling pattern a slice implements
+ * (command, view, automation, translation). 'query' and 'saga' are the
+ * deprecated names for 'view' and 'automation'; 'mixed' is legacy.
  * NEW in v2.2.0
  */
-export type SliceType = 'command' | 'query' | 'mixed' | 'unknown';
+export type SliceType =
+  'command' | 'view' | 'automation' | 'translation' | 'query' | 'saga' | 'mixed' | 'unknown';
 
 /**
  * Context type - classifies whether a directory is a valid bounded context
@@ -206,15 +210,16 @@ export interface BoundedContext {
   path: string;
   features: Feature[];
   infrastructure_folders?: string[]; // NEW in v2.0.0
-  context_type?: ContextType;        // NEW in v2.2.0 - bounded_context or invalid_module
-  aggregate_count?: number;          // NEW in v2.2.0 - number of aggregates in context
+  context_type?: ContextType; // NEW in v2.2.0 - bounded_context or invalid_module
+  aggregate_count?: number; // NEW in v2.2.0 - number of aggregates in context
 }
 
 export interface Feature {
   name: string;
   path: string;
   files: string[];
-  slice_type?: SliceType;  // NEW in v2.2.0 - command, query, mixed, or unknown
+  slice_type?: SliceType; // NEW in v2.2.0 - command, query, mixed, or unknown
+  slice_types?: SliceType[]; // NEW in v2.4.0 - every pattern the slice declares, primary first
 }
 
 /**

@@ -3,6 +3,9 @@
 //! Connect with [`EventStore::connect`] (`host:port`, `http://...`, or
 //! `https://...`) or, for TLS, credentials, timeouts and keepalive, with
 //! [`ClientConfig`].
+//!
+//! [`EventStore::stream_pages`] and [`EventStore::all_pages`] page a read to
+//! its end (see [`PagingStalled`]).
 
 use std::future::Future;
 use std::time::Duration;
@@ -16,6 +19,7 @@ use tonic::{Request, Response, Status};
 
 mod auth;
 mod config;
+mod paging;
 mod server_info;
 use auth::AuthInterceptor;
 pub use auth::{Credentials, InvalidCredentials, SharedToken, TokenProvider};
@@ -24,6 +28,7 @@ pub use config::{
     DEFAULT_HTTP2_KEEPALIVE_INTERVAL, DEFAULT_HTTP2_KEEPALIVE_TIMEOUT, DEFAULT_REQUEST_TIMEOUT,
     DEFAULT_TCP_KEEPALIVE,
 };
+pub use paging::{AllPages, PagingStalled, StreamPages};
 pub use server_info::{capabilities, CompatibilityError, ServerInfo, SERVER_INFO_MIN_VERSION};
 
 type Inner = EventStoreClient<InterceptedService<Channel, AuthInterceptor>>;

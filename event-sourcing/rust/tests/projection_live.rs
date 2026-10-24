@@ -375,6 +375,166 @@ async fn unhandled_type_is_skipped_before_upcasting() {
     );
 }
 
+/// [`BalanceProjection`] restricted to `Account` aggregates.
+struct AccountsOnly(BalanceProjection);
+
+#[async_trait]
+impl CheckpointedProjection<MemStore> for AccountsOnly {
+    fn name(&self) -> &str {
+        CheckpointedProjection::<MemStore>::name(&self.0)
+    }
+
+    fn version(&self) -> u32 {
+        CheckpointedProjection::<MemStore>::version(&self.0)
+    }
+
+    fn handles_aggregate_type(&self, aggregate_type: &str) -> bool {
+        aggregate_type == "Account"
+    }
+
+    fn handles(&self, event_type: &str) -> bool {
+        CheckpointedProjection::<MemStore>::handles(&self.0, event_type)
+    }
+
+    async fn handle(
+        &mut self,
+        tx: &mut InMemoryTx<Balances>,
+        event: &RecordedEvent,
+        ctx: &DispatchContext,
+    ) -> Result<()> {
+        CheckpointedProjection::<MemStore>::handle(&mut self.0, tx, event, ctx).await
+    }
+
+    async fn reset(&mut self, tx: &mut InMemoryTx<Balances>, key: &CheckpointKey) -> Result<()> {
+        CheckpointedProjection::<MemStore>::reset(&mut self.0, tx, key).await
+    }
+}
+
+/// Append one event to a stream of another aggregate type.
+async fn append_foreign(
+    client: &EventStoreClient,
+    tenant: &str,
+    aggregate_id: &str,
+    event_type: &str,
+    payload: Vec<u8>,
+) -> u64 {
+    client
+        .append(proto::AppendRequest {
+            tenant_id: tenant.into(),
+            aggregate_id: aggregate_id.into(),
+            aggregate_type: "Ledger".into(),
+            expected_aggregate_nonce: 0,
+            idempotency_key: String::new(),
+            events: vec![proto::EventData {
+                meta: Some(proto::EventMetadata {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    aggregate_id: aggregate_id.into(),
+                    aggregate_type: "Ledger".into(),
+                    aggregate_nonce: 1,
+                    event_type: event_type.into(),
+                    event_version: 1,
+                    content_type: "application/json".into(),
+                    tenant_id: tenant.into(),
+                    ..Default::default()
+                }),
+                payload,
+            }],
+        })
+        .await
+        .expect("append")
+        .last_global_nonce
+}
+
+#[tokio::test]
+async fn other_aggregate_types_are_skipped_before_decoding() {
+    // #428: another family shares the tenant and reuses the event type
+    // "Deposited" with a payload this projection cannot decode.
+    let f = fixture().await;
+    append(&f.client, &f.tenant, "a", 1, "Deposited", 10).await;
+    let g2 = append_foreign(&f.client, &f.tenant, "l", "Deposited", b"not json".to_vec()).await;
+    let g3 = append(&f.client, &f.tenant, "a", 2, "Deposited", 5).await;
+
+    let probe = Probe::default();
+    let store = Arc::new(MemStore::new());
+    let mut runner = ProjectionRunner::new(
+        f.port.clone(),
+        store.clone(),
+        AccountsOnly(BalanceProjection::new(&probe)),
+        &f.tenant,
+    );
+    assert_eq!(runner.catch_up().await.unwrap(), g3);
+    assert_eq!(store.load_checkpoint(runner.key()).await.unwrap(), Some(g3));
+    assert_eq!(store.state(runner.key()).by_account["a"], 15);
+    assert!(!store.state(runner.key()).by_account.contains_key("l"));
+    let seen: Vec<u64> = probe
+        .contexts
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| c.global_nonce)
+        .collect();
+    assert!(!seen.contains(&g2), "{seen:?}");
+
+    // Without the filter the foreign event reaches the handler and fails.
+    let store = Arc::new(MemStore::new());
+    let mut unfiltered = ProjectionRunner::new(
+        f.port.clone(),
+        store.clone(),
+        BalanceProjection::new(&Probe::default()),
+        &f.tenant,
+    );
+    let err = unfiltered.catch_up().await.expect_err("foreign payload");
+    assert!(
+        matches!(&err, Error::ProjectionFailed { global_nonce, .. } if *global_nonce == g2),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn other_aggregate_types_are_never_upcast_and_still_checkpointed() {
+    // #428: the foreign family's types have upcasters that would fail (one
+    // errors, one is a cycle). Rejected by aggregate type, neither runs, and
+    // the checkpoint advances past a foreign event that comes last.
+    let f = fixture().await;
+    append(&f.client, &f.tenant, "a", 1, "Deposited", 10).await;
+    append_foreign(&f.client, &f.tenant, "l1", "Credited", b"{}".to_vec()).await;
+    let last = append_foreign(&f.client, &f.tenant, "l2", "Ping", b"{}".to_vec()).await;
+
+    let upcasters = Upcasters::new()
+        .rename("Credited", 1, "Deposited", 1, |_| {
+            Err(Error::domain("foreign event must not be upcast"))
+        })
+        .rename("Ping", 1, "Pong", 1, Ok)
+        .rename("Pong", 1, "Ping", 1, Ok);
+    let store = Arc::new(MemStore::new());
+    let mut runner = ProjectionRunner::new(
+        f.port.clone(),
+        store.clone(),
+        AccountsOnly(BalanceProjection::new(&Probe::default())),
+        &f.tenant,
+    )
+    .with_upcasters(upcasters.clone());
+    assert_eq!(runner.catch_up().await.unwrap(), last);
+    assert_eq!(
+        store.load_checkpoint(runner.key()).await.unwrap(),
+        Some(last)
+    );
+    assert_eq!(store.state(runner.key()).by_account["a"], 10);
+
+    // Without the filter the same upcasters stop the runner.
+    let mut unfiltered = ProjectionRunner::new(
+        f.port.clone(),
+        Arc::new(MemStore::new()),
+        BalanceProjection::new(&Probe::default()),
+        &f.tenant,
+    )
+    .with_upcasters(upcasters);
+    unfiltered
+        .catch_up()
+        .await
+        .expect_err("foreign upcaster runs");
+}
+
 #[tokio::test]
 async fn upcast_cycle_on_an_unhandled_type_still_stops_the_runner() {
     // A cycle has no target, so the chain runs and fails (parity with

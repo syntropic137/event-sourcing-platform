@@ -70,6 +70,10 @@ echo "📝 Generating proxmox/provision/config/local.yml..."
 ESP_GATEWAY_PASSWORD_YAML=${ESP_GATEWAY_PASSWORD//\'/\'\'}
 ESP_GATEWAY_USER_YAML=${ESP_GATEWAY_USER//\'/\'\'}
 
+# Name/IP the gateway certificate is issued for (#301): the VM IP by default.
+ESP_GATEWAY_TLS_NAME=${ESP_GATEWAY_TLS_NAME:-${NETWORK_IP_ADDRESS:-192.168.0.100/24}}
+ESP_GATEWAY_TLS_NAME=${ESP_GATEWAY_TLS_NAME%/*}
+
 # Owner-only: this file embeds the gateway and Postgres passwords.
 ( umask 077 && : > proxmox/provision/config/local.yml )
 chmod 600 proxmox/provision/config/local.yml
@@ -151,6 +155,15 @@ ansible:
   gateway:
     user: '${ESP_GATEWAY_USER_YAML:-admin}'
     password: '${ESP_GATEWAY_PASSWORD_YAML:-changeme}'
+    # TLS on the published port (#301). Default: private CA + cert generated
+    # on the VM for its IP; the CA lands in
+    # proxmox/configure/ansible/envs/local/gateway-ca.pem for clients.
+    tls:
+      enabled: ${ESP_GATEWAY_TLS:-true}
+      self_signed: ${ESP_GATEWAY_TLS_SELF_SIGNED:-true}
+      names: ['${ESP_GATEWAY_TLS_NAME}']
+      cert_src: '${ESP_GATEWAY_TLS_CERT_SRC:-}'
+      key_src: '${ESP_GATEWAY_TLS_KEY_SRC:-}'
 
   # Service configuration
   service:

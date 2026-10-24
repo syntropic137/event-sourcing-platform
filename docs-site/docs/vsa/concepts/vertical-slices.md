@@ -90,6 +90,33 @@ Two things are worth pinning down, because they are easy to get wrong:
   [consumer patterns](https://github.com/syntropic137/event-sourcing-platform/blob/main/docs/CONSUMER-PATTERNS.md) show the same shape, with a
   projection/to-do side and a processor side.
 
+### Declaring the pattern in `slice.yaml`
+
+VSA uses the same four names. A slice says which pattern it is:
+
+```yaml
+name: ship_paid_orders
+type: automation   # command | view | automation | translation
+```
+
+| `type:` | Checked (hexagonal-event-sourced-vsa) |
+|---|---|
+| `command` | imports the domain (VSA034) and a port (VSA035) |
+| `view` | has a projection (VSA007) and issues no command (VSA040) |
+| `automation` | has a to-do list view (a projection or `*todo*` file) and issues a command (VSA039) |
+| `translation` | issues a command (VSA039) |
+
+An automation is a to-do list view of pending work and a processor that takes the next entry and issues a command. The event that command produces clears the entry. A projection runner that only keeps a view current is a `view`: it issues no command. Once it issues commands, it is an automation.
+
+A processor often lives with the command it issues, so it never reaches into another slice. Such a slice declares both patterns and gets both sets of checks:
+
+```yaml
+name: ship
+type: [command, automation]   # VSA034 + VSA035 for the command, VSA039 for the automation
+```
+
+`query` and `saga` are older names for `view` and `automation`. They still validate, but they draw a deprecation warning (VSA038). `mixed` is still accepted. An unknown `type:` is an error (VSA036), and so is a type that `slices.types` does not list (VSA037). `slices.view:` and `slices.automation:` are accepted as aliases for the `slices.query:` and `slices.saga:` config blocks.
+
 In *Understanding Eventsourcing*, Martin Dilger describes the same four patterns
 while noting that there are "basically just two types of slices" - state change
 and state view - with automation treated as a further process step rather than a

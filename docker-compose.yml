@@ -39,11 +39,17 @@ services:
     container_name: event-store-gateway
     ports:
       # ESP_GATEWAY_BIND defaults to 127.0.0.1 so the default (password
-      # unset = auth off) setup is never reachable from the LAN. To expose
-      # it, set ESP_GATEWAY_PASSWORD AND ESP_GATEWAY_BIND=0.0.0.0.
+      # unset, TLS off) setup is never reachable from the LAN. To expose it,
+      # set ESP_GATEWAY_PASSWORD AND ESP_GATEWAY_BIND=0.0.0.0 AND add
+      # docker-compose.tls.yml (TLS, #301); the gateway refuses to start
+      # plaintext on a non-loopback bind.
       - "${ESP_GATEWAY_BIND:-127.0.0.1}:${GRPC_PORT:-50051}:8081"
     environment:
       ESP_UPSTREAM: "event-store:${GRPC_PORT:-50051}"
+      # Local dev default: plaintext on loopback. docker-compose.tls.yml
+      # turns TLS on and mounts the certificate (event-store/gateway/README.md).
+      ESP_GATEWAY_TLS: ${ESP_GATEWAY_TLS:-off}
+      ESP_GATEWAY_PUBLISH_BIND: ${ESP_GATEWAY_BIND:-127.0.0.1}
       ESP_GATEWAY_USER: ${ESP_GATEWAY_USER:-admin}
       # Intentionally NOT required here (unlike the Proxmox/AWS Ansible
       # deploy paths, where it's a hard failure - see render_config.py).

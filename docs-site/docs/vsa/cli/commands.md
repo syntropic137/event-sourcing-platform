@@ -286,6 +286,21 @@ $ vsa validate
      Required by: validation.require_handler = true
 ```
 
+#### Exit code
+
+`vsa validate` (without `--watch`, which keeps running) exits non-zero when either of these holds:
+
+- there are errors and `validation.fail_on_errors` is `true` (the default)
+- there are more warnings than `validation.max_warnings`
+
+`max_warnings` has no default. If it is omitted, warnings are reported but never fail the run. Set `max_warnings: 0` to make every warning blocking, which is what a CI gate usually wants:
+
+```yaml
+validation:
+  max_warnings: 0
+  fail_on_errors: true
+```
+
 #### Validation Rules
 
 VSA validates:
@@ -510,6 +525,14 @@ vsa manifest --format yaml --output architecture.yaml
 # Markdown format (future)
 vsa manifest --format markdown --output ARCHITECTURE.md
 ```
+
+#### Rust and `hexagonal-event-sourced-vsa` (schema 2.4.0)
+
+- A Rust command or event file that declares a `*Command` / `*Event` enum gives one entry per variant, named `Enum::Variant` (`OrderCommand::Place`), with its fields (`Option<_>` fields are optional; tuple fields are named by position). Other files keep one entry per file.
+- `relationships.command_to_events` maps each command variant to the event variants its decision builds, read from the `Command::Variant =>` arms in the aggregate's folder and the functions those arms call. `command_to_aggregate` and `aggregate_to_events` are filled from the same reading. Macros, trait dispatch and events built outside the domain folder are not followed.
+- Under `hexagonal-event-sourced-vsa`, a context's `features` are its slices (`<context>/slices/<name>/`, as validation sees them), each with `slice_type` (the primary type) and `slice_types` (every declared pattern). Layer folders (`application/`, `ports/`, `infrastructure/`, `tests/`) and a slice's subfolders are not features. Other architectures keep the directory-based features.
+- An aggregate's Rust `entities` are files in its folder that declare a struct with an `id` / `*_id` field. A struct without identity is a value object.
+- With `filename_convention: snake_case`, `*_projection` files (`inbox_projection.rs`) are projections too, and a Rust projection's `subscribed_events` are the `*Event::Variant`s its code refers to. The projection validation rules keep scanning the PascalCase names only.
 
 #### Output
 
