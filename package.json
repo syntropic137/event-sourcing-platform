@@ -22,7 +22,7 @@
   },
   "pnpm": {
     "overrides": {
-      "follow-redirects": "1.16.1",
+      "follow-redirects": "1.16.2",
       "handlebars": "4.7.10",
       "protobufjs": "7.6.5",
       "dompurify": "3.4.17",
@@ -41,7 +41,7 @@
       "esbuild": "0.28.1",
       "fast-uri": "3.1.9",
       "http-proxy-middleware": "2.0.10",
-      "joi": "17.13.8",
+      "joi": "17.13.9",
       "js-yaml@3": "3.15.2",
       "js-yaml@4": "4.3.2",
       "launch-editor": "2.14.2",
@@ -50,7 +50,7 @@
       "postcss": "8.5.23",
       "postcss-selector-parser@6": "7.1.6",
       "postcss-selector-parser@7": "7.1.6",
-      "qs": "6.16.0",
+      "qs": "6.16.1",
       "shell-quote": "1.11.0",
       "source-map-js": "1.2.2",
       "tinypool": "2.1.2",
