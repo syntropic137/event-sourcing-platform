@@ -134,6 +134,7 @@ reason = "NO FIX EXISTS (latest sprintf-js 1.1.3 is last_affected, 2026-10-06). 
 # --- 2026-11-20 sweep (OSV was red on main since 2026-11-16) ---------------------
 # Bumped in the same change, so not ignored: pulldown-cmark 0.13.3 -> 0.13.6
 # (RUSTSEC-2026-0414, RUSTSEC-2026-0433), rustix 1.1.4 -> 1.1.6 (RUSTSEC-2026-0486),
+# hyper 1.8.1 -> 1.9.0 (drops the unmaintained pin-utils, RUSTSEC-2026-0441),
 # and overrides follow-redirects 1.16.2 (GHSA-mrwp-f3q8-3g9p), joi 17.13.9
 # (GHSA-4528-x5fx-h6hg), qs 6.16.1 (GHSA-6pq8-jhm2-2vcw).
 
@@ -147,15 +148,6 @@ id = "RUSTSEC-2026-0440"
 ignoreUntil = 2027-02-20
 reason = "NO FIX EXISTS (unmaintained advisory, no patched version). Dev-only: testcontainers 0.27.3 via testcontainers-modules (dev-dependency of eventstore-backend-postgres). Not in any shipped artifact."
 
-# Rust: pin-utils 0.1.0 (both Cargo.lock files). Advisory: unmaintained.
-# NO FIX EXISTS: informational, no patched version. Reached via hyper 1.8.1
-# (tonic, bollard). It is a pin! macro crate with no unsafe surface reachable
-# from input. Revisit when hyper drops it (std::pin::pin! replaces it).
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0441"
-ignoreUntil = 2027-02-20
-reason = "NO FIX EXISTS (unmaintained advisory, no patched version). pin-utils 0.1.0 via hyper 1.8.1; a pin! macro crate, no input-reachable surface. Clears when hyper drops it."
-
 # Rust: chrono 0.4.44 (event-store) / 0.4.45 (event-sourcing/rust). Advisory: unmaintained.
 # NO FIX EXISTS: informational, no patched version (osv.dev: introduced=0, no fixed).
 # Direct dependency for timestamps. Revisit: migrate to jiff or time, or a
@@ -166,15 +158,16 @@ ignoreUntil = 2027-02-20
 reason = "NO FIX EXISTS (unmaintained advisory, no patched version). Direct dependency for timestamps in both workspaces; no vulnerability, maintenance status only. Revisit: migrate to jiff/time or a maintained chrono."
 
 # Rust: libsqlite3-sys 0.30.1 (both Cargo.lock files). SQLite CVE-2026-119375.
-# DEFERRED: fixed in 0.39.0, which needs sqlx 0.9 (sqlx-sqlite 0.8.6 pins 0.30).
+# DEFERRED: fixed in 0.39.0, which needs sqlx 0.9.1 (sqlx-sqlite 0.8.6 requires
+# ^0.30.1, and 0.9.0's range still excludes 0.39.0).
 # NOT in the active build graph: `cargo tree -i libsqlite3-sys -e all --target all`
 # prints nothing in either workspace. Locked (so OSV flags it) but compiled into
 # nothing, as with rsa via sqlx-mysql (RUSTSEC-2023-0071 above). Clears with the
-# sqlx 0.9 upgrade (also RUSTSEC-2026-0097).
+# sqlx 0.9.1 upgrade (also RUSTSEC-2026-0097).
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0459"
 ignoreUntil = 2027-02-20
-reason = "DEFERRED. Fixed in libsqlite3-sys 0.39.0, which needs sqlx 0.9. Absent from the active build graph (cargo tree -i libsqlite3-sys -e all --target all: empty) in both workspaces; locked via sqlx-sqlite 0.8.6, compiled into nothing."
+reason = "DEFERRED. Fixed in libsqlite3-sys 0.39.0, which needs sqlx 0.9.1. Absent from the active build graph (cargo tree -i libsqlite3-sys -e all --target all: empty) in both workspaces; locked via sqlx-sqlite 0.8.6, compiled into nothing."
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0502"
@@ -188,12 +181,13 @@ reason = "Duplicate advisory for RUSTSEC-2026-0459 (libsqlite3-sys, SQLite CVE-2
 
 # npm: glob 10.5.0 / 13.0.6 (GHSA-3g3m-2fjr-6pw4, AbortSignal bypass after timeout).
 # DEFERRED: fixed only in glob 14.0.2 (a major from both). Dev tooling only:
-# glob 10 <- @jest/reporters, jest-config; glob 13 <- rimraf 6.1.3. None passes an
+# glob 10 <- @jest/reporters, jest-config, jest-runtime (all 30.3.0); glob 13 <-
+# rimraf 6.1.3. None passes an
 # AbortSignal or walks untrusted paths. Not in any shipped artifact.
 [[IgnoredVulns]]
 id = "GHSA-3g3m-2fjr-6pw4"
 ignoreUntil = 2027-02-20
-reason = "DEFERRED. Fixed only in glob 14.0.2 (major). Dev tooling only: jest (@jest/reporters, jest-config) and rimraf 6; no AbortSignal use, no untrusted paths; not shipped."
+reason = "DEFERRED. Fixed only in glob 14.0.2 (major). Dev tooling only: jest (@jest/reporters, jest-config, jest-runtime) and rimraf 6; no AbortSignal use, no untrusted paths; not shipped."
 
 # npm: minimatch 9.0.9 / 10.2.4 / 10.2.6 (GHSA-g3hv-75wg-m249, globparts DoS).
 # DEFERRED: fixed only in minimatch 11.0.1 (a major). Dev tooling only:
